@@ -24,6 +24,10 @@ click==8.1.8 \
     # via
     #   -r requirements.in
     #   pip-tools
+colorama==0.4.6 ; sys_platform == "win32" \
+    --hash=sha256:08695f5cb7ed6e0531a20572697297273c47b8cae5a63ffc6d6ed5c201be6e44 \
+    --hash=sha256:4f1d9991f5acc0ca119f9d443620b77f9d6b33703e51011c16baf57afb285fc6
+    # via click
 coverage[toml]==7.6.1 \
     --hash=sha256:06a737c882bd26d0d6ee7269b20b12f14a8704807a01056c80bb881a4b2ce6ca \
     --hash=sha256:07e2ca0ad381b91350c0ed49d52699b625aab2b44b65e1b4e02fa9df0e92ad2d \
@@ -118,6 +122,10 @@ idna==3.20 \
     # via
     #   anyio
     #   httpx
+importlib-metadata==8.5.0 ; python_version < "3.10" \
+    --hash=sha256:45e54197d28b7a7f1559e60b95e7c567032b602131fbd588f1497f47880aa68b \
+    --hash=sha256:71522656f0abace1d072b9e5481a48f07c138e00f079c38c8f883823f9c26bd7
+    # via segno
 iniconfig==2.3.1 \
     --hash=sha256:67f4b9c50da0dedf52af349e7749a80a9057a5031199791b906c3bb3ae878960 \
     --hash=sha256:9121e2c1fdb355232495be3194c8dfe87ccc2d5dee45947b78e68f499790d7a7

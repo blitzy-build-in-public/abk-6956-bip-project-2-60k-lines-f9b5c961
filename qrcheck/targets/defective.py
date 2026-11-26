@@ -154,8 +154,11 @@ _DEFECTIVE_QUIET_ZONE_MODULES: Final[int] = 1
 _MASK_PATTERN_COUNT: Final[int] = 8
 
 # The capacity arithmetic is evaluated in byte mode, the most expensive way to carry a
-# character, so a payload measured here fits in every mode -- the same reasoning the
-# conforming target's capacity rule uses.
+# character, so a payload clamped to this bound fits in every mode -- and because the level D1
+# encodes at (the requested one, or a step below it in the direction of more capacity) holds
+# at least as much data as the level this clamp is measured against, it fits that level too.
+# What a *request* may lawfully ask for is a different question, settled in the payload's own
+# mode by the port's build_request and the conforming target's own capacity rule.
 _BYTE_MODE: Final[str] = "byte"
 
 # The nine check IDs §0.4.2 declares this target must fail.  It is only the comparison

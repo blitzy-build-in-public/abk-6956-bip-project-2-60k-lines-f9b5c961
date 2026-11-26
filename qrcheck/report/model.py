@@ -19,9 +19,11 @@ deliberately absent from every ``as_dict`` projection.
 import datetime
 import enum
 import hashlib
+import math
 import re
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
-from typing import Any, Iterable, Mapping
+from typing import Any
 
 __all__ = [
     "CaseResult",
@@ -220,10 +222,11 @@ class CaseResult:
 
     The ten fields are the public record shape that ``summary.json``, ``junit.xml``
     and the HTML report all serialise, so their names and order are a stable surface
-    that only ever grows. ``request`` and ``decoded`` hold mappings that are already
-    JSON-ready - the caller projects a generate request and a decode result into
-    them - which is why this module imports neither the target port nor the decode
-    layer.
+    that only ever grows. ``request``, ``decoded`` and ``expected`` hold mappings that
+    are already JSON-ready - the caller projects a generate request and a decode result
+    into them - which is why this module imports neither the target port nor the decode
+    layer; that they really are mappings is enforced here, so a list or a scalar cannot
+    reach a serialisation whose schema fixes an object.
 
     The instance is frozen: derive a variation with :func:`dataclasses.replace`
     rather than mutating one in place.
@@ -249,13 +252,18 @@ class CaseResult:
 
         A passing case carries no reason and no evidence directory (a run of a few
         thousand cases writes evidence only for what went wrong), every other status
-        carries a reason, a duration cannot be negative, and an evidence directory is
-        a relative posix path so no artefact records an absolute location.
+        carries a reason, the request, decoded and expected payloads are mappings so
+        every artefact documents an object where its schema fixes one, a duration is a
+        finite non-negative number of milliseconds - a ``nan`` or an ``inf`` would reach
+        ``summary.json`` as a token JSON does not define - and an evidence directory is a
+        non-empty relative posix path, so no artefact records an absolute location and
+        none names the report root itself.
 
         Raises:
             ValueError: ``status`` or ``reason`` is outside its enum, the status and
-                reason disagree, ``duration_ms`` is negative, or ``evidence_dir`` is
-                not a relative posix path.
+                reason disagree, ``request``, ``decoded`` or ``expected`` is not a
+                mapping, ``duration_ms`` is negative or not finite, or ``evidence_dir``
+                is empty or not a relative posix path.
         """
         try:
             status = Status(self.status)
@@ -276,10 +284,30 @@ class CaseResult:
                 )
         elif reason is None:
             raise ValueError(f"CaseResult.reason must be set for status {status.value!r}")
+        if not isinstance(self.request, Mapping):
+            raise ValueError(
+                f"CaseResult.request must be a Mapping, got {type(self.request).__name__}"
+            )
+        if not isinstance(self.decoded, Mapping):
+            raise ValueError(
+                f"CaseResult.decoded must be a Mapping, got {type(self.decoded).__name__}"
+            )
+        if self.expected is not None and not isinstance(self.expected, Mapping):
+            raise ValueError(
+                "CaseResult.expected must be a Mapping or None, got "
+                f"{type(self.expected).__name__}"
+            )
+        if not math.isfinite(self.duration_ms):
+            raise ValueError(f"CaseResult.duration_ms must be finite: {self.duration_ms!r}")
         if self.duration_ms < 0:
             raise ValueError(f"CaseResult.duration_ms must not be negative: {self.duration_ms!r}")
         if self.evidence_dir is not None:
             evidence_dir = self.evidence_dir
+            if not evidence_dir:
+                raise ValueError(
+                    "CaseResult.evidence_dir must be a non-empty relative posix path: "
+                    f"{evidence_dir!r}"
+                )
             absolute = (
                 evidence_dir.startswith("/")
                 or "\\" in evidence_dir
@@ -321,12 +349,16 @@ class RunResult:
     ``results`` is stored sorted by ``(check_id, case_id)``. That is what makes
     ``summary.json`` and ``junit.xml`` present the same order by construction,
     instead of relying on two writers to agree by hand, and it makes two runs of the
-    same selection comparable element by element.
+    same selection comparable element by element. That pair is also a case's identity,
+    so it appears at most once: a repeated pair would give two rows one failure ID and
+    one evidence directory, the second overwriting the first.
 
     ``run_id`` is a content hash computed by the runner over the run's parameters;
     this model validates it and refuses a UUID or a timestamp, but never invents an
-    identity of its own. The two timestamps are parsed once, here, so no consumer
-    re-parses them and the duration costs nothing to read.
+    identity of its own. The two timestamps are parsed once, here, and compared with
+    each other, so no consumer re-parses them, the duration costs nothing to read, and
+    a run that reports finishing before it started is refused instead of being
+    published with a negative duration.
 
     Raises:
         ValueError: a field breaks one of the invariants enforced by
@@ -350,19 +382,46 @@ class RunResult:
 
         The counts are recomputed from the results and compared with the supplied
         tallies, which is the model-level guard that no outcome - a skip above all -
-        was folded into another bucket on its way here.
+        was folded into another bucket on its way here. Sorting by ``(check_id,
+        case_id)`` puts a repeated pair side by side, so the same pass proves that every
+        case appears once. The two timestamps are compared as well, because a run that
+        finished before it started would be published with a negative duration in the
+        HTML header and summed into the JUnit suite time; identical timestamps stay
+        legal, since a run may take no measurable time.
 
         Raises:
             ValueError: ``run_id`` is empty, UUID-shaped or timestamp-shaped; a
-                timestamp does not parse or carries no timezone; or ``counts``
-                disagrees with the results it claims to summarise.
+                timestamp does not parse or carries no timezone; ``finished_at``
+                precedes ``started_at``; two results share one ``(check_id, case_id)``;
+                or ``counts`` disagrees with the results it claims to summarise.
         """
         _validate_run_id(self.run_id)
         started = _parse_timestamp("started_at", self.started_at)
         finished = _parse_timestamp("finished_at", self.finished_at)
+        if finished < started:
+            raise ValueError(
+                "RunResult.finished_at must not precede started_at: "
+                f"{self.finished_at!r} < {self.started_at!r}"
+            )
         ordered = tuple(
             sorted(self.results, key=lambda result: (result.check_id, result.case_id))
         )
+        duplicates = sorted(
+            {
+                (previous.check_id, previous.case_id)
+                for previous, result in zip(ordered, ordered[1:])
+                if (previous.check_id, previous.case_id) == (result.check_id, result.case_id)
+            }
+        )
+        if duplicates:
+            repeated = ", ".join(
+                f"{check_id!r}/{case_id!r}" for check_id, case_id in duplicates
+            )
+            raise ValueError(
+                "RunResult.results holds more than one result for a case, whose rows "
+                "would share the identity a failure ID and an evidence directory are "
+                f"derived from: {repeated}"
+            )
         recomputed = Counts.from_results(ordered)
         if recomputed != self.counts:
             raise ValueError(

@@ -16,13 +16,29 @@ Canonical configuration:
 ```toml
 [targets.example_cli]
 type = "cli"
-command = ["python", "examples/cli_target.py"]
+command = [".venv/bin/python", "examples/cli_target.py"]
 payload_arg = "--payload-b64={payload_b64}"
 output_arg = "--output={}"
 returns = "file_path"
 timeout_s = 30.0
-capabilities = ["png", "ec_level", "module_size", "quiet_zone", "color", "version_pin", "mask_pin"]
+capabilities = ["png"]
 ```
+
+How that ``command`` is run: as a literal argv list with no shell, from the
+framework's own working directory, and the child inherits the framework's
+environment and working directory. No word of ``command`` is ever rendered, so the
+block above is written to run from the repository root, which is where
+``examples/cli_target.py`` lives.
+
+The interpreter is part of the contract. ``.venv/bin/python`` is the interpreter the
+framework and its pinned dependencies are installed into, and the documented
+per-clone setup creates that environment at the repository root. A bare ``python`` is
+whatever the host's ``PATH`` names -- on the documented host, CPython 3.13 without
+``segno`` -- so this file's ``import segno`` fails with ``ModuleNotFoundError``, the
+child exits 1 without declaring a rejection, and the adapter reports a contract error
+quoting the traceback. That classification is correct: an interpreter without the
+dependency set is not a symbol the framework may judge. Name the interpreter the
+dependencies are installed in, as above.
 
 Both argument templates are drawn from the adapter's placeholder vocabulary: a bare
 ``{}`` in ``payload_arg`` carries the payload as UTF-8 text, a bare ``{}`` in
@@ -35,11 +51,45 @@ the request's foreground and background colours. That is why the payload templat
 above names ``{payload_b64}`` and not ``{}``: a bare ``{}`` beside ``--payload-b64``
 would hand the flag raw UTF-8 text, which this script refuses as invalid base64.
 
+A template produces exactly one argv word, so a configuration conveys at most one
+value through ``payload_arg`` and one through ``output_arg``. ``capabilities``
+accordingly lists only ``png``. The canonical block above spends both words on the
+payload and the artefact path, leaving no per-request channel for the error level, the
+module size, the quiet zone, the colours, a version or mask pin -- the vocabulary has
+no placeholder for either -- or a logo overlay, so declaring any of those capabilities
+would claim an operation this configuration cannot convey. A check whose required
+capabilities are not declared reports ``skipped`` with reason
+``unsupported_capability``: the honest outcome, instead of measuring a symbol built
+from this file's own defaults and reporting the difference as a target failure.
+
+An alternative, when fixed values are all a target needs, is to put them in
+``command`` as literal words rather than in a template::
+
+    command = [
+        ".venv/bin/python", "examples/cli_target.py",
+        "--ec", "Q", "--size", "6", "--margin", "2",
+    ]
+
+Those values then apply to every request -- the run's EC level never reaches the
+target -- so the level- and geometry-specific checks still skip, and ``capabilities``
+still declares only what a per-request value would require: a statically fixed value
+is not a capability this configuration conveys.
+
 Invocation: ``--payload-b64 <BASE64>``, ``--payload-utf8 <TEXT>``,
 ``--payload-stdin`` or a bare positional text payload, always with
-``--output <PATH>``. ``--payload-b64 -`` is the stdin form: it reads the raw
-payload bytes from ``sys.stdin.buffer`` for payloads that do not survive an argv
-word.
+``--output <PATH>``.
+
+Payload bytes that do not survive an argv word -- a NUL, a byte that is not UTF-8 --
+arrive on stdin instead. The adapter writes the raw payload to the child's stdin when
+``payload_arg`` is a flag with no placeholder, passing that flag as one argv word, so
+the adapter-reachable spelling for this file is ``payload_arg = "--payload-b64=-"``:
+``--payload-b64`` reads its value from the same word and treats the literal ``-`` as
+"read ``sys.stdin.buffer``". ``payload_arg = "--payload-stdin"`` is the form for a
+flag that takes no value at all, which this file also offers. The two-word
+``--payload-b64 -`` is only the shell spelling of the first: the adapter never splits
+a template into two argv words, so a configuration that copies it passes the single
+word ``--payload-b64`` with no value, argparse exits 2 with a usage error, and the
+adapter reports a contract error instead of a symbol.
 
 Scope: PNG only. ``svg`` and ``logo_overlay`` are absent from the capability list
 because this script emits no SVG and composites no logo; any other output format

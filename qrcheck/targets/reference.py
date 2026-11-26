@@ -69,10 +69,12 @@ agreement.  No second encoder is added: the dependency set is pinned and names n
 Layering
 --------
 Only ``io``, ``time`` and :mod:`typing` from the standard library, ``segno``, and the
-three modules this file may depend on: :mod:`qrcheck.targets.base`,
-:mod:`qrcheck.corpus.capacity` and :mod:`qrcheck.config.models`.  It imports no
-decoder, no image library, no transport client and none of ``qrcheck.checks``,
-``qrcheck.report``, ``qrcheck.decode`` or ``qrcheck.registry``, which is the property
+four modules this file may depend on: :mod:`qrcheck.targets.base`,
+:mod:`qrcheck.corpus.capacity`, :mod:`qrcheck.corpus.payloads` -- for
+:func:`~qrcheck.corpus.payloads.mode_of`, the product's single payload-mode
+classifier -- and :mod:`qrcheck.config.models`.  It imports no decoder, no image
+library, no transport client and none of ``qrcheck.checks``, ``qrcheck.report``,
+``qrcheck.decode`` or ``qrcheck.registry``, which is the property
 ``tests/unit/test_layering.py`` holds by scanning source.
 """
 
@@ -86,6 +88,7 @@ import segno
 
 from qrcheck.config.models import TargetConfig
 from qrcheck.corpus.capacity import EC_LEVELS, max_payload_bytes
+from qrcheck.corpus.payloads import mode_of
 from qrcheck.targets.base import (
     Capability,
     GenerateRequest,
@@ -416,13 +419,19 @@ class ReferenceAdapter:
 
         Both bounds are measured against the payload and the error level this adapter is
         about to encode, which for this conforming target are the request's own values.
-        An unpinned request needs no capacity rule here: Version 40 is the largest Model
-        2 symbol, and ``segno.DataOverflowError`` beyond it is converted to the same
+        The capacity bound is the table row for the mode the payload's own bytes are
+        limited to -- numeric, alphanumeric or byte -- because a conforming encoder
+        spends the smallest charset that holds the payload; the byte row alone would
+        refuse a request that lawfully fits the pinned version in a smaller charset.  An
+        unpinned request needs no capacity rule here: Version 40 is the largest Model 2
+        symbol, and ``segno.DataOverflowError`` beyond it is converted to the same
         rejection by :meth:`_encode`.  The capacity figure comes from
-        :func:`qrcheck.corpus.capacity.max_payload_bytes` and is never transcribed.
+        :func:`qrcheck.corpus.capacity.max_payload_bytes` and is never transcribed, and
+        the message is :meth:`_overflow_message`'s single definition of it.
 
         Raises:
-            TargetRejected: The payload is empty, or it does not fit the pinned version.
+            TargetRejected: The payload is empty, or it does not fit the pinned version
+                in the payload's own mode.
         """
         payload = self._effective_payload(request)
         if not payload:
@@ -432,12 +441,8 @@ class ReferenceAdapter:
         if version is None:
             return
         ec_level = self._effective_ec(request)
-        capacity = max_payload_bytes(version, ec_level, "byte")
-        if len(payload) > capacity:
-            raise TargetRejected(
-                f"data too large for version {version} at error level {ec_level}: "
-                f"capacity {capacity} bytes, got {len(payload)}"
-            )
+        if len(payload) > max_payload_bytes(version, ec_level, mode_of(payload)):
+            raise TargetRejected(self._overflow_message(request, payload, ec_level))
 
     def _check_contrast(self, request: GenerateRequest) -> None:
         """Refuse a colour pair whose contrast is below the target's declared floor.
@@ -573,7 +578,7 @@ class ReferenceAdapter:
                 boost_error=False,
             )
         except segno.DataOverflowError:
-            raise TargetRejected(self._overflow_message(request, len(payload), ec_level)) from None
+            raise TargetRejected(self._overflow_message(request, payload, ec_level)) from None
         # segno 1.6.6 defines exactly one dedicated exception, ``DataOverflowError``
         # above, and reports an illegal error level, an unsupported version, an invalid
         # mask and an illegal mode as plain ``ValueError``.  The ``VersionError``,
@@ -591,21 +596,26 @@ class ReferenceAdapter:
     def _overflow_message(
         self,
         request: GenerateRequest,
-        length: int,
+        payload: bytes,
         ec_level: str,
     ) -> str:
-        """Return the capacity rejection message for a payload of `length` bytes.
+        """Return the capacity rejection message for an over-capacity `payload`.
 
         The version named is the pinned one, or Version 40 for an unpinned request --
         the largest Model 2 symbol, which is the bound an unpinned request actually
-        broke.  The capacity is computed from the tables rather than read out of segno's
-        own exception text, so the message is the same shape whichever version overflowed.
+        broke.  The capacity, and the unit it is reported in, follow the mode the
+        payload's own bytes are limited to: characters in numeric and alphanumeric mode,
+        bytes in byte mode.  Both numbers are computed from the tables rather than read
+        out of segno's own exception text, so the message is the same shape whichever
+        version overflowed.
         """
         version = _MAX_VERSION if request.version is None else request.version
-        capacity = max_payload_bytes(version, ec_level, "byte")
+        mode = mode_of(payload)
+        capacity = max_payload_bytes(version, ec_level, mode)
+        unit = "bytes" if mode == "byte" else "characters"
         return (
             f"data too large for version {version} at error level {ec_level}: "
-            f"capacity {capacity} bytes, got {length}"
+            f"capacity {capacity} {unit}, got {len(payload)}"
         )
 
     def _render(self, code: segno.QRCode, request: GenerateRequest) -> bytes:

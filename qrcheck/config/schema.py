@@ -167,9 +167,28 @@ def _kind(value: object) -> str:
     return type(value).__name__
 
 
+def _label_for(kind: type) -> str:
+    """Name one declared type in the reader's vocabulary, not the parser's.
+
+    A declared type the map spells out is answered directly.  A table key is
+    declared ``(dict,)`` -- the type TOML actually produces -- and ``dict`` is not a
+    key of the map, so a declared type absent from it is matched to the first label
+    it is a subclass of and still reads as ``table``; only a type that matches no
+    label at all falls back to its own name.
+    """
+    label = _KIND_LABEL_BY_TYPE.get(kind)
+    if label is not None:
+        return label
+    if isinstance(kind, type):
+        for base, base_label in _KIND_LABELS:
+            if issubclass(kind, base):
+                return base_label
+    return kind.__name__
+
+
 def _expected_label(kinds: tuple[type, ...]) -> str:
     """Name the accepted types as one phrase: ``string``, ``number``, ``table``."""
-    labels = list(dict.fromkeys(_KIND_LABEL_BY_TYPE.get(kind, kind.__name__) for kind in kinds))
+    labels = list(dict.fromkeys(_label_for(kind) for kind in kinds))
     # ``(float, int)`` is one concept -- a number -- not two alternatives.
     if labels in (["integer", "number"], ["number", "integer"]):
         return "number"
@@ -265,6 +284,25 @@ def _check_non_empty_str(value: str) -> str | None:
     """Require a string with at least one non-whitespace character."""
     if not value.strip():
         return f"must be a non-empty string, got {value!r}"
+    return None
+
+
+def _check_path(value: str) -> str | None:
+    """Require a non-empty path that a filesystem call can actually use.
+
+    A POSIX file name may hold any byte except ``/`` and NUL, so the other control
+    characters are legal in a path and are deliberately not rejected here.  A NUL is
+    not: no filesystem call accepts one, and ``pathlib`` answers it with a
+    ``ValueError`` -- which is not the ``OSError`` the exit-3 contract covers -- so
+    an operator's ``report_dir = "rep\\u0000orts"`` would surface as an internal
+    error instead of a diagnostic naming the key.  Rejecting it here keeps the fault
+    on the key it belongs to.
+    """
+    fragment = _check_non_empty_str(value)
+    if fragment is not None:
+        return fragment
+    if "\x00" in value:
+        return f"must not contain a NUL byte, got {value!r}"
     return None
 
 
@@ -492,14 +530,15 @@ def _group(*specs: KeySpec) -> Mapping[str, KeySpec]:
     return {spec.key: spec for spec in specs}
 
 
-# Top level.  The two path keys are non-empty strings and nothing more: a path is
-# resolved against the configuration file's directory by ``load.py``, and neither
-# ``~`` nor ``$VAR`` is expanded or promised.
+# Top level.  The two path keys are non-empty strings that a filesystem call can use
+# -- a NUL byte is the one character refused -- and nothing more: a path is resolved
+# against the configuration file's directory by ``load.py``, and neither ``~`` nor
+# ``$VAR`` is expanded or promised.
 TOP_LEVEL: Final[Mapping[str, KeySpec]] = _group(
     KeySpec("default_adapter", (str,), models.DEFAULT_ADAPTER, _check_non_empty_str),
-    KeySpec("report_dir", (str,), models.DEFAULT_REPORT_DIR, _check_non_empty_str),
+    KeySpec("report_dir", (str,), models.DEFAULT_REPORT_DIR, _check_path),
     KeySpec("seed", (int,), models.DEFAULT_SEED, _check_seed),
-    KeySpec("corpus_path", (str,), models.DEFAULT_CORPUS_PATH, _check_non_empty_str),
+    KeySpec("corpus_path", (str,), models.DEFAULT_CORPUS_PATH, _check_path),
     KeySpec("loc_limit", (int,), models.DEFAULT_LOC_LIMIT, _check_minimum(1, strict=False)),
 )
 
@@ -595,8 +634,11 @@ DAMAGE: Final[Mapping[str, KeySpec]] = _group(
 )
 
 # Defaults for the two optional collection keys.  ``capabilities`` is declared as
-# an empty tuple and ``metadata_map`` as a read-only empty mapping so the table
-# holds no mutable default; ``_materialise`` hands each resolution a private copy.
+# an empty tuple and ``metadata_map`` as a read-only empty mapping, so the table
+# holds no mutable default and ``_materialise`` can hand each resolution a private
+# copy.  Only ``capabilities`` is reached from below: ``metadata_map`` is an
+# optional *per-type* key whose default each record in ``qrcheck.config.models``
+# already owns, so ``apply_defaults`` never fills it.
 _EMPTY_CAPABILITIES: Final[tuple[str, ...]] = ()
 _EMPTY_MAPPING: Final[Mapping[str, str]] = MappingProxyType({})
 
@@ -727,11 +769,25 @@ def _reject_unknown_keys(
             raise ConfigError(full, f"unknown key '{full}'")
 
 
+def _reject_missing_required(
+    dotted: str, table: Mapping[str, Any], declared: Mapping[str, KeySpec]
+) -> None:
+    """Raise on the first required key ``table`` does not supply, in declared order.
+
+    Declared order -- never the document's order or a set -- is what keeps the first
+    diagnostic for a given document identical on every run and machine.
+    """
+    for key, spec in declared.items():
+        if spec.is_required and key not in table:
+            raise ConfigError(_dotted(dotted, key), f"missing required key '{key}'")
+
+
 def _validate_table(
     dotted: str, table: Mapping[str, Any], declared: Mapping[str, KeySpec]
 ) -> None:
-    """Validate one declared table: its unknown keys, then its present values."""
+    """Validate one declared table: unknown keys, missing required keys, then values."""
     _reject_unknown_keys(dotted, table, declared)
+    _reject_missing_required(dotted, table, declared)
     for key, spec in declared.items():
         if key in table:
             _validate_value(_dotted(dotted, key), spec, table[key])
@@ -742,13 +798,17 @@ def _validate_target(dotted: str, table: Mapping[str, Any]) -> None:
 
     ``type`` is read first because it selects the per-type keys, so a key that
     belongs to another adapter kind -- ``command`` on a ``library`` target -- is
-    an unknown key rather than a silently inert one.
+    an unknown key rather than a silently inert one.  The table's own keys are then
+    rejected when unknown, its required per-type keys are rejected when absent --
+    ``callable`` for a ``library`` target, ``command`` for a ``cli`` target, ``url``
+    for an ``http`` target -- and only then are the values present validated.
     """
     if "type" not in table:
         raise ConfigError(f"{dotted}.type", "missing required key 'type'")
     _validate_value(f"{dotted}.type", TARGET_COMMON["type"], table["type"])
     declared = {**TARGET_COMMON, **SCHEMA.get(f"targets.*.{table['type']}", {})}
     _reject_unknown_keys(dotted, table, declared)
+    _reject_missing_required(dotted, table, declared)
     for key, spec in declared.items():
         # ``type`` is both validated above and the value that chose ``declared``.
         if key != "type" and key in table:
@@ -833,10 +893,14 @@ def validate(raw: Mapping[str, Any]) -> None:
 def _materialise(default: object) -> object:
     """Return a private copy of a declared default, so no two results alias one value.
 
-    Only the two collection defaults need it: ``capabilities`` is declared as an
-    empty tuple and resolves to a list, ``metadata_map`` as a read-only empty
-    mapping and resolves to a plain dict.  Scalars are immutable and are returned
-    unchanged, and no value is ever coerced to another type.
+    A collection default reaches this function only when the table that declares it
+    is one :func:`apply_defaults` fills, and the only such key today is
+    ``capabilities``: declared as an empty tuple and resolved to a list per target.
+    ``metadata_map`` is declared the same way -- a read-only empty mapping that
+    would resolve to a plain dict -- but it is an optional per-type key, so no table
+    filled here holds it and its default is its record's in
+    ``qrcheck.config.models``.  Scalars are immutable and are returned unchanged,
+    and no value is ever coerced to another type.
     """
     if isinstance(default, tuple):
         return list(default)
@@ -868,10 +932,16 @@ def apply_defaults(raw: Mapping[str, Any]) -> dict[str, Any]:
 
     The result is a fresh nested ``dict`` holding the five top-level keys, a
     complete ``[render]`` table, complete ``[checks.performance]`` and
-    ``[checks.damage]`` tables, and one complete ``[targets.<name>]`` table per
-    declared target, in :data:`SCHEMA`'s declared order.  Required keys -- a
-    target's ``type`` and its per-type inputs -- are carried over as supplied and
-    are never defaulted.
+    ``[checks.damage]`` tables, and, in :data:`SCHEMA`'s declared order, one
+    ``[targets.<name>]`` table per declared target carrying every key of
+    :data:`TARGET_COMMON`.  Required keys -- a target's ``type`` and its per-type
+    inputs -- are carried over as supplied and are never defaulted.
+
+    A per-type *optional* default is deliberately not filled in: the contract's
+    only one, a ``library``/``cli``/``http`` target's ``metadata_map``, is owned by
+    each record of ``qrcheck.config.models``, which declares its own empty mapping,
+    and ``load.py`` passes the key on to that record only when the document supplies
+    it.  Filling it in here would declare one default in two places.
 
     Pre-condition: :func:`validate` has already accepted ``raw``.  This function
     therefore validates nothing, raises nothing and fills no required key: a
@@ -887,7 +957,9 @@ def apply_defaults(raw: Mapping[str, Any]) -> dict[str, Any]:
         raw: The parsed TOML document, already accepted by :func:`validate`.
 
     Returns:
-        A new document, sharing no mutable structure with ``raw``.
+        A new document: every table it builds is a new ``dict``, while a value the
+        document supplies is carried over as it stands, so a supplied list or table
+        (``capabilities``, ``request_template``) is one object shared with ``raw``.
     """
     document = _table_or_empty(raw)
     resolved: dict[str, Any] = {}

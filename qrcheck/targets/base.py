@@ -64,14 +64,21 @@ Validation added here would silently make every ``IV-*`` case unconstructable.
 Layering
 --------
 This module imports only the standard library, :mod:`qrcheck.config.models` and
-:mod:`qrcheck.corpus.capacity`.  It imports no image library, no decoder and
-none of ``qrcheck.checks``, ``qrcheck.report``, ``qrcheck.decode`` or
+:mod:`qrcheck.corpus.capacity`, plus -- **inside** :func:`build_request`, at the
+point of use rather than at module scope -- :func:`~qrcheck.corpus.payloads.mode_of`,
+the product's single payload-mode classifier, so a payload's mode keeps one
+definition in the product.  That one import is deferred because
+``qrcheck.corpus.payloads`` imports ``numpy`` for its seeded generators, while this
+port is imported by the registry, the decoders and every check: at module scope it
+would charge ``numpy``, and the cost of loading it, to every process that only asks
+the registry which checks exist.  It imports no image library, no decoder and none
+of ``qrcheck.checks``, ``qrcheck.report``, ``qrcheck.decode`` or
 ``qrcheck.registry``, which is what lets ``decode/``, ``registry/``,
 ``checks/support.py`` and ``runner.py`` all import it without a cycle.  In the
-other direction, ``qrcheck/checks/*`` may import this module and nothing else
-from ``qrcheck/targets/``, and nothing in ``qrcheck/targets/`` may import
-``qrcheck.checks`` -- the property ``tests/unit/test_layering.py`` holds by
-scanning source.
+other direction, ``qrcheck/checks/*`` may import this module and
+nothing else from ``qrcheck/targets/``, and nothing in ``qrcheck/targets/`` may
+import ``qrcheck.checks`` -- the property ``tests/unit/test_layering.py`` holds
+by scanning source.
 """
 
 from __future__ import annotations
@@ -471,8 +478,9 @@ def build_request(
     valid": an error level outside ``L``/``M``/``Q``/``H``, a version outside
     1..40, a mask outside 0..7, a non-positive module size, a negative quiet zone,
     a colour channel outside 0..255, or a payload that does not fit the requested
-    symbol is refused here, before any target sees it.  Everything the ``IV-*``
-    checks send instead goes through the deliberate bypass in
+    version and error level per the capacity tables in the payload's own mode is
+    refused here, before any target sees it.  Everything the ``IV-*`` checks send
+    instead goes through the deliberate bypass in
     ``qrcheck/checks/support.py``.
 
     Args:
@@ -494,8 +502,9 @@ def build_request(
         ``bytes``.
 
     Raises:
-        ValueError: A field is outside its documented range or the payload does
-            not fit the symbol.  The message names the offending field.  This is a
+        ValueError: A field is outside its documented range, or the payload does
+            not fit the requested version and error level in the payload's own
+            mode.  The message names the offending field.  This is a
             framework-side programming defect, not an adapter error and not a
             configuration error, so the runner converts it into an ``error``
             result carrying its traceback; it is deliberately not
@@ -517,22 +526,35 @@ def build_request(
     )
     pinned_mask = _checked_optional_int("mask", mask, minimum=_MIN_MASK, maximum=_MAX_MASK)
 
-    # The capacity gate is evaluated in byte mode deliberately: a byte is the most
-    # expensive way to carry a character, so a payload that fits in byte mode fits
-    # in every other mode, and this is the only bound that holds for every corpus
-    # class -- random-bytes and nul-byte included, which no smaller charset holds.
-    # An unpinned request is bounded by Version 40, the largest Model 2 symbol.
+    # The capacity gate is measured in the mode the payload's own bytes are limited to:
+    # a conforming encoder spends the smallest charset that holds the payload, so the
+    # capacity tables' row for that mode is the bound the request is actually held to.
+    # The byte row alone is the smallest of the three and would refuse a payload that
+    # lawfully fits a pinned version in numeric or alphanumeric mode -- Version 1 at
+    # error level L holds 41 digits but only 17 bytes.  Numeric and alphanumeric
+    # payloads are ASCII by construction, so len(body) is their character count as well
+    # as their byte count.  An unpinned request is bounded by Version 40, the largest
+    # Model 2 symbol, in that same mode.
+    #
+    # ``mode_of`` is imported at the point of use, never at module scope: its module
+    # imports ``numpy`` for the corpus's seeded generators, and this port is imported by
+    # the registry, the decoders and every check, so a module-level import would put
+    # numpy's cost into each of them.  ``mode_of`` itself is pure string classification.
+    from qrcheck.corpus.payloads import mode_of
+
     capacity_version = _MAX_VERSION if pinned_version is None else pinned_version
-    capacity = max_payload_bytes(capacity_version, level, "byte")
+    mode = mode_of(body)
+    capacity = max_payload_bytes(capacity_version, level, mode)
     if len(body) > capacity:
         symbol = (
             f"version {_MAX_VERSION}, the largest Model 2 symbol,"
             if pinned_version is None
             else f"version {pinned_version}"
         )
+        unit = "bytes" if mode == "byte" else "characters"
         raise ValueError(
             f"payload is {len(body)} bytes but {symbol} at error level {level} holds at "
-            f"most {capacity} bytes in byte mode"
+            f"most {capacity} {unit} in {mode} mode"
         )
 
     return GenerateRequest(

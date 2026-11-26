@@ -25,7 +25,8 @@ What it deliberately does not do, so nothing written below has to be undone late
   result with reason ``unsupported_capability`` instead.
 * No check that ``corpus_path`` exists.  That condition holds "when a corpus-driven
   check is selected", which this module cannot know, so ``qrcheck.runner`` raises it
-  as its own run-prerequisite error and names the path there.
+  as its own run-prerequisite error -- exit code 2, naming the resolved path, before
+  any check runs and before a report is written.
 
 Two failure channels, one exit code each:
 

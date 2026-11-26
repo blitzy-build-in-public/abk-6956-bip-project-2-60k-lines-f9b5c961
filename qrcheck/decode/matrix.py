@@ -67,10 +67,14 @@ returned grid's dark bounding box. Consequence of that split: a check that needs
 the measured quiet zone fails with ``sampling_failed`` rather than with a wrong
 measurement when no grid can be recovered.
 
-The estimate's numbers and :attr:`~qrcheck.decode.base.SampledMatrix.rectified_luma`
-exist for diagnosis. The evidence artefact set of the plan is closed, so the
-rectified luminance stays in memory for a check that may render it and never
-becomes a file name of its own.
+The estimate's numbers exist for diagnosis. The evidence artefact set of the plan
+is closed, so the rectified luminance can never become a file of its own; the
+square is measured on every path, but it is attached to
+:attr:`~qrcheck.decode.base.SampledMatrix.rectified_luma` only when the caller asks
+for it with ``sample_matrix(..., keep_rectified=True)``. It is a full-size
+``float64`` array costing 8 bytes per pixel -- about 1.3 MB for a 400 px symbol --
+and it lives as long as the result does, so a consumer that renders it pays for it
+and every other caller releases the square with the case.
 """
 
 from __future__ import annotations
@@ -649,6 +653,7 @@ def sample_matrix(
     position: Sequence[tuple[float, float]] | None = None,
     *,
     straight_qrcode: numpy.ndarray | None = None,
+    keep_rectified: bool = False,
 ) -> SampledMatrix:
     """Sample the module grid of the symbol in ``image``, or report why not.
 
@@ -667,6 +672,14 @@ def sample_matrix(
        measurements and ``source`` names the path that was attempted last, so a
        check can report the reason rather than a wrong verdict.
 
+    The rectified square is measured on every path, but it reaches the result only
+    when ``keep_rectified`` is true. It is the full-size ``float64`` luminance of
+    that square -- 8 bytes per pixel, about 1.3 MB for a 400 px symbol -- it is
+    never serialised because the evidence artefact set is closed, and it lives as
+    long as the returned result does. So a consumer that renders the rectified
+    image asks for it and pays for it, and every other caller leaves the field
+    ``None`` and releases the square with the case.
+
     Args:
         image: ``numpy.uint8`` array of shape ``(H, W)`` or ``(H, W, 3)`` -- the
             symbol as the target produced it, decoded to pixels by the caller.
@@ -676,6 +689,11 @@ def sample_matrix(
         straight_qrcode: The secondary decoder's rectified square image, or
             ``None`` in single-decoder mode and whenever that decoder reported
             none.
+        keep_rectified: Attach the rectified square's full-size ``float64``
+            luminance to ``rectified_luma`` on the returned result. Defaults to
+            ``False``, which leaves the field ``None``: the array is never
+            written to evidence, so it is kept only for a caller that renders it,
+            and it costs 8 bytes per pixel for as long as the result lives.
 
     Returns:
         The sampled grid with the version implied by its dimension, or the
@@ -707,7 +725,7 @@ def sample_matrix(
                     reason=None,
                     estimate=estimate,
                     source="primary",
-                    rectified_luma=rectified_luma,
+                    rectified_luma=rectified_luma if keep_rectified else None,
                 )
     if straight_qrcode is not None:
         fallback = _try_luma(straight_qrcode)
@@ -725,7 +743,7 @@ def sample_matrix(
                     reason=None,
                     estimate=estimate,
                     source="straight_qrcode",
-                    rectified_luma=rectified_luma,
+                    rectified_luma=rectified_luma if keep_rectified else None,
                 )
     return SampledMatrix(
         matrix=None,
@@ -734,6 +752,6 @@ def sample_matrix(
         reason="sampling_failed",
         estimate=estimate,
         source="straight_qrcode" if straight_qrcode is not None else "primary",
-        rectified_luma=rectified_luma,
+        rectified_luma=rectified_luma if keep_rectified else None,
     )
 

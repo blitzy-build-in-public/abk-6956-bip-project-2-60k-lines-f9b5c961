@@ -31,6 +31,13 @@ What is asserted, and why each assertion can fail:
   damaged beyond its redundancy all come back as ``None``: a symbol defect has to
   become a failed check, never an ``error`` result that destroys the run-level
   attribution the self-check targets depend on.
+* **The placement convention, proved against a real symbol.** Every assertion that
+  builds a grid writes its bits through ``format_info_positions`` and reads them
+  back through the same table, so a mirrored, rotated or bit-reversed convention
+  would satisfy all of them at once. The real-symbol proof therefore samples the
+  format modules of a symbol ``segno`` placed by ISO/IEC 18004:2015(E) §7.9.1 and
+  requires the recovered pair to be the ``error`` and ``mask`` that symbol was
+  built with -- the one expectation this module cannot derive from its own table.
 
 Determinism: the codeword tables are a sorted product of the four EC levels and
 masks 0-7, every parametrisation id comes from a declaration rather than from
@@ -49,6 +56,7 @@ from typing import Final
 
 import numpy
 import pytest
+import segno
 
 from qrcheck.decode import base as decode_base
 from qrcheck.decode import format_info as format_info_module
@@ -99,6 +107,24 @@ VERSIONS: Final[tuple[int, ...]] = (1, 2, 7, 10, 20, 40)
 #: once per parametrised case.
 GRID_MODULE_COUNT: Final = 25
 
+#: The versions the real-symbol proof samples: the smallest symbol, the first with
+#: an alignment pattern, and the first whose format information shares a grid with
+#: the version information, so the same fixed bit layout is exercised in three
+#: different surroundings.
+REAL_SYMBOL_VERSIONS: Final[tuple[int, ...]] = (1, 2, 7)
+
+#: ``QRCHECK`` is seven characters, which Version 1 carries at EC level H, so one
+#: constant payload keeps every sampled (version, EC level, mask) case encodable.
+REAL_SYMBOL_PAYLOAD: Final = "QRCHECK"
+
+#: The 3 x 4 x 8 real symbols the placement proof decodes, in declaration order.
+REAL_SYMBOL_CASES: Final[tuple[tuple[int, str, int], ...]] = tuple(
+    (version, ec_level, mask)
+    for version in REAL_SYMBOL_VERSIONS
+    for ec_level in EC_LEVELS
+    for mask in MASKS
+)
+
 #: The 15-bit space: every value a single format copy can present.
 _MAX_RAW: Final = 0x7FFF
 
@@ -112,6 +138,12 @@ def _codeword_id(case: tuple[str, int]) -> str:
 def _version_id(version: int) -> str:
     """Render one Model 2 version as a stable parametrisation id."""
     return f"version-{version}"
+
+
+def _symbol_id(case: tuple[int, str, int]) -> str:
+    """Render one (version, EC level, mask) triple as a stable parametrisation id."""
+    version, ec_level, mask = case
+    return f"{_version_id(version)}-{_codeword_id((ec_level, mask))}"
 
 
 def _bits(*positions: int) -> int:
@@ -333,8 +365,9 @@ def test_the_minimum_hamming_distance_is_exactly_seven() -> None:
 
 
 #: One arbitrary legal (EC level, mask) pair for the damage and placement cases.
-#: It is an input rather than an expectation: every expected pair in this module is
-#: produced by ``encode_format_info`` or read back out of that encoding.
+#: It is an input rather than an expectation: every other expected pair in this
+#: module is produced by ``encode_format_info`` or read back out of that encoding,
+#: and the real-symbol proof takes its expectation from the symbol instead.
 SAMPLE_CASE: Final[tuple[str, int]] = ("Q", 5)
 
 #: Grids whose dimension is not ``4V + 17``, or which cannot be indexed at all. The
@@ -577,6 +610,50 @@ def test_copy_one_follows_the_module_count(version: int) -> None:
     _, copy_one = format_info_positions(module_count)
     assert copy_one[:8] == tuple((8, module_count - 1 - offset) for offset in range(8))
     assert copy_one[8:] == tuple((module_count - 7 + offset, 8) for offset in range(7))
+
+
+# ISO/IEC 18004:2015(E) §7.9.1 is the clause that places these fifteen bits twice,
+# and segno places them by that clause rather than by this module's table. A grid
+# written and read back through ``format_info_positions`` cannot prove the
+# convention, because a mirrored, rotated or bit-reversed table satisfies both
+# halves of that round trip; the expectation here is instead the pair the symbol was
+# built with -- segno's own ``error`` and ``mask`` -- which no reading of this
+# module's table can derive.
+@pytest.mark.parametrize("case", REAL_SYMBOL_CASES, ids=_symbol_id)
+def test_a_real_symbol_reports_the_level_and_mask_it_was_built_with(
+    case: tuple[int, str, int],
+) -> None:
+    """A real symbol's own format modules decode to its own EC level and mask.
+
+    ``segno.make_qr`` builds Model 2 only and ``boost_error=False`` keeps the EC
+    level the case asked for (AAP §0.3.5), so ``symbol.error`` and ``symbol.mask``
+    are the expectation this module cannot supply for itself: they are what an
+    ISO/IEC 18004:2015(E) §7.9.1 placement put in the grid. The dimension is
+    asserted first because ``read_format_copies`` screens an illegal module count to
+    ``(None, None)``; both copies must then carry the same codeword, which is the
+    redundancy the standard writes; and the decoded pair must be the symbol's own
+    with no bit errors, which only a correct placement convention can produce.
+    """
+    version, ec_level, mask = case
+    symbol = segno.make_qr(
+        REAL_SYMBOL_PAYLOAD,
+        error=ec_level,
+        version=version,
+        mask=mask,
+        boost_error=False,
+    )
+    # ``matrix`` is rows of module values -- ``1`` dark, no quiet zone -- which is
+    # exactly the grid a sampler hands the reader of a sampled matrix.
+    grid = numpy.array(symbol.matrix, dtype=bool)
+    module_count = 4 * version + 17
+    assert grid.shape == (module_count, module_count)
+    copy_zero, copy_one = read_format_copies(grid)
+    assert copy_zero is not None and copy_one is not None, "a real symbol lost a format copy"
+    assert copy_zero == copy_one, "the standard writes the same fifteen bits twice"
+    info = decode_format_info(grid)
+    assert info is not None
+    assert info.bit_errors == 0
+    assert (info.ec_level, info.mask) == (symbol.error, symbol.mask)
 
 
 @pytest.mark.parametrize("module_count", (20, 22, 178, 0, -3), ids=str)

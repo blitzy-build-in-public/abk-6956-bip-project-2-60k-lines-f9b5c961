@@ -42,18 +42,35 @@ running.
 
    An unknown placeholder is refused with ``ValueError`` naming
    ``targets.<name>.payload_arg``: the configuration schema validates a
-   template's shape but not its vocabulary.  ``version`` and ``mask`` pins are
-   deliberately absent from the vocabulary, which is shared with the HTTP
-   adapter: a target that honours a pin takes it from its configured ``command``.
-   The capability gate still requires ``version_pin`` and ``mask_pin`` when a
-   request pins one, so such a request reaches only a target that declares it can
-   honour it.
+   template's shape but not its vocabulary.  ``version`` and ``mask`` pins and
+   the logo overlay are deliberately absent from the vocabulary, which is shared
+   with the HTTP adapter: a target that honours a *static* pin takes it from its
+   configured ``command``, whose words are spliced literally.  Because no
+   placeholder in either template can carry them, a request that pins a version
+   or a mask, or asks for an overlay, is refused with ``TargetUnsupported``
+   before any I/O -- the same refusal the HTTP adapter makes -- so the affected
+   check reports a skip instead of a target-conformance failure.
 
 2. **A bare flag.**  A template starting with ``-`` and carrying no placeholder is
-   passed as a flag, and the **raw payload bytes** are written to the child's
-   stdin.  That is how a payload which does not survive an argv word is delivered
-   byte for byte; ``examples/cli_target.py`` documents ``--payload-b64 -`` as
-   exactly this form.
+   passed as **one argv word**, and the **raw payload bytes** are written to the
+   child's stdin.  That is how a payload which does not survive an argv word is
+   delivered byte for byte, and because the whole template is a single word it has
+   to be spelled the way the target reads that value from stdin, not as two shell
+   words:
+
+   * the flag=value form, ``--payload-b64=-``, where the target treats the value
+     ``-`` as "read stdin"; ``examples/cli_target.py`` supports exactly this
+     spelling, because its ``--payload-b64`` takes a value;
+   * a flag that takes no value at all, ``--payload-stdin``, where the target
+     reads stdin whenever the flag is given.
+
+   The two-word spelling ``--payload-b64 -`` is a shell convention this adapter
+   cannot produce: it never appends a word of its own to a bare flag, because the
+   stray ``-`` would be an unexpected positional to a ``store_true`` flag such as
+   ``--payload-stdin``.  Both shapes exist side by side because the vocabulary is
+   shared with the HTTP adapter's ``request_template``, where each name carries
+   the same value: a name means one thing in both transports, and the bare flag is
+   what delivers a payload no argv word can hold.
 
 Anything else is a configuration fault the schema should have caught, and is
 refused with ``ValueError`` naming the key.  A command line reads
@@ -144,6 +161,7 @@ from qrcheck.targets.base import (
     TargetRejected,
     TargetTimeout,
     TargetUnavailable,
+    TargetUnsupported,
     apply_metadata_map,
     declared_capabilities,
     decode_returned_image,
@@ -167,6 +185,36 @@ _TEMP_ARTEFACT_STEM: Final[str] = "symbol"
 # payload.  One pattern serves both argument templates, so a template carrying an
 # unknown placeholder is refused rather than passed through literally.
 _TOKEN_PATTERN: Final[re.Pattern[str]] = re.compile(r"\{([A-Za-z0-9_]*)\}")
+
+# The vocabulary that pattern accepts, in the order the diagnostics list it: the
+# bare "{}" -- the payload, or the artefact path in ``output_arg`` -- followed by
+# the eight named placeholders of the HTTP adapter's ``request_template``, which
+# the two transports share so one mental model covers both.  One list has two
+# readers, the ``ValueError`` for an unknown placeholder and the
+# ``TargetUnsupported`` for a request no template can carry, so the two can never
+# drift apart.
+_TEMPLATE_TOKENS: Final[tuple[str, ...]] = (
+    "{}",
+    "{payload_b64}",
+    "{payload_utf8}",
+    "{ec_level}",
+    "{format}",
+    "{size}",
+    "{margin}",
+    "{fg}",
+    "{bg}",
+)
+
+# Request fields no placeholder in either argument template can convey, paired
+# with the capability that governs each.  The words of ``command`` are spliced
+# literally and the vocabulary above has no version, mask or logo token, so a
+# request that pins one is refused before any I/O rather than run without it --
+# the decision ``qrcheck/targets/http.py`` already makes for its request template.
+_INEXPRESSIBLE_FIELDS: Final[tuple[tuple[str, Capability], ...]] = (
+    ("version", Capability.version_pin),
+    ("mask", Capability.mask_pin),
+    ("logo_overlay_path", Capability.logo_overlay),
+)
 
 # The line prefix by which a target declares a rejection (encoding 2).
 REJECTION_PREFIX: Final[str] = "rejected:"
@@ -268,7 +316,10 @@ class CliAdapter:
 
         Raises:
             TargetUnsupported: The request asks for something the target did not
-                declare.  Raised before any I/O, so the target is never started.
+                declare, or pins a version or a mask or asks for a logo overlay,
+                none of which any placeholder in either argument template can
+                carry.  Raised before any I/O, so no directory is created and the
+                target is never started.
             TargetUnavailable: The program could not be spawned.
             TargetTimeout: The target outlived ``timeout_s`` and was killed.
             TargetRejected: The target declared a client-side rejection.
@@ -279,6 +330,7 @@ class CliAdapter:
                 message names the configured key.
         """
         require_capabilities(self, _required_capabilities(request))
+        self._reject_inexpressible(request)
         invocation = self._build_invocation(request)
         try:
             started = time.perf_counter()
@@ -325,6 +377,33 @@ class CliAdapter:
             declared_mode=_declared_text(metadata.get("mode")),
             elapsed_ms=elapsed_ms,
         )
+
+    def _reject_inexpressible(self, request: GenerateRequest) -> None:
+        """Refuse a request neither configured argument template can convey.
+
+        ``version``, ``mask`` and ``logo_overlay_path`` have no placeholder in
+        :data:`_TEMPLATE_TOKENS`, and the words of ``command`` are spliced
+        literally, so nothing this adapter runs can carry them to the target.
+        Running the request anyway would let the target encode whatever it
+        prefers and report that choice as a conformance failure, so the request is
+        refused here instead and the affected check reports a skip.  A field the
+        target did not declare is refused by :func:`require_capabilities` first,
+        with the same error type, so an undeclared capability keeps its own
+        diagnostic.
+
+        Raises:
+            TargetUnsupported: The request pins a version or a mask, or asks for a
+                logo overlay.  Raised before any I/O: no temporary directory is
+                created and no process is spawned.
+        """
+        for field_name, capability in _INEXPRESSIBLE_FIELDS:
+            if getattr(request, field_name) is None:
+                continue
+            require_capabilities(self, capability)
+            raise TargetUnsupported(
+                f"adapter {self.name!r} cannot express {field_name} over its argument "
+                f"templates: no placeholder in {list(_TEMPLATE_TOKENS)} carries it"
+            )
 
     def _build_invocation(self, request: GenerateRequest) -> _Invocation:
         """Assemble the command line and the artefact path for `request`.
@@ -444,8 +523,7 @@ class CliAdapter:
             return _hex_colour(request.background_rgb)
         raise ValueError(
             f"targets.{self.name}.{key} carries the unknown placeholder '{{{token}}}'; the "
-            "placeholders are {}, {payload_b64}, {payload_utf8}, {ec_level}, {format}, "
-            "{size}, {margin}, {fg} and {bg}"
+            f"placeholders are {', '.join(_TEMPLATE_TOKENS[:-1])} and {_TEMPLATE_TOKENS[-1]}"
         )
 
     def _raise_for_failure(self, completed: subprocess.CompletedProcess[bytes]) -> None:
@@ -551,6 +629,13 @@ def _required_capabilities(request: GenerateRequest) -> frozenset[Capability]:
     conformance declares ``ec_level`` itself and is resolved to a skip by
     ``qrcheck/registry/resolve.py`` before it ever builds a request.
 
+    The three fields no template can carry are not gated here either.  No
+    placeholder in ``payload_arg`` or ``output_arg`` conveys a version pin, a mask
+    pin or a logo overlay, so :meth:`CliAdapter._reject_inexpressible` owns that
+    decision and refuses such a request whether or not the target declared the
+    matching capability -- the one decision in one place, which is the split
+    ``qrcheck/targets/http.py`` makes for the same three fields.
+
     Raises:
         ValueError: The request asks for an output format that is not one of
             :data:`~qrcheck.targets.base.OUTPUT_FORMATS`.  ``build_request``
@@ -572,12 +657,6 @@ def _required_capabilities(request: GenerateRequest) -> frozenset[Capability]:
         _DEFAULT_BACKGROUND,
     ):
         needed.add(Capability.color)
-    if request.logo_overlay_path is not None:
-        needed.add(Capability.logo_overlay)
-    if request.version is not None:
-        needed.add(Capability.version_pin)
-    if request.mask is not None:
-        needed.add(Capability.mask_pin)
     return frozenset(needed)
 
 

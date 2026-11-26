@@ -17,3 +17,17 @@ zxing-cpp==2.2.0  # primary decoder: payload bytes, EC level, content type, corn
 # The transitive closure (anyio, certifi, h11, httpcore, idna, sniffio, typing-extensions)
 # is deliberately absent: pip-compile derives it, and --require-hashes needs all of it
 # hashed, so the lock alone owns those versions.
+# Two conditional dependencies belong in the locks and never on a supported platform: click's
+# colorama (Windows only) and segno's importlib-metadata (below CPython 3.10 only). pip-compile
+# 7.5.3, like pip, drops a requirement whose marker is false for the generating interpreter --
+# CPython 3.11 on Linux/macOS -- so it cannot emit them, and a regeneration of either lock
+# removes them. They are maintained by hand in requirements.lock and requirements-dev.lock at
+# their alphabetical positions and must be re-added after every regeneration, which is why they
+# are not pins below.
+# Re-adding them is the one hand-maintained exception to the rule above: copy the two stanzas
+# from the committed locks, which remain the only authority for their exact versions. Each lock
+# records colorama at the release the index resolves and importlib-metadata at the newest release
+# whose requires-python still admits the low end of the marker's range (>=3.8 today; 8.6.0+
+# require >=3.9 and 8.8.0+ require >=3.10). Neither is ever installed here, and
+# importlib-metadata's own dependency zipp is never installed either, so no zipp stanza is
+# recorded.

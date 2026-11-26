@@ -94,7 +94,11 @@ def load_corpus(path: str | Path) -> list[CorpusRecord]:
     Nothing is dropped silently: a blank line anywhere else, a line that is not JSON, a line
     that is not a JSON object and a line ``CorpusRecord.from_dict`` rejects all raise, because
     a corpus that quietly lost a malformed record would make the drift check and ``--class``
-    filtering report on a different corpus than the one on disk.
+    filtering report on a different corpus than the one on disk. A record that breaks the
+    record's own invariants -- exactly one payload field, a non-empty payload, a known class, a
+    valid ``expected_mode`` -- raises ``CorpusError`` here exactly as it would from
+    ``build_corpus``, so a hand-edited corpus reaches no check with a record the builder itself
+    would refuse.
 
     Args:
         path: The corpus file to read, used exactly as given.

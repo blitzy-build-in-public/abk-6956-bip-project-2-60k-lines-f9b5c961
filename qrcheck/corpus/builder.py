@@ -141,8 +141,15 @@ class CorpusRecord:
     (``numeric``, ``alphanumeric`` or ``byte``), and ``notes`` records how the payload was
     derived -- for a boundary record, the capacity arithmetic that fixed its length.
 
-    Instances are immutable and validate themselves on construction, so a record read back
-    from a malformed corpus line fails where it is created rather than inside a check.
+    Instances are immutable and validate themselves on construction: the ``id`` must be
+    ``<class>-<3-digit index>`` for the record's own class, exactly one of the two payload
+    fields must be set and it must carry at least one byte -- an empty ``payload_utf8``, an
+    empty ``payload_b64`` and a ``payload_b64`` that decodes to nothing are all rejected --
+    ``payload_utf8`` must hold no embedded NUL, ``payload_b64`` must be valid base64,
+    ``expected_mode`` must be one of ``numeric``, ``alphanumeric`` and ``byte``, and ``notes``
+    must be a str. A record read back from a malformed corpus line therefore fails where it is
+    created rather than inside a check, and the build path and the load path share that one
+    gate.
     """
 
     id: str
@@ -190,6 +197,11 @@ class CorpusRecord:
                     f"{type(self.payload_b64).__name__}"
                 )
             _decode_base64(self.payload_b64, self.id)
+        if not self.payload_bytes:
+            raise CorpusError(
+                f"record {_preview(self.id)}: payload_bytes is empty; every corpus payload "
+                f"carries at least one byte"
+            )
         if self.expected_mode not in capacity.MODES:
             raise CorpusError(
                 f"record {_preview(self.id)}: expected_mode {_preview(self.expected_mode)} is "
@@ -380,7 +392,14 @@ def _verify_ids(records: Sequence[CorpusRecord]) -> None:
 
 
 def _verify_payload_fields(records: Sequence[CorpusRecord]) -> None:
-    """Raise CorpusError unless each record states one non-empty payload the wire allows."""
+    """Raise CorpusError unless each record states one payload field the wire allows.
+
+    The non-empty rule is the record's own invariant, enforced by
+    ``CorpusRecord.__post_init__`` for a freshly built corpus and for a corpus read back from
+    disk alike; this function keeps the corpus-wide payload-field checks -- exactly one field
+    set, and no embedded NUL in ``payload_utf8`` -- so a record set that reached here by any
+    other route is still held to the wire's two payload rules.
+    """
     for record in records:
         if (record.payload_utf8 is None) == (record.payload_b64 is None):
             raise CorpusError(
@@ -392,11 +411,6 @@ def _verify_payload_fields(records: Sequence[CorpusRecord]) -> None:
             raise CorpusError(
                 f"record {_preview(record.id)}: payload_utf8 holds an embedded NUL byte; a "
                 f"payload containing one must be stored as payload_b64"
-            )
-        if not record.payload_bytes:
-            raise CorpusError(
-                f"record {_preview(record.id)}: payload_bytes is empty; every corpus payload "
-                f"carries at least one byte"
             )
 
 

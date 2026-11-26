@@ -29,57 +29,67 @@ session state.
 Canonical configurations
 ------------------------
 ``PORT`` is the integer this process prints on stdout; a test reads it instead of
-hard-coding a port. Both blocks are valid TOML. The request template, the
-metadata map and the capability list are shown wrapped to respect the
-repository's 100-column limit, which changes no TOML or JSON semantics: the
-``[...metadata_map]`` sub-table is the table form of the inline table, and both
-formats ignore whitespace between tokens.
+hard-coding a port. Both blocks are valid TOML and both load through the
+configuration schema: the request template is written as a
+``[...request_template]`` sub-table, which the adapter sends as exactly the JSON
+object its keys spell, and the metadata map is a sub-table keyed by the
+framework's own field names (``version``, ``ec``, ``mask``, ``mode``). The arrays
+and tables are wrapped to respect the repository's 100-column limit, which
+changes no TOML or JSON semantics.
 
     # base64 envelope: image_field is a dotted path into the JSON response
     [targets.example_http]
     type = "http"
     url = "http://127.0.0.1:PORT/generate"
     method = "POST"
-    request_template = '''{
-      "payload_b64": "{payload_b64}",
-      "ec_level": "{ec_level}",
-      "format": "{format}",
-      "module_size": "{size}",
-      "quiet_zone": "{margin}",
-      "foreground": "{fg}",
-      "background": "{bg}"
-    }'''
     image_field = "image_b64"
     image_encoding = "base64"
     timeout_s = 30.0
+    # No version_pin or mask_pin: the eight template placeholders below carry no
+    # version or mask, so declaring either would make a pin-needing check resolve
+    # as runnable and only skip mid-run instead of skipping before execution.
     capabilities = [
         "png", "ec_level", "module_size", "quiet_zone", "color",
-        "version_pin", "mask_pin", "metadata_version", "metadata_ec",
-        "metadata_mask", "metadata_mode",
+        "metadata_version", "metadata_ec", "metadata_mask", "metadata_mode",
     ]
 
+    # The request body: the adapter sends this table as the JSON object its keys
+    # spell, one placeholder per value.
+    [targets.example_http.request_template]
+    payload_b64 = "{payload_b64}"
+    ec_level = "{ec_level}"
+    format = "{format}"
+    module_size = "{size}"
+    quiet_zone = "{margin}"
+    foreground = "{fg}"
+    background = "{bg}"
+
+    # Framework field name -> dotted path into the response.
     [targets.example_http.metadata_map]
-    declared_version = "metadata.version"
-    declared_ec = "metadata.ec_level"
-    declared_mask = "metadata.mask"
-    declared_mode = "metadata.mode"
+    version = "metadata.version"
+    ec = "metadata.ec_level"
+    mask = "metadata.mask"
+    mode = "metadata.mode"
 
     # raw body: image_field = "_body", image_encoding = "raw"
     [targets.example_http_raw]
     type = "http"
     url = "http://127.0.0.1:PORT/raw"
     method = "POST"
-    request_template = '''{
-      "payload_b64": "{payload_b64}",
-      "ec_level": "{ec_level}",
-      "format": "{format}",
-      "module_size": "{size}",
-      "quiet_zone": "{margin}",
-      "foreground": "{fg}",
-      "background": "{bg}"
-    }'''
     image_field = "_body"
     image_encoding = "raw"
+    # No metadata_* capabilities: the raw route returns the PNG with no JSON
+    # envelope, so there is no metadata to map (the block declares no map).
+    capabilities = ["png", "ec_level", "module_size", "quiet_zone", "color"]
+
+    [targets.example_http_raw.request_template]
+    payload_b64 = "{payload_b64}"
+    ec_level = "{ec_level}"
+    format = "{format}"
+    module_size = "{size}"
+    quiet_zone = "{margin}"
+    foreground = "{fg}"
+    background = "{bg}"
 
 Request fields
 --------------
@@ -96,8 +106,15 @@ over query-string fields.
 | quiet_zone   | 4         | quiet zone in modules, >= 0 -- where {margin} lands       |
 | foreground   | "#000000" | #RRGGBB or #RGB -- the {fg} placeholder                   |
 | background   | "#FFFFFF" | #RRGGBB or #RGB -- the {bg} placeholder                   |
-| version      | absent    | optional version pin, 1..40                               |
-| mask         | absent    | optional mask pin, 0..7                                   |
+| version      | absent    | optional version pin, 1..40; not conveyable over http    |
+| mask         | absent    | optional mask pin, 0..7; not conveyable over http        |
+
+The adapter's request template can carry only the eight placeholders the
+configuration contract allows -- one for each of the first eight fields above --
+and none of them carries a version or a mask; neither pin is therefore declared
+in the capability lists, so a check that needs one reports ``skipped`` with
+``unsupported_capability`` before execution instead of running against an
+unpinned symbol.
 
 An integer field accepts a JSON number or a numeric string, because the
 template's substitution may still arrive stringified.

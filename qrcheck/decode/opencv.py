@@ -263,17 +263,24 @@ def read_secondary(
 
 
 def _load_cv2() -> types.ModuleType | None:
-    """Return the ``cv2`` module, or ``None`` when it is not importable.
+    """Return the ``cv2`` module, or ``None`` when it is not usable.
 
     Resolved at call time rather than at module import time, so importing the
     decode package never loads a native image stack and ``qrcheck doctor`` can
-    report this decoder's absence without paying for its import. An import
-    failure is the documented degradation: the caller reports it as an outcome
-    rather than an exception.
+    report this decoder's absence without paying for its import.
+
+    Two failures both mean absent, because either one leaves the binding
+    unusable: the distribution is not installed, which raises ``ImportError``,
+    and the distribution is installed but its compiled extension cannot be
+    loaded -- a wrong architecture, or a missing native library such as
+    ``libGL.so.1`` -- which raises ``OSError`` rather than ``ImportError``.
+    Neither is allowed to escape as a traceback: the caller reports the absence
+    as an outcome, which is the documented single-decoder degradation, not an
+    ``error`` result forced on the consensus layer.
     """
     try:
         return importlib.import_module("cv2")
-    except ImportError:
+    except (ImportError, OSError):
         return None
 
 

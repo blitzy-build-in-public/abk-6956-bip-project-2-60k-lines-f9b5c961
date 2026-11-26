@@ -95,8 +95,10 @@ bytes and records outcomes; it processes no image.
 
 What loading a package costs is that package's decision, not this module's: the port is
 reached through the :mod:`qrcheck.targets` façade and the class vocabulary through the
-:mod:`qrcheck.corpus` one, so whatever either façade eagerly imports is loaded with them.
-This module neither widens that set nor depends on it.
+:mod:`qrcheck.corpus` one, and both of those import on demand -- an adapter class when its
+target type is resolved, a corpus name when a caller reaches for one -- so neither façade
+adds anything to this module's import graph.  This module neither widens that set nor
+depends on it.
 """
 
 from __future__ import annotations

@@ -9,7 +9,9 @@ name = "qrcheck"
 # Static, never dynamic: a wheel build would import the package to resolve it.
 # qrcheck/__init__.py carries the same 0.1.0 literal at runtime.
 version = "0.1.0"
-description = "Offline conformance harness that tests QR code generators against two reference decoders and a golden-encoder oracle."
+description = """\
+Offline conformance harness that tests QR code generators against two \
+reference decoders and a golden-encoder oracle."""
 readme = "README.md"
 # A floor, never a cap: a newer 3.x runs unsupported and `qrcheck doctor` says so.
 requires-python = ">=3.11"

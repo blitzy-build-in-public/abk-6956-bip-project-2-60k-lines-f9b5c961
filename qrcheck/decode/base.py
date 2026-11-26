@@ -316,9 +316,12 @@ class SampledMatrix:
     ``source`` names which input established the grid: ``"primary"`` for the
     primary decoder's corner quadrangle, ``"straight_qrcode"`` for the
     secondary decoder's rectified image. ``estimate`` carries the measurements
-    behind that choice. ``rectified_luma`` is the rectified square's float32
-    luminance, kept in memory for a check that may render it; it is never
-    serialised, because the evidence artefact set is closed.
+    behind that choice. ``rectified_luma`` is the rectified square's full-size
+    ``float64`` luminance, kept only for a consumer that renders it: it is
+    ``None`` unless the sampler was asked for it with
+    ``sample_matrix(..., keep_rectified=True)``, because the array costs 8 bytes
+    per pixel and lives as long as this result does. It is never serialised,
+    because the evidence artefact set is closed.
     """
 
     matrix: Matrix | None
