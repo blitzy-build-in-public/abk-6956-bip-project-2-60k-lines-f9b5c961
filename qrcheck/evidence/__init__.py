@@ -8,17 +8,18 @@ Pillow is imported, and the one route an image takes into a report.
 
 Why the two halves are re-exported differently
 ----------------------------------------------
-:mod:`qrcheck.report` imports :data:`EVIDENCE_DIR_NAME` from ``qrcheck.evidence.naming`` to
-default the evidence root, and that import must not drag an image stack into a run that
-never renders a picture (AAP §0.8.1, §0.9.1). Python executes this module before any
-submodule, so an eager ``from qrcheck.evidence.mux import to_data_uri`` here would pull
-Pillow into every ``import qrcheck.evidence.naming`` and defeat that guarantee.
+:mod:`qrcheck.report` defaults the evidence root it hands the HTML writer without
+importing this package at all, because a process that serialises a summary must not pull an
+image stack in behind it (AAP §0.8.1, §0.9.1), and ``naming`` stays the owner of every
+layout segment on that path. Python executes this module before any submodule, so an eager
+``from qrcheck.evidence.mux import to_data_uri`` here would pull Pillow into every
+``import qrcheck.evidence.naming`` and defeat that guarantee.
 
-The same asymmetry is what keeps the import cycle open: ``qrcheck.report`` imports
-``qrcheck.evidence.naming``, while ``naming`` imports ``qrcheck.report.model`` inside the
-two functions that derive a failure ID. The two packages must therefore be able to
-half-initialise in either order, and importing ``mux`` - which reaches ``qrcheck.report``
-transitively - at this module's scope would close the cycle at the wrong moment.
+The same asymmetry keeps the two packages able to half-initialise in either order: ``naming``
+imports ``qrcheck.report.model`` inside the two functions that derive a failure ID, and
+importing that module executes ``qrcheck.report``'s ``__init__``. An eager ``mux`` import at
+this module's scope is where Pillow would arrive, and it would make the order in which the
+two packages are first imported decide whether that half-initialisation succeeds.
 
 So every public name of ``naming`` is re-exported eagerly (cheap, stdlib only, no side
 effects), and every public name of ``mux`` is re-exported lazily through :pep:`562`
