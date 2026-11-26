@@ -17,12 +17,23 @@ Canonical configuration:
 [targets.example_cli]
 type = "cli"
 command = ["python", "examples/cli_target.py"]
-payload_arg = "--payload-b64={}"
+payload_arg = "--payload-b64={payload_b64}"
 output_arg = "--output={}"
 returns = "file_path"
 timeout_s = 30.0
 capabilities = ["png", "ec_level", "module_size", "quiet_zone", "color", "version_pin", "mask_pin"]
 ```
+
+Both argument templates are drawn from the adapter's placeholder vocabulary: a bare
+``{}`` in ``payload_arg`` carries the payload as UTF-8 text, a bare ``{}`` in
+``output_arg`` carries the path of the file the adapter named, and ``{payload_b64}``
+carries the payload base64-encoded, which is the form ``--payload-b64`` strictly
+decodes. The named forms ``{payload_utf8}``, ``{ec_level}``, ``{format}``,
+``{size}``, ``{margin}``, ``{fg}`` and ``{bg}`` carry the payload as UTF-8 text, the
+error level, the output format, the module size and quiet zone the request pins, and
+the request's foreground and background colours. That is why the payload template
+above names ``{payload_b64}`` and not ``{}``: a bare ``{}`` beside ``--payload-b64``
+would hand the flag raw UTF-8 text, which this script refuses as invalid base64.
 
 Invocation: ``--payload-b64 <BASE64>``, ``--payload-utf8 <TEXT>``,
 ``--payload-stdin`` or a bare positional text payload, always with
