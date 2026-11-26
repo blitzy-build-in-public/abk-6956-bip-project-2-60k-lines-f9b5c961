@@ -1,0 +1,109 @@
+# qrcheck default configuration: the committed configuration a run uses when
+# --config is not given.
+#
+# Every key below is schema-validated (qrcheck/config/schema.py). An unknown key,
+# an absent or invalid `type`, an enum value outside its set, a syntactically
+# invalid `callable`, a non-loopback `url`, a non-positive `timeout_s` or an
+# unknown capability member each exit 2 naming the offending dotted key path.
+# A capability shortfall is not a configuration error: the affected check reports
+# `skipped` with reason `unsupported_capability`, counted separately and never
+# counted as a pass.
+#
+# Paths are relative to this file's directory, so the checkout works from any
+# working directory. Each numeric threshold, sample count and tolerance appears
+# exactly once, here; no check, test or document restates one, and the comment on
+# each names the single check or command that reads it.
+
+# The [targets.<name>] table a run uses when --adapter is not given.
+default_adapter = "reference"
+# Root of summary.json, junit.xml, index.html and the evidence tree; created if
+# absent, and an unwritable directory exits 3 with the path named.
+report_dir = "reports"
+# Default run seed (integer >= 0). qrcheck/config/seeding.py derives every corpus,
+# occluder, noise and logo draw from it, so a run is reproducible from this value
+# together with the adapter and the EC level.
+seed = 20240101
+# The committed 240-record corpus; also the default destination of `corpus build`.
+corpus_path = "corpus/default.jsonl"
+# Ceiling on tracked physical .py lines, comments and blank lines included; read
+# by `qrcheck loc` and copied into summary.json as loc_count.
+loc_limit = 60000
+
+# The two built-in self-check targets. Neither declares `capabilities`: the
+# default empty list would add nothing, because both adapters declare all 13
+# capabilities themselves, which is what lets a reference run require zero skips.
+# No library, cli or http target is declared by default, because `default_adapter`
+# names `reference` and a dummy table would make `qrcheck doctor --adapter`
+# ambiguous; docs/targets.md carries the worked examples of all three configurable
+# kinds. An http target's `url` must be http or https on 127.0.0.1, localhost or
+# ::1 — any other host exits 2 naming it, because the framework is offline and
+# loopback-only.
+
+[targets.reference]
+# Conforming segno-backed generator, present to prove the suite is not vacuous.
+type = "reference"
+# Per-operation ceiling in seconds (> 0); exceeding it raises TargetTimeout.
+timeout_s = 30.0
+# Luminance ratio RN-CONTRAST asserts at or above; IV-BAD-OPTION also reads it to
+# build a request measured below the declared floor.
+contrast_floor = 7.0
+
+[targets.defective]
+# The five-injection target; its expected failing check set is declared in
+# qrcheck/registry/expectations.py and asserted by set equality in CI.
+type = "defective"
+timeout_s = 30.0
+contrast_floor = 7.0
+
+[render]
+# How RN-SVG rasterizes SVG output: "auto", "cairosvg", "rsvg-convert", "resvg",
+# "magick" or "none". "auto" tries an importable cairosvg module first, then
+# rsvg-convert, resvg, magick and convert on PATH. With no rasterizer available,
+# RN-SVG reports skipped/missing_dependency naming the discovery order it tried;
+# a skip is never counted as a pass.
+svg_rasterizer = "auto"
+
+[checks.performance]
+# PF-ENCODE times `warmup` untimed encodes followed by `encode_samples` (>= 10)
+# timed ones of a single payload, then asserts p95 <= encode_p95_ms and throughput
+# >= min_symbols_per_minute. Both are in milliseconds / symbols per minute (> 0).
+encode_p95_ms = 250.0
+min_symbols_per_minute = 120.0
+encode_samples = 100
+# PF-DECODE times the same warmup followed by decode_samples (>= 10) decodes of
+# one fixed PNG of decode_image_px x decode_image_px pixels (>= 64; the p95 floor
+# is defined for a 500 x 500 PNG) and asserts p95 <= decode_p95_ms (> 0).
+decode_p95_ms = 400.0
+decode_samples = 200
+decode_image_px = 500
+# Untimed encodes preceding both measurements, so a reported p95 reflects a warmed
+# process rather than interpreter start-up (>= 0).
+warmup = 5
+
+[checks.damage]
+# DM-RESILIENCE applies every variant below to one symbol per sampled corpus
+# record; DM-SEEDED re-applies them from the recorded seed to the symbol it
+# already holds and asserts the result is byte-identical. The occlusion budget is
+# read from the EC level decoded from the symbol, not the requested one, so a
+# target that encodes at the wrong level cannot push damage past that symbol's
+# real recovery capacity. Documented recovery capacity: L 0.07, M 0.15, Q 0.25,
+# H 0.30 of codewords.
+
+# Absolute safety margin, in [0, 0.10), subtracted from the documented recovery
+# capacity before occluders are placed; occluders go only in the data area, never
+# over a finder, separator, timing, alignment or format-information pattern.
+occlusion_margin = 0.05
+# Gaussian blur radius in modules (> 0).
+blur_radius_per_module = 0.6
+# JPEG re-encode quality (1..95).
+jpeg_quality = 40
+# Standard deviation of the additive Gaussian noise (>= 0).
+noise_sigma = 12.0
+# Rotation in degrees, in (0, 45].
+rotation_deg = 15.0
+# Perspective warp in degrees, in (0, 30].
+perspective_deg = 10.0
+# Downscale target in pixels per module (> 0).
+downscale_px_per_module = 3.0
+# RN-LOGO overlay area as a fraction of symbol area, in (0, 0.25].
+logo_area_fraction = 0.15
