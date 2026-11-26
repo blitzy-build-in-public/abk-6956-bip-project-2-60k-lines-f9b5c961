@@ -1,48 +1,29 @@
 """The one line-count metric, its exclusion list, and the ``--limit`` gate on top of it.
 
-What this module settles
-------------------------
 ``qrcheck/loc.py`` is the product's only definition of "tracked physical lines" and
-``qrcheck/cli/loc.py`` is the only place that compares that figure with the ceiling.  Both
-halves are contracts a reader relies on: the line ceiling of AAP §0.12 is enforced by this
-metric in CI, and ``RunResult.loc_count`` reports the same number, so a second counting rule
-anywhere -- in the command, in a report writer, in a test -- would let those figures disagree
-about one tree.  The tests below hold the contract at four levels:
+``qrcheck/cli/loc.py`` the only place that compares that figure with the ceiling, so a second
+counting rule anywhere -- in the command, in a report writer, in a test -- would let
+``RunResult.loc_count`` and the CI gate disagree about one tree. Four levels are held: the counting
+rule (every physical line counts, blank and comment lines included, a final unterminated line
+counts too, and the ``LF`` byte rather than decoded text is counted); the walk (the name-based
+exclusion list prunes generated and metadata directories, no symlink is followed, report paths are
+root-relative POSIX strings, the collections are sorted and immutable and ``total`` is the sum of
+the per-file counts); the gate (``0`` under the limit, ``1`` at or above it, ``2`` for a missing
+path, and the configured ``loc_limit`` when no option overrides it); and the property that makes
+the rest worth anything -- no other module defines a line-counting function and the command imports
+the metric instead of repeating the walk.
 
-1. the counting rule: every physical line counts, blank lines and comment lines included, a
-   final line without a terminator counts too, and the ``LF`` byte rather than decoded text
-   is what is counted;
-2. the walk: the name-based exclusion list prunes generated and metadata directories, no
-   symlink is followed, report paths are root-relative POSIX strings, the collections are
-   sorted and immutable, and ``total`` is the sum of the per-file counts;
-3. the gate: ``0`` under the limit, ``1`` at or above it, ``2`` for a missing path, and the
-   configured ``loc_limit`` when no option overrides it;
-4. the property that makes 1-3 worth anything: no other module defines a line-counting
-   function, and the command imports the metric instead of repeating the walk.
+The gate boundary is "``0`` when the total is under the limit and ``1`` when it is at or above it"
+(AAP §0.3.4 and ``qrcheck/cli/loc.py``'s own docstring), which is what makes ``qrcheck loc --limit
+$((count - 1))`` fail -- the negative case success criterion 11 turns into a CI gate (AAP §0.6.1
+#11). All three neighbouring limits are therefore asserted, because an off-by-one in the comparison
+moves exactly one of them and a single assertion could sit on the side the defect does not reach.
 
-The gate boundary, stated once
-------------------------------
-The documented meaning is *``0`` when the total is under the limit and ``1`` when it is at or
-above it* (AAP §0.3.4, and ``qrcheck/cli/loc.py``'s own docstring).  That is what makes
-``qrcheck loc --limit $((count - 1))`` fail, which is the negative case success criterion 11
-turns into a CI gate (AAP §0.6.1 #11).  This module therefore asserts all three boundaries --
-``total + 1`` passes while ``total`` and ``total - 1`` fail -- instead of only one of them,
-because an off-by-one in the comparison moves exactly one of the three and a single assertion
-could sit on the side the defect does not reach.
-
-No threshold lives here
------------------------
-Every limit below is computed from the tree just measured or read from
-:data:`qrcheck.config.schema.SCHEMA`, never typed as a literal of the product's configuration,
-and the repository's own total is never asserted: the module stays green as the product grows,
-and retuning ``loc_limit`` in ``qrcheck.toml`` cannot leave a stale expectation behind it
-(AAP §0.12).
-
-Nothing here writes outside a test's ``tmp_path``
--------------------------------------------------
-Each tree is built under ``tmp_path`` and the one real-repository walk is a file listing, not an
-import: no network, no subprocess, no clock and no sleep, so the module stays a millisecond-cost
-member of the fast unit layer.  It skips nothing, retries nothing and relaxes nothing.
+Every limit is computed from the tree just measured or read from
+:data:`qrcheck.config.schema.SCHEMA`, never typed, and the repository's own total is never
+asserted: the module stays green as the product grows, and retuning ``loc_limit`` in
+``qrcheck.toml`` cannot leave a stale expectation behind it. Each tree is built under ``tmp_path``
+and the one real-repository walk is a file listing rather than an import.
 """
 
 from __future__ import annotations
@@ -163,17 +144,7 @@ _CODE_LINE_COUNT: Final[int] = 5
 
 
 def _tree(base: Path, payloads: Mapping[str, bytes], name: str = "tree") -> Path:
-    """Create a directory tree of files beneath ``base`` and return its root.
-
-    Args:
-        base: The test's ``tmp_path``.
-        payloads: File contents keyed by a root-relative POSIX path; parent directories are
-            created as needed, so a nested entry is one row rather than an extra call.
-        name: The tree's directory name, so one test may build two trees side by side.
-
-    Returns:
-        The tree's root directory, existing and holding exactly ``payloads``.
-    """
+    """Create a directory tree of files beneath ``base`` and return its root."""
     root = base / name
     root.mkdir(parents=True, exist_ok=True)
     for relative, payload in payloads.items():
@@ -184,18 +155,9 @@ def _tree(base: Path, payloads: Mapping[str, bytes], name: str = "tree") -> Path
 
 
 def _link(target: Path, link: Path) -> bool:
-    """Create a symbolic link and report whether the platform allowed it.
-
-    A symlink is created without ``Path.exists`` validation and without following the target,
-    so a test can point one outside the measured tree.  The return value exists so a test can
-    assert the count is correct either way instead of skipping: this module skips nothing.
-
-    Args:
-        target: The path the link points at, which may lie outside any tree.
-        link: The link to create.
-
-    Returns:
-        ``True`` when the link now exists, ``False`` when the platform refused to create one.
+    """Create a symbolic link and report whether the platform allowed it. A symlink is created
+    without ``Path.exists`` validation and without following the target, so a test can point
+    one outside the measured tree.
     """
     try:
         link.symlink_to(target, target_is_directory=target.is_dir())
@@ -205,14 +167,7 @@ def _link(target: Path, link: Path) -> bool:
 
 
 def _function_names(tree: ast.Module) -> tuple[str, ...]:
-    """Return every function name defined in ``tree``, including nested ones, sorted.
-
-    Args:
-        tree: The parsed module.
-
-    Returns:
-        The names in ascending order, so a diagnostic is stable across runs.
-    """
+    """Return every function name defined in ``tree``, including nested ones, sorted."""
     return tuple(
         sorted(
             node.name
@@ -223,17 +178,9 @@ def _function_names(tree: ast.Module) -> tuple[str, ...]:
 
 
 def _is_line_counting(name: str) -> bool:
-    """Whether ``name`` reads as a line-counting function.
-
-    The test is on the snake-case segments rather than on a substring, because ``block`` and
-    ``local`` contain ``loc`` while neither counts a line, and a substring test would flag a
-    correct module.
-
-    Args:
-        name: A function name.
-
-    Returns:
-        ``True`` for ``count_lines`` and for any name carrying a ``loc`` segment.
+    """Whether ``name`` reads as a line-counting function. The test is on the snake-case segments
+    rather than on a substring, because ``block`` and ``local`` contain ``loc`` while neither
+    counts a line, and a substring test would flag a correct module.
     """
     lowered = name.lower()
     if "count_lines" in lowered:
@@ -242,14 +189,7 @@ def _is_line_counting(name: str) -> bool:
 
 
 def _called_names(tree: ast.Module) -> frozenset[str]:
-    """Return every function or method name called in ``tree``.
-
-    Args:
-        tree: The parsed module.
-
-    Returns:
-        The called names, so a test can assert a walk or a byte read is absent.
-    """
+    """Return every function or method name called in ``tree``."""
     names: set[str] = set()
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
@@ -263,15 +203,7 @@ def _called_names(tree: ast.Module) -> frozenset[str]:
 
 
 def _imported_names(tree: ast.Module, module: str) -> frozenset[str]:
-    """Return the names ``tree`` imports from ``module``.
-
-    Args:
-        tree: The parsed module.
-        module: The absolute dotted module path to look for.
-
-    Returns:
-        The imported names, empty when the module imports nothing from ``module``.
-    """
+    """Return the names ``tree`` imports from ``module``."""
     imported: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom) and node.module == module:
@@ -281,13 +213,9 @@ def _imported_names(tree: ast.Module, module: str) -> frozenset[str]:
 
 @lru_cache(maxsize=1)
 def _package_modules() -> dict[str, ast.Module]:
-    """Parse every module under ``qrcheck/`` once, keyed by repository-relative POSIX path.
-
-    Parsed from the files on disk rather than imported, so a package that cannot be imported
-    cannot hide a second counting implementation by failing first.
-
-    Returns:
-        One entry per ``.py`` file under the package, in path order.
+    """Parse every module under ``qrcheck/`` once, keyed by repository-relative POSIX path. Parsed
+    from the files on disk rather than imported, so a package that cannot be imported cannot
+    hide a second counting implementation by failing first.
     """
     root = _REPOSITORY / _PACKAGE
     return {
@@ -311,14 +239,7 @@ def _package_modules() -> dict[str, ast.Module]:
 def test_every_physical_line_is_counted(
     tmp_path: Path, case: str, payload: bytes, expected: int
 ) -> None:
-    """One physical line, one count -- blanks, comments and unterminated endings included.
-
-    Args:
-        tmp_path: The per-test temporary directory.
-        case: The payload's name, used as the assertion's diagnostic.
-        payload: The file to measure.
-        expected: The number of physical lines ``payload`` holds.
-    """
+    """One physical line, one count -- blanks, comments and unterminated endings included."""
     tree = _tree(tmp_path, {"measured.py": payload})
     report = count_lines(tree)
     assert report.total == expected, case
@@ -341,10 +262,9 @@ def test_a_docstring_comment_and_blank_lines_all_count(tmp_path: Path) -> None:
 
 
 def test_the_count_is_taken_on_the_lf_byte_in_the_raw_bytes(tmp_path: Path) -> None:
-    """A multi-byte character neither adds nor loses a line: the LF byte decides.
-
-    The promise is byte-identity, so the assertion is made against ``bytes.count(b"\n")`` of the
-    payload itself rather than against another reading of the same decoded text.
+    """A multi-byte character neither adds nor loses a line: the LF byte decides. The promise is
+    byte-identity, so the assertion is made against ``bytes.count(b" ")`` of the payload itself
+    rather than against another reading of the same decoded text.
     """
     terminated = "café = 'naïve 日本語 😀'\n".encode("utf-8")
     unterminated = terminated.rstrip(b"\n")
@@ -362,11 +282,10 @@ def test_the_count_is_taken_on_the_lf_byte_in_the_raw_bytes(tmp_path: Path) -> N
 
 
 def test_the_exclusion_constants_name_the_untracked_directories() -> None:
-    """The metric declares the generated and metadata directories the sweep must prune.
-
-    ``build/`` and ``dist/`` hold generated copies of the package, so counting them would
-    inflate the metric after a wheel build, and ``.git/`` would make the figure depend on the
-    clone (AAP §0.5.3, §0.12).
+    """The metric declares the generated and metadata directories the sweep must prune. ``build/``
+    and ``dist/`` hold generated copies of the package, so counting them would inflate the
+    metric after a wheel build, and ``.git/`` would make the figure depend on the clone (AAP
+    §0.5.3, §0.12).
     """
     for name in _ALWAYS_PRUNED_DIRS:
         assert name in EXCLUDED_DIR_NAMES
@@ -418,12 +337,8 @@ def test_a_nested_excluded_directory_is_reported_by_its_relative_path(tmp_path: 
 
 def test_symlinks_are_not_followed_and_nothing_outside_the_root_is_visited(tmp_path: Path) -> None:
     """A link is neither followed nor counted, so no file is counted twice and no cycle is walked.
-
     A link that is unavailable on the platform leaves the same exact file list behind, so the
-    assertions hold either way and nothing is skipped.  Three links are attempted: one to a file
-    inside the tree, one to a directory inside the tree (which a followed link would visit a
-    second time under the alias) and one to a directory outside it (which a followed link would
-    count at all).
+    assertions hold either way and nothing is skipped.
     """
     outside = _tree(tmp_path, {"leak.py": b"leaked = 1\n"}, name="outside")
     tree = _tree(
@@ -538,11 +453,10 @@ def test_a_file_root_is_not_a_directory(tmp_path: Path) -> None:
 
 
 def test_the_repository_tree_is_countable() -> None:
-    """The product's own tree measures positive and includes the metric and this module.
-
-    The total itself is deliberately not asserted: it changes with every feature, and the
-    ceiling it is gated against is ``loc_limit`` in ``qrcheck.toml`` (AAP §0.6.2), not a number
-    a test may carry.  The walk is a file listing, not an import, so it costs milliseconds.
+    """The product's own tree measures positive and includes the metric and this module. The total
+    itself is deliberately not asserted: it changes with every feature, and the ceiling it is
+    gated against is ``loc_limit`` in ``qrcheck.toml`` (AAP §0.6.2), not a number a test may
+    carry.
     """
     report = count_lines(_REPOSITORY)
     paths = {entry.path for entry in report.files}
@@ -576,11 +490,10 @@ def test_the_gate_passes_under_the_limit(tmp_path: Path, invoke_cli) -> None:
 
 
 def test_the_gate_fails_at_or_above_the_limit(tmp_path: Path, invoke_cli) -> None:
-    """The boundary is "at or above", so a limit equal to the total already fails.
-
-    All three neighbouring limits are asserted, because an off-by-one in the comparison moves
-    exactly one of them: ``total + 1`` passes, ``total`` and ``total - 1`` fail, which is what
-    makes ``qrcheck loc --limit $((count - 1))`` the negative case of AAP §0.6.1 #11.
+    """The boundary is "at or above", so a limit equal to the total already fails. All three
+    neighbouring limits are asserted, because an off-by-one in the comparison moves exactly one
+    of them: ``total + 1`` passes, ``total`` and ``total - 1`` fail, which is what makes
+    ``qrcheck loc --limit $((count - 1))`` the negative case of AAP §0.6.1 #11.
     """
     tree = _tree(tmp_path, {"a.py": b"x = 1\ny = 2\n", "pkg/b.py": b"z = 3\n"})
     total = count_lines(tree).total
@@ -599,10 +512,9 @@ def test_the_gate_fails_at_or_above_the_limit(tmp_path: Path, invoke_cli) -> Non
 def test_a_configured_limit_decides_the_gate_when_no_option_is_given(
     tmp_path: Path, invoke_cli, toml_config_file
 ) -> None:
-    """Without ``--limit`` the gate reads ``loc_limit`` from the configuration file.
-
-    The generous limit comes from :data:`qrcheck.config.schema.SCHEMA` -- the ceiling is never
-    typed here -- and the tight one is derived from the measured total, so retuning the budget in
+    """Without ``--limit`` the gate reads ``loc_limit`` from the configuration file. The generous
+    limit comes from :data:`qrcheck.config.schema.SCHEMA` -- the ceiling is never typed here --
+    and the tight one is derived from the measured total, so retuning the budget in
     ``qrcheck.toml`` cannot leave a stale number behind in this test (AAP §0.6.2, §0.12).
     """
     tree = _tree(tmp_path, {"a.py": b"x = 1\ny = 2\n", "pkg/b.py": b"z = 3\n"})

@@ -1,49 +1,32 @@
 """The ``summary.json`` schema, its ordering and its exact volatile-field inventory.
 
-AAP §0.6.1 gate 6 names this module as the gate that holds ``summary.json``: the artefact a
-CI consumer, a trend line and a triage script all parse. Every document asserted here is
-written by :func:`qrcheck.report.json_report.write_summary` - or, for the canonical text form
-itself, by :func:`qrcheck.report.json_report.write_canonical_json` - from a
-:class:`~qrcheck.report.model.RunResult` built by the shared factories in
-``tests/conftest.py``. Nothing is transcribed from a run's output and nothing is re-serialised
-here: the writer is the only producer of an artefact, so a second formatter cannot drift in.
+AAP §0.6.1 gate 6 names this module as the gate that holds ``summary.json``, the artefact a CI
+consumer, a trend line and a triage script all parse. Every document asserted here is written by
+:func:`qrcheck.report.json_report.write_summary` -- or, for the canonical text form itself, by
+:func:`qrcheck.report.json_report.write_canonical_json` -- from a
+:class:`~qrcheck.report.model.RunResult` built by the shared factories, so nothing is transcribed
+from a run's output and no second formatter can drift in (AAP §0.3.4, §0.5.3, §0.5.4, §0.5.5).
 
-What is pinned, and why each part is load-bearing (AAP §0.3.4, §0.5.3, §0.5.4, §0.5.5):
+Pinned: the nine top-level keys by **set equality**, because a field this module does not know
+about is either a deliberate schema addition or an invented one; ``counts`` as four separate
+integers, because a tally that folded ``skipped`` into ``passed`` would satisfy every other
+assertion here while breaking the exit-code rule that reads only ``failed`` and ``error``; exactly
+ten per-result fields and the vocabulary inside them, with a passing case's ``reason`` ``null``;
+``results[]`` ordered by ``(check_id, case_id)`` even though the fixture run is built from a
+deliberately scrambled sequence, so ``summary.json`` and ``junit.xml`` present one order by
+construction rather than by two writers agreeing by hand; ``evidence_dir`` ``null`` for a pass and
+a relative posix path rooted at the evidence directory name for anything else, because an absolute
+path names the clone a run happened in; the canonical text form, with keys sorted at every depth,
+two-space indentation, literal UTF-8, LF line endings and exactly one trailing newline, a value
+``json`` cannot carry raising instead of being coerced; the volatile-field inventory of exactly
+``started_at``, ``finished_at`` and each ``results[].duration_ms``, read from
+:func:`tests.conftest.mask_volatile`'s behaviour rather than assumed, because a field that quietly
+became volatile would change what "deterministic" means; and ``run_id`` as a content hash whose
+derivation is stable for one input and differs when the selection, the EC level, the seed or the
+corpus changes.
 
-* **the nine top-level keys** - set equality, never containment, because a field this module
-  does not know about is either a deliberate schema addition (in which case this assertion
-  changes with it) or an invented field a machine consumer would not expect;
-* **``counts`` as four separate integers** - a tally that folded ``skipped`` into ``passed``
-  would satisfy every other assertion in this module, and the exit-code rule that reads only
-  ``failed`` and ``error`` depends on that never happening;
-* **exactly ten per-result fields** and the vocabulary inside them - a ``status`` is one of
-  the four :class:`~qrcheck.report.model.Status` members, a passing case's ``reason`` is
-  ``null``, and every other case's ``reason`` is a :class:`~qrcheck.report.model.Reason`
-  string;
-* **``results[]`` ordered by ``(check_id, case_id)``** even though the fixture run is built
-  from a deliberately scrambled sequence, so ``summary.json`` and ``junit.xml`` present one
-  order by construction rather than by two writers agreeing by hand;
-* **``evidence_dir``** - ``null`` for a pass and a relative posix path rooted at
-  :data:`~qrcheck.evidence.naming.EVIDENCE_DIR_NAME` for anything else: an absolute path
-  names the clone a run happened in and may reach no artefact (AAP §0.5.5);
-* **the canonical text form** - keys sorted at every depth, two-space indentation, UTF-8 with
-  non-ASCII characters written literally, LF line endings and exactly one trailing newline; a
-  value ``json`` cannot carry raises instead of being coerced, and a missing parent directory
-  is created;
-* **the volatile-field inventory** - exactly ``started_at``, ``finished_at`` and each
-  ``results[].duration_ms``, asserted from :func:`tests.conftest.mask_volatile`'s behaviour
-  rather than assumed, because a field that quietly became volatile, or stopped being, would
-  change what "deterministic" means: two runs masked through it are byte-equal, and a change
-  to any other field is byte-different;
-* **``run_id`` as a content hash** - the runner's derivation is stable for one input and
-  differs when the selection, the EC level, the seed or the corpus changes, and the result
-  model refuses an empty, UUID-shaped or timestamp-shaped identity, because a clock reading or
-  a UUID would make two identical runs differ.
-
-Every artefact is written under the per-test report root (the ``report_dir`` fixture, itself
-under ``tmp_path``), never the repository's ``reports/``. Nothing here reads a clock, the
-network, the environment or a directory this module did not create; nothing is skipped,
-marked, retried or relaxed; and every collection is iterated in a stored or sorted order.
+Every artefact is written under the per-test report root, never the repository's ``reports/``;
+nothing here reads a clock, the network, the environment or a directory this module did not create.
 """
 
 import dataclasses
@@ -154,20 +137,11 @@ def _mixed_results(
     *,
     durations: tuple[float, ...] = _BASE_DURATIONS,
 ) -> dict[str, CaseResult]:
-    """Return the fixture run's five case results, keyed by role.
-
-    The five reach every :class:`~qrcheck.report.model.Status` member - two passes, one
-    failure, one skip and one error - so a document that confused two tallies cannot match the
-    expected counts, each per-status rule has a case to hold, and every non-passing result
-    carries the relative evidence directory the model requires of it.
-
-    Args:
-        make_case_result: The shared ``CaseResult`` factory from ``tests/conftest.py``.
-        durations: One duration per role, in the role order this mapping declares, so a second
-            run can differ from the first in that volatile field and in nothing else.
-
-    Returns:
-        The five results keyed by role, in role declaration order.
+    """Return the fixture run's five case results, keyed by role. The five reach every
+    :class:`~qrcheck.report.model.Status` member - two passes, one failure, one skip and one
+    error - so a document that confused two tallies cannot match the expected counts, each
+    per-status rule has a case to hold, and every non-passing result carries the relative
+    evidence directory the model requires of it.
     """
     roundtrip_pass, second_pass, roundtrip_fail, symbol_skip, cleanup_error = durations
     fail_check, fail_case = "RT-ROUNDTRIP", "corpus:url-003"
@@ -238,22 +212,11 @@ def _build_run(
     durations: tuple[float, ...] = _BASE_DURATIONS,
     **overrides: Any,
 ) -> RunResult:
-    """Return the fixture run, with its cases handed over in a scrambled order.
-
-    ``RunResult`` sorts its results by ``(check_id, case_id)`` and derives ``counts`` from them,
-    so the run is always self-consistent; ``overrides`` reaches the remaining run-level fields
-    (``adapter``, ``ec_level``, ``seed``, ``loc_count``, ``run_id``) through the shared factory.
-
-    Args:
-        make_case_result: The shared ``CaseResult`` factory.
-        make_run_result: The shared ``RunResult`` factory.
-        started_at: The run's start timestamp.
-        finished_at: The run's finish timestamp.
-        durations: One duration per case, in :func:`_mixed_results` role order.
-        **overrides: Any other ``RunResult`` field the factory accepts.
-
-    Returns:
-        The constructed run.
+    """Return the fixture run, with its cases handed over in a scrambled order. ``RunResult``
+    sorts its results by ``(check_id, case_id)`` and derives ``counts`` from them, so the run
+    is always self-consistent; ``overrides`` reaches the remaining run-level fields
+    (``adapter``, ``ec_level``, ``seed``, ``loc_count``, ``run_id``) through the shared
+    factory.
     """
     cases = _mixed_results(make_case_result, durations=durations)
     return make_run_result(
@@ -270,20 +233,9 @@ def _rebuild(
     base: RunResult,
     **overrides: Any,
 ) -> RunResult:
-    """Return the fixture run with ``overrides`` applied and ``base``'s identity held fixed.
-
-    The factory derives ``run_id`` from the values it is given, so a change of ``adapter``,
-    ``ec_level``, ``seed`` or ``loc_count`` would move the identity with it. Holding it at the
-    base value is what makes the byte difference attributable to the field under test.
-
-    Args:
-        make_case_result: The shared ``CaseResult`` factory.
-        make_run_result: The shared ``RunResult`` factory.
-        base: The run every comparison is made against.
-        **overrides: The run-level fields to change.
-
-    Returns:
-        The altered run.
+    """Return the fixture run with ``overrides`` applied and ``base``'s identity held fixed. The
+    factory derives ``run_id`` from the values it is given, so a change of ``adapter``,
+    ``ec_level``, ``seed`` or ``loc_count`` would move the identity with it.
     """
     return _build_run(
         make_case_result, make_run_result, run_id=base.run_id, **overrides
@@ -297,20 +249,9 @@ def _run_with_changed_result(
     role: str,
     **changes: Any,
 ) -> RunResult:
-    """Return the fixture run with exactly one case's field(s) altered.
-
-    The run's identity is held at the unchanged run's value, so the difference is the case field
-    named in ``changes`` rather than a re-derived identity. A status change also moves
-    ``counts``, which the model derives from the statuses and which must never be anything else.
-
-    Args:
-        make_case_result: The shared ``CaseResult`` factory.
-        make_run_result: The shared ``RunResult`` factory.
-        role: The :func:`_mixed_results` role whose result is altered.
-        **changes: The ``CaseResult`` fields to change on that result.
-
-    Returns:
-        The altered run.
+    """Return the fixture run with exactly one case's field(s) altered. The run's identity is held
+    at the unchanged run's value, so the difference is the case field named in ``changes``
+    rather than a re-derived identity.
     """
     unchanged = _build_run(make_case_result, make_run_result)
     cases = _mixed_results(make_case_result)
@@ -409,11 +350,10 @@ def _write_and_load(path: Path, run: RunResult) -> dict[str, Any]:
 
 
 def _masked_text(path: Path, mask_volatile: _MaskVolatile) -> str:
-    """Return ``path``'s payload as canonical text with its volatile fields masked.
-
-    Masking is applied to the *parsed* payload through the shared helper rather than to the file
-    bytes, because the helper is the product's one definition of which fields are volatile: a
-    textual substitution here would be a second, silently diverging inventory.
+    """Return ``path``'s payload as canonical text with its volatile fields masked. Masking is
+    applied to the *parsed* payload through the shared helper rather than to the file bytes,
+    because the helper is the product's one definition of which fields are volatile: a textual
+    substitution here would be a second, silently diverging inventory.
     """
     payload = json.loads(path.read_text(encoding="utf-8"))
     assert isinstance(payload, dict)
@@ -422,7 +362,6 @@ def _masked_text(path: Path, mask_volatile: _MaskVolatile) -> str:
 
 def _assert_every_object_has_sorted_keys(path: Path) -> None:
     """Fail if any JSON object in ``path`` holds its keys in a non-sorted order.
-
     ``object_pairs_hook`` sees each object's pairs in document order, so this reaches every
     depth - the run, ``counts``, each result, and each result's ``request``/``decoded``/
     ``expected`` mappings - which a top-level comparison cannot.
@@ -440,9 +379,8 @@ def _assert_every_object_has_sorted_keys(path: Path) -> None:
 
 
 def _indents_of(text: str, fragment: str) -> frozenset[int]:
-    """Return the leading-space counts of every line whose content starts with ``fragment``.
-
-    A fragment that appears at one depth only pins that depth; one that appears at two, such as
+    """Return the leading-space counts of every line whose content starts with ``fragment``. A
+    fragment that appears at one depth only pins that depth; one that appears at two, such as
     the run's ``seed`` and each result's, pins the nesting itself - which is how a two-space
     indentation is asserted rather than a layout copied out of one run's output.
     """
@@ -458,10 +396,9 @@ def _differing_keys(before: Mapping[str, Any], after: Mapping[str, Any]) -> froz
 
 
 def _scalars_of(payload: Mapping[str, Any]) -> dict[str, Any]:
-    """Return a summary payload's top-level fields other than ``results``.
-
-    The results are compared element by element instead, so that a per-result difference is
-    reported against the field it belongs to rather than as one opaque ``results`` mismatch.
+    """Return a summary payload's top-level fields other than ``results``. The results are
+    compared element by element instead, so that a per-result difference is reported against
+    the field it belongs to rather than as one opaque ``results`` mismatch.
     """
     return {key: value for key, value in payload.items() if key != "results"}
 
@@ -742,11 +679,8 @@ def test_the_run_identifier_is_a_content_hash_stable_in_its_inputs(
     corpus_subset: tuple[Any, ...],
 ) -> None:
     """The runner's derivation repeats for one input and differs for every changed input.
-
-    ``corpus_subset`` supplies ``qrcheck.corpus.builder.CorpusRecord`` instances from the shared
-    fixture, which is why this module imports no corpus module of its own. The identifier the
-    full workload produces is exercised by ``tests/integration/test_end_to_end.py``; what is
-    pinned here is the derivation's contract.
+    ``corpus_subset`` supplies ``qrcheck.corpus.builder.CorpusRecord`` instances from the
+    shared fixture, which is why this module imports no corpus module of its own.
     """
     base = _build_run(make_case_result, make_run_result)
     checks = ("RT-ROUNDTRIP", "SY-MASK")
@@ -785,11 +719,10 @@ def test_the_result_model_refuses_a_run_id_that_is_not_a_content_hash(
     make_case_result: Callable[..., CaseResult],
     make_run_result: Callable[..., RunResult],
 ) -> None:
-    """An empty, UUID-shaped or timestamp-shaped identity is refused by the model.
-
-    A clock reading or a UUID would make two identical runs differ, which is exactly the defect
-    the determinism section exists to prevent, so the rejection belongs to this contract even
-    though the runner is what supplies the value.
+    """An empty, UUID-shaped or timestamp-shaped identity is refused by the model. A clock reading
+    or a UUID would make two identical runs differ, which is exactly the defect the determinism
+    section exists to prevent, so the rejection belongs to this contract even though the runner
+    is what supplies the value.
     """
     cases = tuple(_mixed_results(make_case_result).values())
     with pytest.raises(ValueError, match="run_id"):

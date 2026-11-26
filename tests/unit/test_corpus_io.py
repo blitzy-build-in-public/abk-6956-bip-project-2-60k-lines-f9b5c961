@@ -1,37 +1,26 @@
 """Contract test: the corpus's record schema, canonical wire form, inventory and predicates.
 
-``corpus/default.jsonl`` is a committed repository file and the fixed input every
-corpus-driven check case is built from, so three separate promises rest on it, and this
-module is the test for each of them (AAP §0.8.2, §0.5.3, §0.5.4, §0.4.2):
+``corpus/default.jsonl`` is a committed repository file and the fixed input every corpus-driven
+check case is built from, so three promises rest on it (AAP §0.8.2, §0.5.3, §0.4.2). The wire form
+is canonical -- one JSON object per line, keys sorted at every depth, ``ensure_ascii=False`` so
+the ``emoji``, ``rtl`` and ``utf8-multibyte`` payloads stay literal UTF-8 instead of ``\\uXXXX``
+escapes, LF line endings and exactly one trailing newline -- which is what makes a regenerated
+corpus byte-comparable with the committed one in ``tests/integration/test_corpus_determinism.py``.
+The inventory is the plan's: ``builder.CLASS_COUNTS`` against the AAP §0.8.2 table, the 240-record
+total and the 40-record boundary subset success criterion 2 runs at EC L, Q and H through ``--class
+'boundary-*'``. And the discriminating predicates hold: the ``truncated_payload`` and
+``wrong_ec_level`` injections are observable only through a payload longer than the 64-byte
+truncation window and a boundary payload whose minimal version differs between EC L and M, so
+without those witnesses the injections would be silently inert while every count assertion still
+passed.
 
-* **The wire form is canonical.** One JSON object per line, keys sorted at every depth,
-  ``ensure_ascii=False`` so the ``emoji``, ``rtl`` and ``utf8-multibyte`` payloads stay
-  literal UTF-8 instead of ``\\uXXXX`` escapes, LF line endings, exactly one trailing
-  newline and no other trailing whitespace. That is what makes a regenerated corpus
-  byte-comparable with the committed one, which is ``tests/integration/
-  test_corpus_determinism.py``'s assertion -- this module pins the form it compares.
-* **The inventory is the plan's.** ``builder.CLASS_COUNTS`` is asserted against the AAP
-  §0.8.2 table, written out once at the top of this module with its citation, together with
-  the 240-record total and the 40-record boundary subset that success criterion 2 runs at EC
-  L, Q and H through ``--class 'boundary-*'``.
-* **The discriminating predicates hold.** The defective target's ``truncated_payload`` and
-  ``wrong_ec_level`` injections are observable only through records that make them so: a
-  payload longer than the 64-byte truncation window whose cut keeps its Version at the level
-  in use, and a boundary payload whose minimal version differs between EC L and EC M.
-  Without those witnesses the injections are silently inert while every count assertion
-  still passes, which is the failure mode this module exists to prevent.
-
-Two properties are asserted that no single-record check would catch. ``build_corpus`` is
-run twice with the same seed and the results compared, because a builder that iterated a
-``set`` or seeded from ``hash()`` would produce a different corpus on a different machine
-while satisfying every count, id and schema assertion here. And the filter is asked for a
-class name in the wrong case and for a glob that matches nothing, because "no records
-selected" is the runner's exit-2 condition and this layer must report the fact rather than
-raise it.
-
-Nothing here reads a product threshold, opens a socket, spawns a process or reads the clock:
-``qrcheck/corpus/*`` is pure data plus pure functions, so the whole module runs in
-milliseconds and its only fixture-level I/O is one corpus file under ``tmp_path``.
+Two properties no single-record assertion would catch are asserted as well: ``build_corpus`` runs
+twice with one seed and the results compare equal, because a builder that iterated a ``set`` or
+seeded from ``hash()`` would differ across machines while satisfying every count and schema
+assertion here; and the filter is asked for a class name in the wrong case and for a glob that
+matches nothing, because "no records selected" is the runner's exit-2 condition and this layer must
+report the fact rather than raise it. Nothing here reads a product threshold, opens a socket,
+spawns a process or reads the clock.
 """
 
 from __future__ import annotations
@@ -148,7 +137,6 @@ BASE64_CLASSES: Final[tuple[str, ...]] = ("nul-byte", "random-bytes")
 @pytest.fixture(scope="module")
 def records() -> list[CorpusRecord]:
     """Return the corpus the builder produces from :data:`TEST_SEED`, once for the module.
-
     Module-scoped because ``build_corpus`` walks 240 payload generators and every test below
     reads the same records; a per-test build would repeat that work dozens of times without
     asserting anything extra.
@@ -158,10 +146,9 @@ def records() -> list[CorpusRecord]:
 
 @pytest.fixture(scope="module")
 def corpus_path(records: list[CorpusRecord], tmp_path_factory: pytest.TempPathFactory) -> Path:
-    """Write ``records`` through :func:`~qrcheck.corpus.io.write_corpus` and return the path.
-
-    The canonical writer is the only formatter this module uses, so the malformed-input cases
-    are built by editing these exact lines rather than by rendering records a second way.
+    """Write ``records`` through :func:`~qrcheck.corpus.io.write_corpus` and return the path. The
+    canonical writer is the only formatter this module uses, so the malformed-input cases are
+    built by editing these exact lines rather than by rendering records a second way.
     """
     path = tmp_path_factory.mktemp("corpus") / "corpus.jsonl"
     write_corpus(records, path)
@@ -215,12 +202,11 @@ def test_every_line_is_canonical_sorted_key_json(
 def test_non_ascii_payloads_are_written_as_literal_utf8(
     records: list[CorpusRecord], corpus_path: Path
 ) -> None:
-    """``ensure_ascii=False`` is proven on a payload that would otherwise be escaped.
-
-    Asserting "no ``\\u`` appears in the file" would also hold for an empty file, so the
-    assertion is made twice over a witness the ``emoji``, ``rtl`` and ``utf8-multibyte``
-    classes guarantee: the escaping of its payload differs from the payload itself, and the
-    payload's UTF-8 bytes are present in the file verbatim.
+    """``ensure_ascii=False`` is proven on a payload that would otherwise be escaped. Asserting
+    "no ``\\u`` appears in the file" would also hold for an empty file, so the assertion is
+    made twice over a witness the ``emoji``, ``rtl`` and ``utf8-multibyte`` classes guarantee:
+    the escaping of its payload differs from the payload itself, and the payload's UTF-8 bytes
+    are present in the file verbatim.
     """
     witnesses = [
         record
@@ -278,11 +264,7 @@ def test_the_built_corpus_holds_the_inventory(records: list[CorpusRecord]) -> No
 def test_the_inventory_does_not_depend_on_the_seed(
     records: list[CorpusRecord], built_corpus: tuple[CorpusRecord, ...]
 ) -> None:
-    """The configured default seed builds the same ids, classes and counts as this module's.
-
-    ``built_corpus`` is the suite's session fixture over the configured seed; comparing the
-    two proves the inventory is a property of the plan rather than of one seed's payloads.
-    """
+    """The configured default seed builds the same ids, classes and counts as this module's."""
     assert [record.id for record in built_corpus] == [record.id for record in records]
     assert Counter(record.class_name for record in built_corpus) == builder.CLASS_COUNTS
 
@@ -290,10 +272,9 @@ def test_the_inventory_does_not_depend_on_the_seed(
 def test_the_committed_corpus_carries_the_same_inventory(
     committed_corpus: tuple[CorpusRecord, ...]
 ) -> None:
-    """A read-only count check on ``corpus/default.jsonl`` itself.
-
-    Regeneration against the committed file is ``tests/integration/test_corpus_determinism.py``'s
-    assertion; this module only confirms the committed file holds the inventory the plan fixes.
+    """A read-only count check on ``corpus/default.jsonl`` itself. Regeneration against the
+    committed file is ``tests/integration/test_corpus_determinism.py``'s assertion; this module
+    only confirms the committed file holds the inventory the plan fixes.
     """
     assert len(committed_corpus) == PLAN_TOTAL_RECORDS
     assert Counter(record.class_name for record in committed_corpus) == builder.CLASS_COUNTS
@@ -340,9 +321,8 @@ def test_expected_mode_is_in_the_mode_domain_and_derived_from_the_bytes(
     records: list[CorpusRecord]
 ) -> None:
     """``expected_mode`` is one of the three modes and agrees with the payload's own bytes.
-
-    ``MD-MODE-OPTIMAL`` asserts a target against this field, so a record whose claim
-    disagreed with its payload would make that check assert the wrong thing.
+    ``MD-MODE-OPTIMAL`` asserts a target against this field, so a record whose claim disagreed
+    with its payload would make that check assert the wrong thing.
     """
     for record in records:
         assert record.expected_mode in capacity.MODES, (
@@ -376,11 +356,8 @@ def test_boundary_notes_recompute_through_the_capacity_tables(
     records: list[CorpusRecord]
 ) -> None:
     """Each boundary record's stated arithmetic reproduces through ``qrcheck.corpus.capacity``.
-
     The notes are not prose to be read: they are the length, version and level claims the
-    boundary subset exists for, so every number in them is recomputed here. Boundary payloads
-    are ASCII by construction -- numeric and alphanumeric draw from the ASCII charsets and the
-    byte class draws lowercase letters -- so a character count is also the byte count.
+    boundary subset exists for, so every number in them is recomputed here.
     """
     boundary = [
         record for record in records if record.class_name in builder.BOUNDARY_CLASSES
@@ -412,9 +389,7 @@ def test_boundary_notes_recompute_through_the_capacity_tables(
 def test_building_twice_with_one_seed_returns_equal_records(
     records: list[CorpusRecord]
 ) -> None:
-    """Two builds from the same seed agree record for record, including the payload bytes.
-
-    ``records`` was built by the module fixture, so this compares two independent builds. A
+    """Two builds from the same seed agree record for record, including the payload bytes. A
     builder that iterated a set or drew from ``hash()`` would differ here and nowhere else.
     """
     first = build_corpus(TEST_SEED)
@@ -447,10 +422,9 @@ def test_a_different_seed_selects_different_payloads(records: list[CorpusRecord]
 
 
 def test_filter_selects_the_boundary_subset(records: list[CorpusRecord]) -> None:
-    """``boundary-*`` selects exactly the 40 boundary records, in ``id`` order.
-
-    The same view success criterion 2 runs at EC L, Q and H, so the glob and the count are
-    asserted together: the count alone would not show which classes the glob reaches.
+    """``boundary-*`` selects exactly the 40 boundary records, in ``id`` order. The same view
+    success criterion 2 runs at EC L, Q and H, so the glob and the count are asserted together:
+    the count alone would not show which classes the glob reaches.
     """
     selected = filter_by_class(records, ("boundary-*",))
     assert isinstance(selected, tuple)
@@ -482,10 +456,9 @@ def test_filter_globs_are_or_combined(records: list[CorpusRecord]) -> None:
 
 
 def test_filter_with_no_globs_keeps_every_record(records: list[CorpusRecord]) -> None:
-    """No filter, an empty sequence and a bare string behave as documented.
-
-    A bare string is one pattern rather than one pattern per character, which is why it must
-    agree with the one-element tuple.
+    """No filter, an empty sequence and a bare string behave as documented. A bare string is one
+    pattern rather than one pattern per character, which is why it must agree with the
+    one-element tuple.
     """
     assert filter_by_class(records) == tuple(records)
     assert filter_by_class(records, ()) == tuple(records)
@@ -527,10 +500,9 @@ FOUR_BYTE_FIRST: Final[int] = 0x10000
 
 
 def _code_points(payload: bytes) -> list[int]:
-    """Return the Unicode code points ``payload`` holds, decoded as strict UTF-8.
-
-    Called only on records of the text classes, whose payloads are valid UTF-8 by
-    construction, so a decode error here is a corpus defect rather than a case to tolerate.
+    """Return the Unicode code points ``payload`` holds, decoded as strict UTF-8. Called only on
+    records of the text classes, whose payloads are valid UTF-8 by construction, so a decode
+    error here is a corpus defect rather than a case to tolerate.
     """
     return [ord(character) for character in payload.decode("utf-8")]
 
@@ -617,13 +589,7 @@ def test_each_charset_coverage_resolves_to_a_record(
 
 
 def _truncation_witnesses(records: list[CorpusRecord], ec: str) -> list[str]:
-    """Return the ids of records whose cut to the window keeps their Version at ``ec``.
-
-    The same arithmetic the ``truncated_payload`` injection evaluates, recomputed through
-    :func:`qrcheck.corpus.capacity.minimal_version`: a payload longer than the window that
-    still selects the window's Version at ``ec`` is observable as a payload change without a
-    version change, which is what keeps ``SY-VERSION-MIN``'s single cause intact.
-    """
+    """Return the ids of records whose cut to the window keeps their Version at ``ec``."""
     window_version = capacity.minimal_version(TRUNCATION_BYTES, ec, "byte")
     return [
         record.id
@@ -637,13 +603,10 @@ def _truncation_witnesses(records: list[CorpusRecord], ec: str) -> list[str]:
 def test_the_truncation_witness_exists_at_every_possible_level(
     records: list[CorpusRecord]
 ) -> None:
-    """A cut to 64 bytes is observable at every level where the arithmetic allows it.
-
-    A level is impossible when the window is itself the byte capacity of a Version there --
-    at EC H the 64-byte window fills Version 7, so the next byte already needs Version 8 and
-    no payload longer than the window can keep its version. Those levels are derived from the
-    predicate rather than listed, so the clause cannot excuse a level that could have been
-    witnessed.
+    """A cut to 64 bytes is observable at every level where the arithmetic allows it. A level is
+    impossible when the window is itself the byte capacity of a Version there -- at EC H the
+    64-byte window fills Version 7, so the next byte already needs Version 8 and no payload
+    longer than the window can keep its version.
     """
     possible = [
         ec
@@ -682,13 +645,9 @@ def test_the_truncation_witnesses_are_longer_than_the_window(
 def test_the_truncation_predicate_is_defined_for_every_long_record(
     records: list[CorpusRecord]
 ) -> None:
-    """Every payload over the window fits a Version at EC M, so the predicate is total.
-
-    A record too large for Version 40 would make ``minimal_version`` answer ``None``, and two
-    overflows are never a version match. The eight synthetic ``SY-MATRIX-EQUIV`` payloads are
-    built by ``qrcheck/checks/symbol.py`` and are 64 bytes or shorter by construction, so
-    they belong to no record here and the injection can never reach them; they are asserted
-    in that module's own case set.
+    """Every payload over the window fits a Version at EC M, so the predicate is total. A record
+    too large for Version 40 would make ``minimal_version`` answer ``None``, and two overflows
+    are never a version match.
     """
     longer = [record for record in records if len(record.payload_bytes) > TRUNCATION_BYTES]
     assert longer, f"no corpus record is longer than the {TRUNCATION_BYTES}-byte window"
@@ -699,12 +658,11 @@ def test_the_truncation_predicate_is_defined_for_every_long_record(
 def test_each_boundary_class_separates_ec_l_from_ec_m_by_version(
     records: list[CorpusRecord]
 ) -> None:
-    """A boundary payload needs a different minimal version at EC L and at EC M.
-
-    That one-step difference is what makes the ``wrong_ec_level`` defect fail
-    ``SY-VERSION-MIN`` as well as ``SY-EC-MATCH``, so the witness is asserted per boundary
-    class: a class whose payloads stopped being boundary-length would leave that half of the
-    expected failure set unproducible.
+    """A boundary payload needs a different minimal version at EC L and at EC M. That one-step
+    difference is what makes the ``wrong_ec_level`` defect fail ``SY-VERSION-MIN`` as well as
+    ``SY-EC-MATCH``, so the witness is asserted per boundary class: a class whose payloads
+    stopped being boundary-length would leave that half of the expected failure set
+    unproducible.
     """
     by_id = {record.id: record for record in records}
     for class_name in builder.BOUNDARY_CLASSES:
@@ -741,10 +699,9 @@ def _versions_differ(record: CorpusRecord) -> bool:
 
 
 def _canonical_lines(corpus_path: Path) -> list[str]:
-    """Return the written corpus's lines without their terminators.
-
-    The malformed files below are edits of these exact lines, so no second renderer enters
-    the module: the only writer under test is ``qrcheck.corpus.io.write_corpus``.
+    """Return the written corpus's lines without their terminators. The malformed files below are
+    edits of these exact lines, so no second renderer enters the module: the only writer under
+    test is ``qrcheck.corpus.io.write_corpus``.
     """
     return corpus_path.read_text(encoding="utf-8").split("\n")[:-1]
 

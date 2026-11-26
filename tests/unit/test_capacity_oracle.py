@@ -1,29 +1,23 @@
 """Contract test: the corpus capacity tables are provably segno's own tables.
 
 ``qrcheck/corpus/capacity.py`` derives every boundary payload length in the corpus, so one
-transcription slip there would silently mis-size every boundary record and every capacity
-assertion built on those records (implicit requirement IM-6). This module is the independent
-check on that module: it compares the embedded tables with ``segno.consts`` row for row, and
-it ties the arithmetic to segno's real acceptance boundary by encoding the largest legal
-payload of each mode at sampled versions, asserting segno accepts it and rejects one
-character more.
+transcription slip there would silently mis-size every boundary record and every capacity assertion
+built on it (IM-6). This module compares the embedded tables with ``segno.consts`` row for row and
+ties the arithmetic to segno's real acceptance boundary by encoding the largest legal payload of
+each mode at sampled versions, asserting segno accepts it and rejects one character more.
 
-Two segno defaults would make the comparison meaningless; :func:`_encode` is the single call
-site that neutralises both.
+:func:`_encode` is the single call site that neutralises the two segno defaults which would make
+the comparison meaningless: ``boost_error=False``, because the default spends spare capacity on a
+higher error level without changing the version, so an oracle built with it reports a different
+level than the one requested and every boundary comparison is wrong; and ``segno.make_qr`` rather
+than bare ``segno.make``, because a short payload becomes a **Micro QR** symbol with no ``4V+17``
+module count and a different format-information layout -- ``make_qr`` is Model 2 by construction
+and takes no ``micro`` argument at all, which ``test_the_model2_entry_point_avoids_micro_symbols``
+asserts instead of trusting.
 
-* ``boost_error`` defaults to ``True`` and spends spare capacity on a higher error level
-  without changing the version, so an oracle built with the default reports a different
-  error level than the one requested and every boundary comparison is wrong.
-* a short payload handed to bare ``segno.make`` becomes a **Micro QR** symbol, which has no
-  ``4V+17`` module count, no Version 1-40 number and a different format-information layout.
-  ``segno.make_qr`` is Model 2 by construction — it takes no ``micro`` argument at all — so
-  Model 2 is structural here rather than a flag, and
-  ``test_the_model2_entry_point_avoids_micro_symbols`` asserts that difference instead of
-  trusting it.
-
-Every asserted expectation is read from ``segno.consts`` at test time; the only literals are
-ISO/IEC 18004 facts, named once below with the clause they come from. Nothing here reads a
-product threshold, and no case is skipped, marked or retried.
+Every expectation is read from ``segno.consts`` at test time; the only literals are ISO/IEC 18004
+facts, named once below with the clause they come from. Nothing here reads a product threshold, and
+no case is skipped, marked or retried.
 """
 
 from __future__ import annotations
@@ -125,13 +119,11 @@ def _encode(
     error: str | None = None,
     version: int | None = None,
 ) -> segno.QRCode:
-    """Encode `content` with segno as a Model 2 symbol, never boosting the error level.
-
-    The only segno call site in this module, so ``boost_error=False`` cannot be forgotten,
-    and Model 2 is guaranteed structurally: ``segno.make_qr`` takes no ``micro`` argument,
-    which is exactly what makes it the Model 2 entry point, while bare ``segno.make`` would
-    return a Micro symbol for a short payload. The Micro-versus-Model-2 difference is
-    asserted by ``test_the_model2_entry_point_avoids_micro_symbols`` rather than assumed.
+    """Encode `content` with segno as a Model 2 symbol, never boosting the error level. The only
+    segno call site in this module, so ``boost_error=False`` cannot be forgotten, and Model 2
+    is guaranteed structurally: ``segno.make_qr`` takes no ``micro`` argument, which is exactly
+    what makes it the Model 2 entry point, while bare ``segno.make`` would return a Micro
+    symbol for a short payload.
     """
     return segno.make_qr(content, error=error, version=version, boost_error=False)
 
@@ -228,12 +220,11 @@ def test_no_capacity_answer_ever_names_a_micro_version(ec: str, mode: str) -> No
 def test_max_payload_bytes_matches_segno_acceptance(
     version: int, ec: str, mode: str
 ) -> None:
-    """segno accepts exactly `max_payload_bytes` characters in `mode` and rejects one more.
-
-    This is the assertion that ties the arithmetic to the real encoder rather than to a
-    second transcription: the payload is built from the mode's own charset, and segno is
-    asked to encode it at a pinned version, so a length that is one character too long is
-    precisely a `DataOverflowError`.
+    """segno accepts exactly `max_payload_bytes` characters in `mode` and rejects one more. This
+    is the assertion that ties the arithmetic to the real encoder rather than to a second
+    transcription: the payload is built from the mode's own charset, and segno is asked to
+    encode it at a pinned version, so a length that is one character too long is precisely a
+    `DataOverflowError`.
     """
     length = capacity.max_payload_bytes(version, ec, mode)
     symbol = _encode(_payload(mode, length), error=ec, version=version)
@@ -280,12 +271,11 @@ def test_the_model2_entry_point_avoids_micro_symbols() -> None:
 
 
 def test_boundary_corpus_payloads_sit_on_capacity_boundaries() -> None:
-    """Every boundary record's length is a table capacity, and its note recomputes.
-
-    The corpus builder must derive boundary lengths from these tables rather than transcribe
-    them, and each boundary payload must be exactly the EC-L capacity of its version so the
-    same payload needs the next version at EC M — the one-step difference the wrong-EC-level
-    defect is observed through.
+    """Every boundary record's length is a table capacity, and its note recomputes. The corpus
+    builder must derive boundary lengths from these tables rather than transcribe them, and
+    each boundary payload must be exactly the EC-L capacity of its version so the same payload
+    needs the next version at EC M — the one-step difference the wrong-EC-level defect is
+    observed through.
     """
     records = [
         record

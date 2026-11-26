@@ -1,34 +1,24 @@
 """Contract test: the adapter factory covers every target type the configuration declares.
 
 ``qrcheck/targets/__init__.py`` is the product's single extension point (AAP §0.3.4, "Extension
-boundary"). A fourth target kind is one module implementing the port, one entry in
-``ADAPTER_TYPES``, one value in ``qrcheck.config.models.AdapterType`` and the kind's per-type
-keys in the configuration schema — and **no edit to any consumer**, because every check, the
-runner and the registry resolve a target through this one table. This module is the mechanical
-proof of that promise, and it holds six things:
+boundary"), so this module is the mechanical proof that the table's keys are exactly
+``models.ADAPTER_TYPE_NAMES``; that each entry is the class the extension model names, compared by
+**identity** rather than by name string; that every entry given a record of its own dataclass type
+returns an object satisfying the :class:`~qrcheck.targets.base.Adapter` protocol -- ``isinstance``
+and never ``issubclass``, because the protocol has non-method members (``name``, ``capabilities``)
+and CPython 3.11 refuses ``issubclass`` for those; that an undeclared type raises ``KeyError``
+rather than resolving to ``None`` and the table cannot be mutated into redirecting a run; and that
+the capability vocabulary is the same on both sides of the configuration seam.
 
-1. the table's keys are exactly ``models.ADAPTER_TYPE_NAMES``, so a kind added to one side only
-   fails here instead of at run time;
-2. each entry is the class the extension model names, compared by **identity** rather than by
-   name string, so a factory that returned a different class is caught;
-3. every entry, given a record of its own dataclass type, returns an object satisfying the
-   :class:`~qrcheck.targets.base.Adapter` protocol — ``isinstance`` and never ``issubclass``,
-   because the protocol has non-method members (``name`` and ``capabilities``) and CPython 3.11
-   refuses ``issubclass`` for such a protocol;
-4. the three configurable adapters declare exactly the capabilities their resolved record
-   carries, and the two built-in self-check targets declare all thirteen themselves. That second
-   half is load-bearing beyond this module: it is what lets the clean-run gate demand zero skips
-   (AAP §0.4.1) and what stops an expected failure of the ``defective`` target from being turned
-   into a skip (AAP §0.4.2);
-5. an undeclared type raises ``KeyError`` rather than resolving to ``None``, and the table cannot
-   be mutated into redirecting a run;
-6. the capability vocabulary is the same on both sides of the configuration seam, so the schema
-   cannot accept a capability name the adapter layer cannot express.
+The capability half is load-bearing beyond this module: the three configurable adapters declare
+exactly the capabilities their resolved record carries and the two built-in self-check targets
+declare all thirteen themselves, which is what lets the clean-run gate demand zero skips (AAP
+§0.4.1) and stops an expected failure of the ``defective`` target from being turned into a skip
+(AAP §0.4.2).
 
-Construction only. Nothing here calls ``generate``, spawns a subprocess, opens a socket, encodes
-a symbol or writes a file: the subject is the factory and the port, and the two built-in targets
-are segno-backed, so they are built and never driven. No case is skipped, marked, xfailed or
-retried, and every assertion message names the type it failed on.
+Construction only: nothing here calls ``generate``, spawns a subprocess, opens a socket, encodes a
+symbol or writes a file, because the subject is the factory and the port; no case is skipped,
+marked, xfailed or retried.
 """
 
 from __future__ import annotations
@@ -83,29 +73,12 @@ _LOOPBACK_URL: Final[str] = "http://127.0.0.1:18100/generate"
 
 
 def _record(kind: str) -> models.TargetConfig:
-    """Return a minimal valid resolved record for `kind`, building nothing runnable.
-
-    Every value is one the adapter's own constructor validates, and none is a value the adapter
-    resolves, dials or spawns: the ``library`` callable's import path is deliberately never
-    imported here (``LibraryAdapter`` resolves it on the first ``generate``), the ``cli`` command
-    is never spawned, the ``http`` URL is never dialled, and the two built-in records carry no
-    metadata beyond their name and type.
-
-    The two built-in records leave ``capabilities`` at its declared default of an empty
-    ``frozenset``, because ``ReferenceAdapter`` and ``DefectiveAdapter`` ignore the configured set
-    and declare all thirteen members themselves. Saying so here is what makes
-    :func:`test_the_built_in_targets_declare_every_capability` a test of the adapters rather than
-    of the record.
-
-    Args:
-        kind: A value of ``models.ADAPTER_TYPE_NAMES``.
-
-    Returns:
-        A record of the dataclass the table's entry for `kind` is typed against.
-
-    Raises:
-        AssertionError: `kind` is a declared type this module carries no record for, which is what
-            a sixth adapter kind looks like until its record and its assertions are added here.
+    """Return a minimal valid resolved record for `kind`, building nothing runnable. Every value
+    is one the adapter's own constructor validates, and none is a value the adapter resolves,
+    dials or spawns: the ``library`` callable's import path is deliberately never imported here
+    (``LibraryAdapter`` resolves it on the first ``generate``), the ``cli`` command is never
+    spawned, the ``http`` URL is never dialled, and the two built-in records carry no metadata
+    beyond their name and type.
     """
     if kind == "library":
         return models.LibraryTarget(
@@ -148,18 +121,8 @@ def _record(kind: str) -> models.TargetConfig:
 
 
 def _adapter(kind: str, record: models.TargetConfig) -> Adapter:
-    """Build the adapter `kind` resolves to, exactly as a run builds one.
-
-    The single construction convention of this module, and the convention the production call
-    sites use: ``ADAPTER_TYPES[target.type](target, name=target_name)``. It performs no I/O, so
+    """Build the adapter `kind` resolves to, exactly as a run builds one. It performs no I/O, so
     the caller owns the lifetime and closes what it builds.
-
-    Args:
-        kind: The ``type`` value whose entry builds the adapter.
-        record: The resolved ``[targets.<name>]`` record for that kind.
-
-    Returns:
-        The adapter the factory entry returned, ready to be closed.
     """
     return ADAPTER_TYPES[kind](record, name=record.name)
 
@@ -168,19 +131,9 @@ def _adapter(kind: str, record: models.TargetConfig) -> Adapter:
 def target_records(
     config_factory: Callable[..., models.Config],
 ) -> Mapping[str, models.TargetConfig]:
-    """Return one minimal valid target record per declared type, read back from a ``Config``.
-
-    The records are assembled into a :class:`~qrcheck.config.models.Config` through the shared
-    ``config_factory`` fixture and then read back out of it, so what the factories are handed is
-    the shape a resolved configuration actually carries rather than a dict this module invented.
-    The iteration is over ``models.ADAPTER_TYPE_NAMES``, so a sixth declared type reaches
+    """Return one minimal valid target record per declared type, read back from a ``Config``. The
+    iteration is over ``models.ADAPTER_TYPE_NAMES``, so a sixth declared type reaches
     :func:`_record` and fails there by name instead of being silently uncovered.
-
-    Args:
-        config_factory: The shared in-memory configuration builder from ``tests/conftest.py``.
-
-    Returns:
-        A read-only mapping of declared type to its minimal valid record.
     """
     records = {kind: _record(kind) for kind in sorted(models.ADAPTER_TYPE_NAMES)}
     config = config_factory(targets=MappingProxyType(records))

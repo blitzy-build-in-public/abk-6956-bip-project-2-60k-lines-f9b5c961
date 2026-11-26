@@ -1,41 +1,35 @@
 """One failure ID, one definition: sanitized, bounded and safe as a path segment.
 
-``qrcheck.report.model.failure_id`` is the product's only derivation of the name a
-failure is filed under, and ``qrcheck.evidence.naming`` calls it instead of
-re-deriving it, so the identifier ``summary.json`` records and the last segment of an
-evidence directory cannot disagree (AAP §0.8.1 "single owner of each cross-cutting
-concern", §0.3.4 "Stable identifiers"). Four properties of that identifier are pinned
-here, and each one is load-bearing:
+``qrcheck.report.model.failure_id`` is the product's only derivation of the name a failure is filed
+under, and ``qrcheck.evidence.naming`` calls it instead of re-deriving it, so the identifier
+``summary.json`` records and the last segment of an evidence directory cannot disagree (AAP §0.8.1
+"single owner of each cross-cutting concern", §0.3.4 "Stable identifiers"). Four properties are
+pinned, and each one is load-bearing:
 
-* **it is a stated formula.** ``<CHECK-ID>__<case_id>__<reason>``, every character
-  outside ``[A-Za-z0-9._-]`` replaced by ``_``, and - when that text exceeds the bound
-  - a retained prefix followed by an 8-hex SHA-256 digest. The formula is recomputed in
-  :func:`reference_failure_id` from the plan's own words rather than transcribed from a
-  run, so a change to it fails here instead of silently renaming every evidence
-  directory and every CI trend line;
-* **it is one path segment.** The sanitization is a security control, not a formatting
-  nicety (AAP §0.3.2 security architecture, IM-7): a hostile ``case_id`` such as
-  ``"../../etc/passwd"`` must still land inside the report directory, which
-  :func:`test_evidence_dir_never_leaves_the_report_directory` asserts by resolution
-  rather than by inspecting characters;
-* **it is bounded.** The identifier becomes a directory name, so its whole length -
-  prefix and digest together, not the prefix alone - stays within
-  ``qrcheck.report.model.FAILURE_ID_MAX``;
-* **it is a pure function of its three inputs**, stable across processes and
-  ``PYTHONHASHSEED`` values, because the directories it names are promised to be
-  byte-stable (AAP §0.5.4).
+* **it is a stated formula.** ``<CHECK-ID>__<case_id>__<reason>``, every character outside
+  ``[A-Za-z0-9._-]`` replaced by ``_``, and -- when that text exceeds the bound -- a retained
+  prefix followed by an 8-hex SHA-256 digest. The formula is recomputed in
+  :func:`reference_failure_id` from the plan's own words rather than transcribed from a run, so a
+  change to it fails here instead of silently renaming every evidence directory and every CI trend
+  line;
+* **it is one path segment.** The sanitization is a security control, not a formatting nicety (AAP
+  §0.3.2 security architecture, IM-7): a hostile ``case_id`` such as ``"../../etc/passwd"`` must
+  still land inside the report directory, asserted by resolution rather than by inspecting
+  characters;
+* **it is bounded.** The identifier becomes a directory name, so its whole length -- prefix and
+  digest together, not the prefix alone -- stays within ``qrcheck.report.model.FAILURE_ID_MAX``;
+* **it is a pure function of its three inputs**, stable across processes and ``PYTHONHASHSEED``
+  values, because the directories it names are promised to be byte-stable (AAP §0.5.4).
 
-Two behaviours of the neighbouring :func:`qrcheck.evidence.naming.sanitize` are
-asserted rather than assumed, because they decide whether a component is usable at
-all: it refuses an empty component and the two components that are still dangerous
-after the character rule (``.`` and ``..``), and it replaces one ``_`` per *code
-point*, so a two-byte ``ü`` and a four-byte emoji each cost one character and
+Two behaviours of :func:`qrcheck.evidence.naming.sanitize` are asserted rather than assumed,
+because they decide whether a component is usable at all: it refuses an empty component and the two
+components that are still dangerous after the character rule (``.`` and ``..``), and it replaces
+one ``_`` per *code point*, so a two-byte ``ü`` and a four-byte emoji each cost one character and
 ``MAX_COMPONENT_LENGTH`` counts characters rather than bytes.
 
-No threshold from ``qrcheck.toml`` is read here, nothing is skipped, retried or
-marked, every collection is iterated in sorted order, nothing is written outside
-``tmp_path``, and the only process this module starts is one short child interpreter
-printing identifiers under a chosen ``PYTHONHASHSEED``.
+No threshold from ``qrcheck.toml`` is read here, nothing is skipped, retried or marked, every
+collection is iterated in sorted order, and the only process this module starts is one short child
+interpreter printing identifiers under a chosen ``PYTHONHASHSEED``.
 """
 
 import ast
@@ -87,10 +81,9 @@ DIGEST_CHARACTERS: int = 8
 
 
 def reference_sanitize(text: str) -> str:
-    """Apply the documented replacement rule without imposing any bound.
-
-    One ``_`` replaces each code point outside ``[A-Za-z0-9._-]``; nothing else
-    changes, so the result has the input's length in code points.
+    """Apply the documented replacement rule without imposing any bound. One ``_`` replaces each
+    code point outside ``[A-Za-z0-9._-]``; nothing else changes, so the result has the input's
+    length in code points.
     """
     return UNSAFE_SEGMENT_CHARS.sub("_", text)
 
@@ -98,13 +91,9 @@ def reference_sanitize(text: str) -> str:
 def reference_failure_id(
     check_id: str, case_id: str, reason: Reason | str | None
 ) -> str:
-    """Recompute the documented failure-ID formula independently of the module.
-
-    The expectation is the plan's rule written out again - never a value copied from a
-    run - so a change to the formula has to be a deliberate change in two places. The
-    retained prefix absorbs the separator and the digest, so the *whole* identifier
-    stays within :data:`FAILURE_ID_LIMIT`: reading the rule as "a full-length prefix
-    plus a suffix" would exceed the bound the directory name has to respect.
+    """Recompute the documented failure-ID formula independently of the module. The expectation is
+    the plan's rule written out again - never a value copied from a run - so a change to the
+    formula has to be a deliberate change in two places.
     """
     reason_text = "none" if reason is None else getattr(reason, "value", reason)
     sanitized = reference_sanitize(f"{check_id}__{case_id}__{reason_text}")
@@ -217,10 +206,9 @@ LONG_CASE_ID_LENGTHS: tuple[int, ...] = (500, 5000)
 
 
 def _long_case_ids(length: int) -> tuple[str, str]:
-    """Two case IDs of ``length`` characters that differ only in their final one.
-
-    They share far more than the retained prefix, which is what turns the suffix into
-    the only thing that keeps their evidence directories apart.
+    """Two case IDs of ``length`` characters that differ only in their final one. They share far
+    more than the retained prefix, which is what turns the suffix into the only thing that
+    keeps their evidence directories apart.
     """
     stem = "corpus:" + "e" * (length - len("corpus:") - 1)
     return f"{stem}a", f"{stem}b"
@@ -301,12 +289,11 @@ EVIDENCE_NAMING_MODULE: str = "qrcheck/evidence/naming.py"
 def test_the_identifier_joins_the_three_sanitized_segments(
     case: tuple[str, str, str],
 ) -> None:
-    """The ID is the three inputs joined by ``__``, each segment sanitized on its own.
-
-    The expectation is built from :func:`sanitize` rather than transcribed, so this
-    states the rule and not one example: an ordinary triple has to equal exactly
-    ``"__".join(sanitize(part) ...)``, and because none of these triples reaches the
-    bound, it also has to equal the untruncated text with no suffix at all.
+    """The ID is the three inputs joined by ``__``, each segment sanitized on its own. The
+    expectation is built from :func:`sanitize` rather than transcribed, so this states the rule
+    and not one example: an ordinary triple has to equal exactly ``"__".join(sanitize(part)
+    ...)``, and because none of these triples reaches the bound, it also has to equal the
+    untruncated text with no suffix at all.
     """
     check_id, case_id, reason = case
     expected = "__".join(sanitize(part) for part in (check_id, case_id, reason))
@@ -321,11 +308,9 @@ def test_the_identifier_joins_the_three_sanitized_segments(
 def test_a_reason_member_and_its_string_value_produce_the_same_identifier(
     case: tuple[str, str, str],
 ) -> None:
-    """A :class:`Reason` member and its string value are interchangeable as an input.
-
-    Every caller may pass either - the registry resolves reasons from enums while a
-    deserialised result carries plain strings - and the two must not file the same
-    failure under two names.
+    """A :class:`Reason` member and its string value are interchangeable as an input. Every caller
+    may pass either - the registry resolves reasons from enums while a deserialised result
+    carries plain strings - and the two must not file the same failure under two names.
     """
     check_id, case_id, reason = case
     assert failure_id(check_id, case_id, Reason(reason)) == failure_id(check_id, case_id, reason)
@@ -341,11 +326,7 @@ def test_every_reason_member_renders_its_declared_value(reason: Reason) -> None:
 
 
 def test_a_missing_reason_still_yields_a_usable_identifier() -> None:
-    """A ``None`` reason renders ``none``, so the identifier is never malformed.
-
-    A passing case writes no evidence, so ``None`` is a defensive default rather than
-    a provenance; it still has to produce a string bounded and safe like any other.
-    """
+    """A ``None`` reason renders ``none``, so the identifier is never malformed."""
     fid = failure_id("RT-ROUNDTRIP", "corpus:url-001", None)
     assert fid == reference_failure_id("RT-ROUNDTRIP", "corpus:url-001", None)
     assert fid.endswith("_none")
@@ -356,12 +337,7 @@ def test_a_missing_reason_still_yields_a_usable_identifier() -> None:
 def test_the_documented_formula_is_reproduced(
     case: tuple[str, str, Reason | str | None],
 ) -> None:
-    """``failure_id`` returns exactly the identifier the documented formula produces.
-
-    Both branches are covered: the untruncated text for a short triple, and the retained
-    prefix plus digest once the text exceeds the bound - for a 500- and a 5000-character
-    case ID alike, which is what makes the bound independent of the input size.
-    """
+    """``failure_id`` returns exactly the identifier the documented formula produces."""
     check_id, case_id, reason = case
     assert failure_id(check_id, case_id, reason) == reference_failure_id(
         check_id, case_id, reason
@@ -373,10 +349,9 @@ def test_a_failure_id_is_already_a_safe_path_component(
     case: tuple[str, str, Reason | str | None],
 ) -> None:
     """Re-sanitizing an identifier changes nothing, which is what the layout relies on.
-
-    ``evidence_dir`` runs the identifier through ``sanitize`` again before joining it; if
-    that second pass could alter the string, the name recorded in ``summary.json`` and
-    the directory on disk would diverge.
+    ``evidence_dir`` runs the identifier through ``sanitize`` again before joining it; if that
+    second pass could alter the string, the name recorded in ``summary.json`` and the directory
+    on disk would diverge.
     """
     fid = failure_id(*case)
     assert sanitize(fid) == fid
@@ -400,12 +375,10 @@ def test_each_unsafe_character_becomes_exactly_one_underscore(character: str) ->
 def test_a_hostile_case_id_leaves_nothing_a_filesystem_reads_as_a_path(
     case_id: str,
 ) -> None:
-    """The identifier matches the safe set exactly and keeps the input's length.
-
-    The length assertion states that the replacement is one-for-one per code point: a
-    separator, a quote, a control character and a multi-byte character each cost the
-    identifier a single character, so the bound counts characters rather than bytes
-    (AAP §0.3.4, §0.3.2, IM-7).
+    """The identifier matches the safe set exactly and keeps the input's length. The length
+    assertion states that the replacement is one-for-one per code point: a separator, a quote,
+    a control character and a multi-byte character each cost the identifier a single character,
+    so the bound counts characters rather than bytes (AAP §0.3.4, §0.3.2, IM-7).
     """
     raw = _raw("RT-ROUNDTRIP", case_id, "value_mismatch")
     fid = failure_id("RT-ROUNDTRIP", case_id, "value_mismatch")
@@ -416,11 +389,10 @@ def test_a_hostile_case_id_leaves_nothing_a_filesystem_reads_as_a_path(
 
 
 def test_a_multibyte_character_costs_one_character_not_one_byte() -> None:
-    """The rule counts code points: a four-byte emoji becomes one ``_``, not four.
-
-    This is what the implementation does - ``re`` matches the code points of a ``str`` -
-    and it is stated and asserted rather than assumed, because a byte-length rule would
-    silently shorten a bound expressed in characters.
+    """The rule counts code points: a four-byte emoji becomes one ``_``, not four. This is what
+    the implementation does - ``re`` matches the code points of a ``str`` - and it is stated
+    and asserted rather than assumed, because a byte-length rule would silently shorten a bound
+    expressed in characters.
     """
     for text in ("\u00fc", "\U0001f600", "a\u00fc\U0001f600b", "\u00fcn\u00efcode"):
         assert len(text.encode("utf-8")) >= len(text)
@@ -445,11 +417,10 @@ def test_sanitizing_an_already_sanitized_component_changes_nothing(component: st
 def test_a_failure_id_of_already_sanitized_parts_is_unchanged(
     case: tuple[str, str, str],
 ) -> None:
-    """Pre-sanitizing the three parts does not rename the failure.
-
-    The evidence store and ``build_request`` may hand over a component that has already
-    been reduced once; the identifier has to be the same either way, otherwise one
-    failure would be filed under two names.
+    """Pre-sanitizing the three parts does not rename the failure. The evidence store and
+    ``build_request`` may hand over a component that has already been reduced once; the
+    identifier has to be the same either way, otherwise one failure would be filed under two
+    names.
     """
     check_id, case_id, reason = case
     assert len(_raw(check_id, case_id, reason)) <= FAILURE_ID_LIMIT
@@ -465,10 +436,9 @@ def test_a_failure_id_of_already_sanitized_parts_is_unchanged(
 @pytest.mark.parametrize("length", COMPONENT_LENGTHS)
 def test_a_component_is_bounded_by_the_component_limit(length: int) -> None:
     """A component within the limit passes through; a longer one is truncated with a suffix.
-
-    ``MAX_COMPONENT_LENGTH`` is the bound :func:`sanitize` enforces on one path segment,
-    and the retained prefix absorbs the separator and the digest so the *whole* segment
-    stays inside it.
+    ``MAX_COMPONENT_LENGTH`` is the bound :func:`sanitize` enforces on one path segment, and
+    the retained prefix absorbs the separator and the digest so the *whole* segment stays
+    inside it.
     """
     component = "c" * length
     segment = sanitize(component)
@@ -514,11 +484,9 @@ def test_the_truncation_suffix_is_deterministic(length: int) -> None:
 
 @pytest.mark.parametrize("length", LONG_CASE_ID_LENGTHS)
 def test_the_suffix_separates_inputs_that_differ_beyond_the_cut(length: int) -> None:
-    """The digest covers the full pre-truncation text, so two long IDs cannot collide.
-
-    Two case IDs sharing everything but their final character retain an identical prefix.
-    If the suffix were taken from the retained text alone their evidence directories would
-    be the same directory and one failure would overwrite the other.
+    """The digest covers the full pre-truncation text, so two long IDs cannot collide. If the
+    suffix were taken from the retained text alone their evidence directories would be the same
+    directory and one failure would overwrite the other.
     """
     first, second = (
         failure_id("RT-ROUNDTRIP", case_id, "value_mismatch")
@@ -537,12 +505,7 @@ def test_the_suffix_separates_inputs_that_differ_beyond_the_cut(length: int) -> 
 
 @pytest.mark.parametrize("case_id", HOSTILE_CASE_IDS, ids=_label)
 def test_a_failure_id_is_never_empty_and_never_a_dot_segment(case_id: str) -> None:
-    """No input produces an empty name, ``.`` or ``..`` - the three unusable segments.
-
-    The identifier always carries the two ``__`` separators, so even an empty triple
-    yields a non-empty string; the assertions here are what the layout may rely on
-    without repeating the rule.
-    """
+    """No input produces an empty name, ``.`` or ``..`` - the three unusable segments."""
     for reason in (Reason.VALUE_MISMATCH, None):
         fid = failure_id("SY-EC-MATCH", case_id, reason)
         assert fid, f"{case_id!r} produced an empty identifier"
@@ -554,11 +517,10 @@ def test_a_failure_id_is_never_empty_and_never_a_dot_segment(case_id: str) -> No
 
 @pytest.mark.parametrize("component", REFUSED_COMPONENTS, ids=_label)
 def test_a_degenerate_component_is_refused_by_the_layout(component: str) -> None:
-    """An empty, ``.`` or ``..`` component raises instead of naming a directory.
-
-    The character rule alone cannot reject these: ``.`` and ``..`` are inside the safe
-    set and are exactly the two names that collapse or escape the directory they are
-    joined to, so the layout refuses them by name (AAP §0.3.2, IM-7).
+    """An empty, ``.`` or ``..`` component raises instead of naming a directory. The character
+    rule alone cannot reject these: ``.`` and ``..`` are inside the safe set and are exactly
+    the two names that collapse or escape the directory they are joined to, so the layout
+    refuses them by name (AAP §0.3.2, IM-7).
     """
     with pytest.raises(ValueError) as raised:
         sanitize(component)
@@ -580,10 +542,9 @@ def test_a_non_string_component_is_a_type_error() -> None:
 def test_evidence_dir_never_leaves_the_report_directory(
     tmp_path: Path, pair: tuple[str, str]
 ) -> None:
-    """Resolving the path is the assertion; inspecting the characters is not.
-
-    A hostile check ID and a hostile case ID together must still name a directory under
-    the configured report root, exactly three levels below it, because the layout is
+    """Resolving the path is the assertion; inspecting the characters is not. A hostile check ID
+    and a hostile case ID together must still name a directory under the configured report
+    root, exactly three levels below it, because the layout is
     ``<report_dir>/evidence/<check-id>/<failure-id>`` (AAP §0.3.4).
     """
     check_id, case_id = pair
@@ -652,12 +613,7 @@ def test_a_case_result_records_the_identifier_its_directory_carries() -> None:
 
 @pytest.mark.parametrize("case_id", HOSTILE_CASE_IDS, ids=_label)
 def test_a_hostile_case_id_still_yields_a_record_the_model_accepts(case_id: str) -> None:
-    """The relative form satisfies ``CaseResult``'s relative-posix-path invariant.
-
-    ``CaseResult`` rejects an absolute path, a backslash and a ``..`` component. A hostile
-    case ID has to come through that check, which is the last place the rendering of a
-    ``case_id`` could still reach a report or name a directory.
-    """
+    """The relative form satisfies ``CaseResult``'s relative-posix-path invariant."""
     relative = relative_case_evidence_dir("SY-EC-MATCH", case_id, Reason.VALUE_MISMATCH)
     result = CaseResult(
         check_id="SY-EC-MATCH",
@@ -675,12 +631,9 @@ def test_a_hostile_case_id_still_yields_a_record_the_model_accepts(case_id: str)
 
 
 def _subprocess_source() -> str:
-    """Build the probe payload: the identifier table in, identifiers out.
-
-    The table is embedded with ``!a`` - an ASCII-only ``repr`` - so the payload survives
-    an ``argv`` entry whatever characters a case ID holds. It imports ``json`` and
-    ``qrcheck.report.model`` and nothing else, so the comparison cannot be satisfied by
-    an accident of import order in a larger program.
+    """Build the probe payload: the identifier table in, identifiers out. The table is embedded
+    with ``!a`` - an ASCII-only ``repr`` - so the payload survives an ``argv`` entry whatever
+    characters a case ID holds.
     """
     return (
         "import json\n"
@@ -726,11 +679,10 @@ def _identifiers_in_subprocess(hash_seed: str) -> list[str]:
 
 @pytest.mark.parametrize("hash_seed", sorted(HASH_SEEDS))
 def test_identifiers_do_not_depend_on_pythonhashseed(hash_seed: str) -> None:
-    """A separate interpreter under a different hash seed produces the same identifiers.
-
-    The suffix is a content digest, never ``hash()``: a ``hash()``-derived component would
-    differ between the two child processes and between two machines, and the evidence
-    directories it names are promised to be byte-stable (AAP §0.5.4).
+    """A separate interpreter under a different hash seed produces the same identifiers. The
+    suffix is a content digest, never ``hash()``: a ``hash()``-derived component would differ
+    between the two child processes and between two machines, and the evidence directories it
+    names are promised to be byte-stable (AAP §0.5.4).
     """
     expected = [failure_id(*case) for case in SUBPROCESS_CASES]
     assert _identifiers_in_subprocess(hash_seed) == expected
@@ -755,10 +707,9 @@ def _package_sources() -> tuple[tuple[Path, str], ...]:
 
 
 def _failure_id_definitions() -> tuple[str, ...]:
-    """Every ``def`` or ``async def`` under ``qrcheck/`` whose name holds ``failure_id``.
-
-    A parameter named ``failure_id`` is an ``ast.arg`` and is deliberately not collected:
-    the two layout helpers take an identifier as an argument, they do not define one.
+    """Every ``def`` or ``async def`` under ``qrcheck/`` whose name holds ``failure_id``. A
+    parameter named ``failure_id`` is an ``ast.arg`` and is deliberately not collected: the two
+    layout helpers take an identifier as an argument, they do not define one.
     """
     definitions: list[str] = []
     for path, source in _package_sources():
@@ -799,11 +750,9 @@ def _naming_module_usage(source: str) -> tuple[tuple[str, ...], int]:
 
 
 def test_the_evidence_layout_consumes_the_single_definition() -> None:
-    """``naming.py`` imports and calls ``failure_id`` rather than re-deriving an ID.
-
-    The import sits inside the two functions that need it, for the cycle-breaking reason
-    the module documents, so the scan walks the whole tree instead of the module body
-    alone.
+    """``naming.py`` imports and calls ``failure_id`` rather than re-deriving an ID. The import
+    sits inside the two functions that need it, for the cycle-breaking reason the module
+    documents, so the scan walks the whole tree instead of the module body alone.
     """
     imported, calls = _naming_module_usage(_NAMING_PATH.read_text(encoding="utf-8"))
     assert "failure_id" in imported, (

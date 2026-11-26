@@ -2,56 +2,33 @@
 
 AAP §0.3.4 ("Identity and selection") fixes three token forms for ``--checks`` -- an exact
 identifier (``RT-ROUNDTRIP``), an identifier glob (``SY-*``) and a family selector
-(``family:render``) -- makes a selection that matches nothing an exit-2 condition that echoes
-the selector **verbatim** with no report written, and makes ``--class`` a repeatable glob over
-the corpus record's class name whose zero-record outcome is a second, differently worded exit-2
-condition.  AAP §0.6.6 rows 1 and 2 name this module as the gate for exactly those two states,
-and §0.11.1 lists it as a deliverable.  Four properties are pinned:
+(``family:render``) -- makes a selection that matches nothing an exit-2 condition that echoes the
+selector **verbatim** with no report written, and makes ``--class`` a repeatable glob over the
+corpus record's class name whose zero-record outcome is a second, differently worded exit-2
+condition; §0.6.6 rows 1 and 2 name this module as the gate for both states.
 
-* **the three token forms resolve as the plan says**, are unioned, de-duplicated and returned
-  **sorted by identifier ascending**.  A report whose ``results[]`` order depended on how the
-  user typed ``--checks`` would break the determinism promise of AAP §0.5.3, so the sort is
-  asserted against a selector whose token order is deliberately the reverse of the answer;
-* **every token must select something.**  A mistyped token raises :class:`SelectionError`
-  carrying the selector as typed instead of being dropped, because a dropped token would stop
-  a check from executing while the run still reported a clean pass -- the vacuous suite
-  AAP §0.4.1 forbids;
-* **the two empty states are proved separately**, since collapsing them into one message would
-  lose the "name the filter" half of §0.6.6 row 2: ``--checks NOPE-*`` names the token,
-  ``--class 'no-such-*'`` names the glob, and neither writes a report;
-* **``--class 'boundary-*'`` selects the 40-record boundary subset** that success criterion 2
-  runs at EC L, Q and H, and repeated ``--class`` options combine as a union.
+Pinned: the three token forms resolve as the plan says, are unioned, de-duplicated and returned
+**sorted by identifier ascending**, asserted against a selector whose token order is deliberately
+the reverse of the answer, because a ``results[]`` order that depended on how the user typed
+``--checks`` would break the determinism promise of AAP §0.5.3; every token must select something,
+so a mistyped token raises :class:`SelectionError` carrying the selector as typed rather than being
+dropped, because a dropped token would stop a check from executing while the run still reported a
+clean pass -- the vacuous suite AAP §0.4.1 forbids; the two empty states are proved separately, so
+collapsing them into one message would lose the "name the filter" half of §0.6.6 row 2; and
+``--class 'boundary-*'`` selects the 40-record boundary subset success criterion 2 runs at EC L, Q
+and H, with repeated options combining as a union.
 
-Registration, and why it is forced here
----------------------------------------
-``qrcheck.registry`` deliberately leaves :data:`~qrcheck.registry.check.REGISTRY` empty when it
-is imported: a package that populated it would make the executed set depend on whether some
-unrelated module happened to import it (AAP §0.5).  Registration therefore belongs to the entry
-points, so this module imports :func:`qrcheck.checks.load_families` once and asserts the
-registry holds exactly ``CHECK_IDS`` before any selector is resolved -- a grammar test written
-against a half-populated registry would pass while selecting nothing.
-
-What this module deliberately does not do
------------------------------------------
-It decides no exit code: ``qrcheck.registry.selection`` raises ``SelectionError`` and
-``qrcheck.cli.run`` maps it to exit 2, so both halves are asserted separately -- the raise here,
-the process status through the real command line.  It re-implements neither policy: the corpus
-filtering is ``qrcheck.corpus.io.filter_by_class``'s and the zero-record condition is
-``qrcheck.runner``'s, which is why the exit-2 assertion for an empty ``--class`` belongs to the
-CLI case rather than to a filter unit test.  No threshold, sample count or timeout appears
-anywhere in this file -- the only numbers are contract facts from the plan: the exit code, the
-40-record boundary subset, the 42-record ``url`` + ``otp`` union, and the twenty-one
-identifiers.  Nothing is marked ``skip`` or ``xfail``ed and nothing is retried: the product has
-no retry path (AAP §0.5.6), and a flaky selection would be a defect to fix rather than to
-suppress.
-
-Cost and determinism
---------------------
-The grammar cases touch the registry only -- no target, no decoder, no image.  The three
-command-line cases are held to the same rule: the two exit-2 paths stop before any case runs,
-and the one run that executes is restricted with ``--checks RT-ROUNDTRIP`` and two ``--class``
-globs, so it exercises 42 cases instead of the 1,283 of a full run.  Every expectation is
-computed from sorted data or from the plan's own tables, never from a set's iteration order.
+Registration is forced here: ``qrcheck.registry`` deliberately leaves
+:data:`~qrcheck.registry.check.REGISTRY` empty when it is imported, because a package that
+populated it would make the executed set depend on whether some unrelated module happened to import
+it (AAP §0.5), so this module loads the families once and asserts the registry holds exactly
+``CHECK_IDS`` before any selector is resolved -- a grammar test against a half-populated registry
+would pass while selecting nothing. It decides no exit code (``qrcheck.registry.selection`` raises
+and ``qrcheck.cli.run`` maps the raise to exit 2, asserted through the real command line) and
+re-implements neither the corpus filter nor the zero-record condition. The grammar cases touch the
+registry only, and the one command-line run that executes is restricted with ``--checks
+RT-ROUNDTRIP`` and two ``--class`` globs, so it exercises 42 cases instead of the 1,283 of a full
+run.
 """
 
 from __future__ import annotations
@@ -129,17 +106,10 @@ EXIT_CONFIG: Final[int] = 2
 
 @pytest.fixture(scope="module", autouse=True)
 def _populated_registry() -> tuple[str, ...]:
-    """Import the nine check families once so the registry holds all twenty-one checks.
-
-    Autouse and module-scoped because every case in this file resolves selectors against the
-    real registry: a grammar assertion made against an empty one would pass while selecting
-    nothing, which is the failure mode :func:`select` itself exists to prevent.
-
-    Returns:
-        Every registered identifier, ascending.
-
-    Raises:
-        AssertionError: The registry does not hold exactly :data:`CHECK_IDS`.
+    """Import the nine check families once so the registry holds all twenty-one checks. Autouse
+    and module-scoped because every case in this file resolves selectors against the real
+    registry: a grammar assertion made against an empty one would pass while selecting nothing,
+    which is the failure mode :func:`select` itself exists to prevent.
     """
     identifiers = load_families()
     assert identifiers == CHECK_IDS, (
@@ -150,43 +120,22 @@ def _populated_registry() -> tuple[str, ...]:
 
 
 def _ids(contracts: Sequence[CheckContract]) -> tuple[str, ...]:
-    """Return the identifiers of `contracts`, in the order they were returned.
-
-    The order is preserved rather than sorted, so a test can assert that ``select`` returned
-    them in identifier order instead of re-establishing that order itself.
-
-    Args:
-        contracts: The contracts a selection resolved to.
-
-    Returns:
-        Their identifiers.
+    """Return the identifiers of `contracts`, in the order they were returned. The order is
+    preserved rather than sorted, so a test can assert that ``select`` returned them in
+    identifier order instead of re-establishing that order itself.
     """
     return tuple(contract.id for contract in contracts)
 
 
 def _classes(records: Sequence[CorpusRecord]) -> tuple[str, ...]:
-    """Return the distinct class names of `records`, sorted.
-
-    Args:
-        records: Records selected from a corpus.
-
-    Returns:
-        The class names, ascending and de-duplicated.
-    """
+    """Return the distinct class names of `records`, sorted."""
     return tuple(sorted({record.class_name for record in records}))
 
 
 def _report_entries(report_root: Path) -> tuple[str, ...]:
-    """Return the entry names under `report_root`, sorted, or ``()`` when it does not exist.
-
-    "No report was written" has to hold for both shapes the command can leave: a report root
-    the writability probe created and left empty, and one that was never created at all.
-
-    Args:
-        report_root: The ``--report-dir`` the invocation was given.
-
-    Returns:
-        The directory's entry names in ascending order, empty when the path is absent.
+    """Return the entry names under `report_root`, sorted, or ``()`` when it does not exist. "No
+    report was written" has to hold for both shapes the command can leave: a report root the
+    writability probe created and left empty, and one that was never created at all.
     """
     if not report_root.exists():
         return ()
@@ -197,22 +146,8 @@ def _invoke_run(
     runner: CliRunner, config_path: Path, report_root: Path, *arguments: str
 ) -> Result:
     """Invoke ``qrcheck run`` through the real command line and return click's result.
-
     ``--config`` is always passed explicitly: the group's default is the repository's own
-    ``qrcheck.toml``, whose relative ``report_dir`` would write into the checkout.  ``--report-dir``
-    is always passed too, so the "no report written" assertion targets a path this test owns
-    instead of whatever the configuration's relative default resolves to.
-    ``catch_exceptions=False`` keeps a genuine exception a test failure rather than folding it
-    into an exit code the assertion might mistake for the behaviour under test.
-
-    Args:
-        runner: The ``CliRunner`` fixture, which keeps stdout and stderr apart.
-        config_path: The minimal configuration document written under the test's ``tmp_path``.
-        report_root: The report root this invocation is given.
-        *arguments: The remaining ``qrcheck run`` options.
-
-    Returns:
-        click's result record.
+    ``qrcheck.toml``, whose relative ``report_dir`` would write into the checkout.
     """
     argv = [
         "--config",
@@ -234,7 +169,6 @@ def test_registry_holds_exactly_the_declared_check_identifiers(
     _populated_registry: tuple[str, ...],
 ) -> None:
     """The registry holds the twenty-one declared identifiers, ascending, and nothing else.
-
     ``registered_ids()`` is the set a report's executed checks are compared against, so it has
     to equal the product's own declaration rather than a subset of it; and the nine families of
     :data:`FAMILY_CHECKS` have to account for every one of them, so no check can exist in a
@@ -263,9 +197,8 @@ def test_an_exact_identifier_selects_that_contract_and_nothing_else() -> None:
 
 
 def test_a_comma_list_is_returned_sorted_by_identifier() -> None:
-    """A comma list resolves to both contracts, in identifier order whatever the token order.
-
-    The selector is written with the later identifier first: a ``select`` that preserved token
+    """A comma list resolves to both contracts, in identifier order whatever the token order. The
+    selector is written with the later identifier first: a ``select`` that preserved token
     order would fail here, and a report built from it would carry a different ``results[]``
     order for the same set of checks (AAP §0.5.3).
     """
@@ -282,10 +215,9 @@ def test_surrounding_whitespace_on_each_term_is_tolerated() -> None:
 
 
 def test_duplicate_tokens_do_not_duplicate_results() -> None:
-    """The three ways of naming one check collapse into a single result.
-
-    An exact identifier, its family and a glob over it are a union, not a concatenation: a
-    duplicate would make one check run -- and one check's cases appear in the report -- twice.
+    """The three ways of naming one check collapse into a single result. An exact identifier, its
+    family and a glob over it are a union, not a concatenation: a duplicate would make one
+    check run -- and one check's cases appear in the report -- twice.
     """
     selected = select(REGISTRY, "RT-ROUNDTRIP,family:roundtrip,RT-*,RT-ROUNDTRIP")
     assert _ids(selected) == FAMILY_CHECKS["roundtrip"]
@@ -294,10 +226,9 @@ def test_duplicate_tokens_do_not_duplicate_results() -> None:
 
 @pytest.mark.parametrize("selector", [None, "", "   "], ids=("absent", "empty", "blank"))
 def test_an_absent_or_blank_selector_selects_every_check(selector: str | None) -> None:
-    """No selector, an empty one and a whitespace-only one all mean "every check".
-
-    ``--checks ""`` cannot be allowed to select nothing: an option a user believed was a
-    no-op would silently run an empty suite.
+    """No selector, an empty one and a whitespace-only one all mean "every check". ``--checks ""``
+    cannot be allowed to select nothing: an option a user believed was a no-op would silently
+    run an empty suite.
     """
     assert _ids(select(REGISTRY, selector)) == CHECK_IDS
 
@@ -309,9 +240,8 @@ def test_a_trailing_comma_is_tolerated() -> None:
 
 
 def test_a_selector_of_nothing_but_commas_is_an_empty_selection() -> None:
-    """Commas with no token between them select nothing, which is exit 2 rather than a run.
-
-    Every token is empty and is skipped, so the union stays empty; the condition reported is the
+    """Commas with no token between them select nothing, which is exit 2 rather than a run. Every
+    token is empty and is skipped, so the union stays empty; the condition reported is the
     empty-selection one and the selector is echoed verbatim, commas included.
     """
     with pytest.raises(SelectionError) as raised:
@@ -321,9 +251,8 @@ def test_a_selector_of_nothing_but_commas_is_an_empty_selection() -> None:
 
 
 def test_an_empty_registry_cannot_satisfy_a_whole_run_selection() -> None:
-    """A registry with no checks reports the empty-selection condition, not a clean run.
-
-    The whole-run selection is the one path that does not go through a token, so it is asserted
+    """A registry with no checks reports the empty-selection condition, not a clean run. The
+    whole-run selection is the one path that does not go through a token, so it is asserted
     against a registry of its own rather than against the product's -- which must never be
     empty.
     """
@@ -345,9 +274,8 @@ def test_an_empty_registry_cannot_satisfy_a_whole_run_selection() -> None:
     ids=lambda value: value,
 )
 def test_a_glob_token_selects_every_matching_identifier(token: str, family: str) -> None:
-    """A glob over identifiers selects exactly the plan's checks of the owning family.
-
-    The expectation is AAP §0.8.1's literal set, so a glob that over- or under-matched -- the
+    """A glob over identifiers selects exactly the plan's checks of the owning family. The
+    expectation is AAP §0.8.1's literal set, so a glob that over- or under-matched -- the
     ``SY-*`` form matching four checks and not two or five -- fails here.
     """
     selected = select(REGISTRY, token)
@@ -356,11 +284,10 @@ def test_a_glob_token_selects_every_matching_identifier(token: str, family: str)
 
 
 def test_a_glob_can_span_families() -> None:
-    """A single glob is matched against identifiers, not against families.
-
-    ``?T-*`` names one check from each of two families, and the expectation is computed with
-    :func:`matches` -- the product's only token predicate -- so this case pins the predicate's
-    reading of a wildcard rather than restating a list.
+    """A single glob is matched against identifiers, not against families. ``?T-*`` names one
+    check from each of two families, and the expectation is computed with :func:`matches` --
+    the product's only token predicate -- so this case pins the predicate's reading of a
+    wildcard rather than restating a list.
     """
     expected = tuple(sorted(contract.id for contract in iter_checks() if matches(contract, "?T-*")))
     assert _ids(select(REGISTRY, "?T-*")) == expected
@@ -368,11 +295,10 @@ def test_a_glob_can_span_families() -> None:
 
 
 def test_a_glob_that_matches_no_identifier_raises_naming_the_selector() -> None:
-    """An identifier-shaped glob that matches nothing is an error, not an empty selection.
-
-    This is the typo the diagnostic exists for: ``SY-VERSIN-*`` is one character from a real
-    family's identifiers, and dropping it silently would stop those checks from running while
-    the run still reported success.
+    """An identifier-shaped glob that matches nothing is an error, not an empty selection. This is
+    the typo the diagnostic exists for: ``SY-VERSIN-*`` is one character from a real family's
+    identifiers, and dropping it silently would stop those checks from running while the run
+    still reported success.
     """
     with pytest.raises(SelectionError) as raised:
         select(REGISTRY, "SY-VERSIN-*")
@@ -387,10 +313,9 @@ def test_a_glob_that_matches_no_identifier_raises_naming_the_selector() -> None:
 
 @pytest.mark.parametrize("family", sorted(FAMILY_CHECKS), ids=lambda value: value)
 def test_a_family_selector_selects_that_family_in_identifier_order(family: str) -> None:
-    """``family:<name>`` selects exactly the checks AAP §0.8.1 files under that family.
-
-    Every one of the nine families is driven, so a family that matches nothing -- a renamed
-    module, a mistyped table entry -- fails instead of silently selecting an empty set.
+    """``family:<name>`` selects exactly the checks AAP §0.8.1 files under that family. Every one
+    of the nine families is driven, so a family that matches nothing -- a renamed module, a
+    mistyped table entry -- fails instead of silently selecting an empty set.
     """
     selected = select(REGISTRY, f"family:{family}")
     assert _ids(selected) == FAMILY_CHECKS[family]
@@ -406,10 +331,9 @@ def test_every_named_family_matches_at_least_one_check() -> None:
 
 
 def test_an_unknown_family_raises_with_the_whole_selection_echoed() -> None:
-    """An unknown family name is a typo to report, and the diagnostic quotes what was typed.
-
-    The error is raised by :func:`matches`, which is handed the enclosing selector so that a
-    caller reading stderr sees the whole ``--checks`` value rather than a fragment of it.
+    """An unknown family name is a typo to report, and the diagnostic quotes what was typed. The
+    error is raised by :func:`matches`, which is handed the enclosing selector so that a caller
+    reading stderr sees the whole ``--checks`` value rather than a fragment of it.
     """
     with pytest.raises(SelectionError) as raised:
         select(REGISTRY, "SY-*,family:renderr")
@@ -438,12 +362,10 @@ def test_mixed_tokens_are_unioned_deduplicated_and_sorted() -> None:
     ids=lambda value: value,
 )
 def test_tokens_are_matched_case_sensitively(selector: str) -> None:
-    """Identifiers and family names are compared case-sensitively, as the product documents.
-
-    The identifiers are uppercase by contract and the globs are matched with
+    """Identifiers and family names are compared case-sensitively, as the product documents. The
+    identifiers are uppercase by contract and the globs are matched with
     ``fnmatch.fnmatchcase``, so a case-fold that followed the platform would make a selection
-    depend on the operating system.  A lower-case near-miss therefore fails loudly instead of
-    selecting something the caller did not name.
+    depend on the operating system.
     """
     with pytest.raises(SelectionError) as raised:
         select(REGISTRY, selector)
@@ -472,11 +394,9 @@ def test_matches_ignores_a_blank_token(token: str) -> None:
 
 
 def test_matches_quotes_the_enclosing_selection_it_was_given() -> None:
-    """The error's selector is the enclosing ``--checks`` value when one was supplied.
-
-    Called on its own, ``matches`` has no enclosing selection to quote and echoes the token;
-    called from ``select``, it echoes what the caller typed.  Both shapes are exercised, because
-    the echoed value is what a CI consumer greps to find the failing invocation.
+    """The error's selector is the enclosing ``--checks`` value when one was supplied. Both shapes
+    are exercised, because the echoed value is what a CI consumer greps to find the failing
+    invocation.
     """
     contract = REGISTRY["CL-ARTIFACTS"]
 
@@ -501,12 +421,9 @@ def test_matches_quotes_the_enclosing_selection_it_was_given() -> None:
     ids=("glob", "padded", "mixed", "punctuated"),
 )
 def test_the_empty_selection_diagnostic_carries_the_selector_verbatim(selector: str) -> None:
-    """The selector is echoed exactly as typed, so a normalising bug cannot hide here.
-
-    The padded and mixed forms are the point: a diagnostic built from trimmed or re-joined
-    tokens would read plausibly and still be useless to a CI consumer grepping for its own
-    invocation.  A selection that resolves some tokens and fails another is a failure of the
-    whole selection, never a partial run.
+    """The selector is echoed exactly as typed, so a normalising bug cannot hide here. The padded
+    and mixed forms are the point: a diagnostic built from trimmed or re-joined tokens would
+    read plausibly and still be useless to a CI consumer grepping for its own invocation.
     """
     with pytest.raises(SelectionError) as raised:
         select(REGISTRY, selector)
@@ -518,12 +435,10 @@ def test_the_empty_selection_diagnostic_carries_the_selector_verbatim(selector: 
 def test_the_cli_reports_an_empty_selection_as_exit_two_and_writes_no_report(
     cli_runner: CliRunner, toml_config_file: Callable[..., Path], tmp_path: Path
 ) -> None:
-    """``run --checks NOPE-*`` exits 2, echoes the selector on stderr and leaves no report.
-
-    AAP §0.6.6 row 1's gate.  The exit status is read from the process-facing contract, not from
-    a return value, and the report root is asserted empty rather than absent: the writability
-    probe may create it, and an empty directory is the honest statement that nothing was
-    written.
+    """``run --checks NOPE-*`` exits 2, echoes the selector on stderr and leaves no report. The
+    exit status is read from the process-facing contract, not from a return value, and the
+    report root is asserted empty rather than absent: the writability probe may create it, and
+    an empty directory is the honest statement that nothing was written.
     """
     config_path = toml_config_file()
     report_root = tmp_path / "reports-empty-selection"
@@ -540,9 +455,8 @@ def test_the_cli_reports_an_empty_selection_as_exit_two_and_writes_no_report(
 def test_the_cli_reports_an_empty_class_filter_as_exit_two_naming_the_filter(
     cli_runner: CliRunner, toml_config_file: Callable[..., Path], tmp_path: Path
 ) -> None:
-    """``run --class 'no-such-*'`` exits 2, names the glob on stderr and writes no report.
-
-    AAP §0.6.6 row 2's gate, and a distinct state from the empty selection: the diagnostic names
+    """``run --class 'no-such-*'`` exits 2, names the glob on stderr and writes no report. AAP
+    §0.6.6 row 2's gate, and a distinct state from the empty selection: the diagnostic names
     the ``--class`` option and the glob, which is the half a merged message would lose.
     """
     config_path = toml_config_file()
@@ -567,7 +481,6 @@ def test_the_boundary_class_glob_selects_the_forty_record_subset(
     built_corpus: tuple[CorpusRecord, ...],
 ) -> None:
     """``--class 'boundary-*'`` is the 40-record subset success criterion 2 runs at L, Q and H.
-
     The selector is the one ``qrcheck run --class`` builds -- a :class:`Selection`, whose globs
     are normalised -- and the records are the builder's, so the assertion covers the path from
     the option value to the corpus rather than either end alone.
@@ -583,12 +496,10 @@ def test_the_boundary_class_glob_selects_the_forty_record_subset(
 def test_repeated_class_options_run_the_union_of_their_classes(
     cli_runner: CliRunner, toml_config_file: Callable[..., Path], tmp_path: Path
 ) -> None:
-    """Two ``--class`` options are one union: ``url`` and ``otp`` together drive 42 cases.
-
-    The count comes from the builder's own class table rather than a literal, and the run is
-    restricted to ``RT-ROUNDTRIP`` so the assertion costs 42 cases instead of a full run's 1,283.
-    Every case passing is what makes the count a statement about the corpus subset rather than
-    about how many results survived.
+    """Two ``--class`` options are one union: ``url`` and ``otp`` together drive 42 cases. The
+    count comes from the builder's own class table rather than a literal, and the run is
+    restricted to ``RT-ROUNDTRIP`` so the assertion costs 42 cases instead of a full run's
+    1,283.
     """
     config_path = toml_config_file()
     report_root = tmp_path / "reports-class-union"
@@ -635,11 +546,10 @@ def test_parse_selection_defaults_to_every_check_and_no_class_globs() -> None:
 
 
 def test_parse_selection_keeps_the_selector_verbatim_and_normalises_the_globs() -> None:
-    """The raw selector is stored as typed; the globs are stripped, de-duplicated and sorted.
-
-    Both halves matter for opposite reasons: a verbatim selector is what makes the exit-2
-    diagnostic reproducible from the command line, and an order-stable glob tuple is what keeps
-    two command lines differing only in ``--class`` order from describing two corpora.
+    """The raw selector is stored as typed; the globs are stripped, de-duplicated and sorted. Both
+    halves matter for opposite reasons: a verbatim selector is what makes the exit-2 diagnostic
+    reproducible from the command line, and an order-stable glob tuple is what keeps two
+    command lines differing only in ``--class`` order from describing two corpora.
     """
     selection = parse_selection(" RT-ROUNDTRIP ", (" url ", "otp", "url", "  "))
 
@@ -682,11 +592,9 @@ def test_selection_is_frozen_and_hashable() -> None:
 
 @pytest.mark.parametrize("value", [1, (), b"RT-ROUNDTRIP", ["RT-ROUNDTRIP"]], ids=repr)
 def test_a_non_string_selector_is_rejected(value: object) -> None:
-    """A selector that is not a string is a caller defect, reported by both entry points.
-
-    A tuple of tokens in particular is refused rather than joined: accepting it would give the
-    selector two spellings, and the verbatim echo would then quote something the user cannot
-    type.
+    """A selector that is not a string is a caller defect, reported by both entry points. A tuple
+    of tokens in particular is refused rather than joined: accepting it would give the selector
+    two spellings, and the verbatim echo would then quote something the user cannot type.
     """
     with pytest.raises(TypeError):
         Selection(checks=value)  # type: ignore[arg-type]
@@ -709,10 +617,8 @@ def test_a_non_string_class_glob_is_rejected(value: object) -> None:
 
 
 def test_a_bare_string_class_glob_is_one_pattern() -> None:
-    """A string is a single glob, never one glob per character.
-
-    ``filter_by_class`` reads a bare string the same way, so the two layers cannot disagree
-    about ``--class url``.
+    """A string is a single glob, never one glob per character. ``filter_by_class`` reads a bare
+    string the same way, so the two layers cannot disagree about ``--class url``.
     """
     assert Selection(class_globs="url").class_globs == ("url",)
     assert Selection(class_globs=" boundary-* ").class_globs == ("boundary-*",)

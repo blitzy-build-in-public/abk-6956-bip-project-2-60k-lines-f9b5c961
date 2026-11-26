@@ -1,16 +1,16 @@
 """The adapter port every QR generator target is driven through.
 
-This module is the seam between *what is asserted* (``qrcheck/checks/``) and
-*what is being asserted against* (``qrcheck/targets/``), and it is deliberately
-the thinnest place in the product: the capability vocabulary, the two records a
-target exchanges with the framework, the closed five-error vocabulary every
-adapter raises, the single request builder every check calls, the capability
-gate, and the resolution helpers the concrete adapters share.  A fourth adapter
-kind needs no change to any check and a new check needs no change to any
-adapter, because neither side of the seam ever sees the other.
+The seam between *what is asserted* (``qrcheck/checks/``) and *what is being
+asserted against* (``qrcheck/targets/``), and deliberately the thinnest place in
+the product: the capability vocabulary, the two records a target exchanges with
+the framework, the closed five-error vocabulary every adapter raises, the single
+request builder every check calls, the capability gate, and the resolution
+helpers the concrete adapters share.  A fourth adapter kind needs no change to
+any check and a new check needs no change to any adapter, because neither side
+of the seam ever sees the other.
 
-What the port guarantees
-------------------------
+What the port guarantees:
+
 * :class:`Capability` is the complete and closed list of the thirteen operations
   a target may declare, and :func:`require_capabilities` refuses an undeclared
   operation **before any I/O**, so an unsupported request never reaches a target
@@ -28,62 +28,48 @@ What the port guarantees
   :func:`hex_prefix` each exist exactly once here; ``library.py``, ``cli.py``
   and ``http.py`` import them rather than re-deriving them.
 
-The five-error vocabulary
--------------------------
-An adapter raises nothing else.  Exactly one trigger produces each error, and
-every ``except`` inside ``qrcheck/targets/`` converts a library exception into
-one of these five rather than letting it escape unwrapped:
+The five-error vocabulary: an adapter raises nothing else, exactly one trigger
+produces each error, and every ``except`` inside ``qrcheck/targets/`` converts a
+library exception into one of the five rather than letting it escape unwrapped.
+``TargetUnavailable`` -- the process cannot be spawned, the connection is
+refused, the import path is missing.  ``TargetTimeout`` -- no response within
+``targets.<name>.timeout_s``.  ``TargetRejected`` -- the target returned a
+declared client-side rejection for a request the framework considers valid, and
+its text is reported verbatim.  ``TargetContractError`` -- a response arrived but
+is unusable: empty body, undecodable base64, image bytes no decoder or image
+library can open, a configured field the response does not carry.
+``TargetUnsupported`` -- the request asks for a capability the adapter did not
+declare; raised before any I/O.  :class:`TargetRejected` carries the target's
+text unchanged -- ``str(exc)`` is exactly what the target said, because the
+``IV-*`` checks record it in ``decoded.rejection`` and every other check reports
+it as reason ``target_rejected``.
 
-=========================  =====================================================
-``TargetUnavailable``      the process cannot be spawned, the connection is
-                           refused, the import path is missing
-``TargetTimeout``          no response within ``targets.<name>.timeout_s``
-``TargetRejected``         the target returned a declared client-side rejection
-                           for a request the framework considers valid; its text
-                           is reported verbatim
-``TargetContractError``    a response arrived but is unusable: empty body,
-                           undecodable base64, image bytes no decoder or image
-                           library can open, a configured field the response
-                           does not carry
-``TargetUnsupported``      the request asks for a capability the adapter did not
-                           declare; raised before any I/O
-=========================  =====================================================
+Why ``GenerateRequest`` validates nothing: it has no ``__post_init__``, no
+coercion and no guard.  That is a contract, not an oversight -- ``IV-EMPTY``,
+``IV-OVERCAPACITY`` and the four ``IV-BAD-OPTION`` probes exist to prove that a
+target rejects requests breaking exactly the rules :func:`build_request`
+enforces, so they must be able to hand a target a deliberately illegal request
+(``ec_level="X"``, ``module_size_px=0``, ``quiet_zone_modules=-1``, a
+below-floor colour pair).  They do so through
+``qrcheck/checks/support.py:construct_out_of_contract``, a plain constructor call
+precisely because this type has no gate; validation added here would silently
+make every ``IV-*`` case unconstructable.
 
-:class:`TargetRejected` carries the target's text unchanged -- ``str(exc)`` is
-exactly what the target said, because the ``IV-*`` checks record it in
-``decoded.rejection`` and every other check reports it as reason
-``target_rejected``.
-
-Why ``GenerateRequest`` validates nothing
------------------------------------------
-:class:`GenerateRequest` has no ``__post_init__``, no coercion and no guard.
-That is a contract, not an oversight: ``IV-EMPTY``, ``IV-OVERCAPACITY`` and the
-four ``IV-BAD-OPTION`` probes exist to prove that a target rejects requests
-breaking exactly the rules :func:`build_request` enforces, so they must be able
-to hand a target a deliberately illegal request (``ec_level="X"``,
-``module_size_px=0``, ``quiet_zone_modules=-1``, a below-floor colour pair).
-They do so through ``qrcheck/checks/support.py:construct_out_of_contract``,
-which is a plain constructor call precisely because this type has no gate.
-Validation added here would silently make every ``IV-*`` case unconstructable.
-
-Layering
---------
-This module imports only the standard library, :mod:`qrcheck.config.models` and
-:mod:`qrcheck.corpus.capacity`, plus -- **inside** :func:`build_request`, at the
-point of use rather than at module scope -- :func:`~qrcheck.corpus.payloads.mode_of`,
-the product's single payload-mode classifier, so a payload's mode keeps one
-definition in the product.  That one import is deferred because
-``qrcheck.corpus.payloads`` imports ``numpy`` for its seeded generators, while this
-port is imported by the registry, the decoders and every check: at module scope it
-would charge ``numpy``, and the cost of loading it, to every process that only asks
-the registry which checks exist.  It imports no image library, no decoder and none
-of ``qrcheck.checks``, ``qrcheck.report``, ``qrcheck.decode`` or
+Layering: this module imports only the standard library,
+:mod:`qrcheck.config.models` and :mod:`qrcheck.corpus.capacity`, plus -- inside
+:func:`build_request`, at the point of use rather than at module scope --
+:func:`~qrcheck.corpus.payloads.mode_of`, the product's single payload-mode
+classifier, so a payload's mode keeps one definition in the product.  That one
+import is deferred because ``qrcheck.corpus.payloads`` imports ``numpy`` for its
+seeded generators, while this port is imported by the registry, the decoders and
+every check.  It imports no image library, no decoder and none of
+``qrcheck.checks``, ``qrcheck.report``, ``qrcheck.decode`` or
 ``qrcheck.registry``, which is what lets ``decode/``, ``registry/``,
 ``checks/support.py`` and ``runner.py`` all import it without a cycle.  In the
-other direction, ``qrcheck/checks/*`` may import this module and
-nothing else from ``qrcheck/targets/``, and nothing in ``qrcheck/targets/`` may
-import ``qrcheck.checks`` -- the property ``tests/unit/test_layering.py`` holds
-by scanning source.
+other direction, ``qrcheck/checks/*`` may import this module and nothing else
+from ``qrcheck/targets/``, and nothing in ``qrcheck/targets/`` may import
+``qrcheck.checks`` -- the property ``tests/unit/test_layering.py`` holds by
+scanning source.
 """
 
 from __future__ import annotations
@@ -258,24 +244,17 @@ _CAPABILITY_DRIFT_GATE: Final[bool] = _check_capability_vocabulary()
 def declared_capabilities(config: TargetConfig) -> frozenset[Capability]:
     """Return the capabilities `config` declares, as members of :class:`Capability`.
 
-    This is the one place the configuration's ``frozenset[str]`` becomes a
-    ``frozenset[Capability]``, so no adapter repeats the conversion and no
-    adapter can drift from the vocabulary.
-
-    Args:
-        config: The resolved ``[targets.<name>]`` record whose ``capabilities``
-            holds member names.
-
-    Returns:
-        The declared capabilities as members, empty when the target declares
-        none.
+    The one place the configuration's ``frozenset[str]`` becomes a
+    ``frozenset[Capability]``, so no adapter repeats the conversion and no adapter
+    can drift from the vocabulary; a target that declares none yields an empty
+    frozenset.
 
     Raises:
         ValueError: A declared name is not a :class:`Capability` member.  This is
-            a framework defect rather than a user error: the configuration
-            schema already rejects an unknown capability member at load time with
-            exit 2 naming it, so a name reaching this function has been past that
-            gate and can only mean the two lists have diverged.
+            a framework defect rather than a user error: the configuration schema
+            already rejects an unknown capability member at load time with exit 2
+            naming it, so a name reaching this function has been past that gate
+            and can only mean the two lists have diverged.
     """
     try:
         return frozenset(Capability(name) for name in sorted(config.capabilities))
@@ -366,16 +345,12 @@ class GenerateRequest:
     The ten fields are the request contract in full, and the four values a
     configuration cannot express directly (``foreground_rgb``,
     ``background_rgb``, ``version``, ``mask``) are the ones a target must refuse
-    when it does not declare the matching capability.
-
-    ``payload`` is bytes and never text, so byte-exactness is unambiguous: a
-    payload that is not valid UTF-8 still round-trips, and nothing here guesses an
-    encoding on the caller's behalf.
-
-    The eight fields after ``payload`` carry defaults **for convenience only**, so
+    when it does not declare the matching capability.  ``payload`` is bytes and
+    never text, so byte-exactness is unambiguous: a payload that is not valid
+    UTF-8 still round-trips, and nothing here guesses an encoding on the caller's
+    behalf.  The eight fields after it carry defaults **for convenience only**, so
     an ordinary request is ``GenerateRequest(payload)``; a caller that cares about
-    geometry, colour or a pin passes it explicitly, and a check that needs a
-    specific value always does.
+    geometry, colour or a pin passes it explicitly.
 
     This record validates nothing: no ``__post_init__``, no coercion, no guard.
     The gate is :func:`build_request`, and the documented bypass is
@@ -433,19 +408,16 @@ class GeneratedSymbol:
     ``image_bytes`` is the artefact exactly as the target produced it, and
     ``output_format`` is the format actually produced: a target that answers a
     ``png`` request with SVG bytes has broken its contract, and
-    :func:`ensure_image_bytes` is where that is caught.
-
-    The four ``declared_*`` fields are the target's own claim and are **evidence
-    only, never the assertion**.  ``SY-EC-MATCH`` reads the EC level from the
-    primary decoder and from the symbol's format information, ``SY-MASK`` reads
-    the mask from the format information, and ``SY-VERSION-MIN`` takes the version
-    from the sampled module count, so a target that lies about its metadata is
-    recorded as having lied rather than believed.  ``elapsed_ms`` is the
-    target-side timing: recorded, reported, and excluded from every determinism
-    comparison.
-
-    The trailing fields are defaulted because a target that reports no metadata
-    should have to say so only once.
+    :func:`ensure_image_bytes` is where that is caught.  The four ``declared_*``
+    fields are the target's own claim and are **evidence only, never the
+    assertion** -- ``SY-EC-MATCH`` reads the EC level from the primary decoder and
+    from the symbol's format information, ``SY-MASK`` reads the mask from the
+    format information and ``SY-VERSION-MIN`` takes the version from the sampled
+    module count, so a target that lies about its metadata is recorded as having
+    lied rather than believed.  ``elapsed_ms`` is the target-side timing: recorded,
+    reported, and excluded from every determinism comparison.  The trailing fields
+    are defaulted because a target that reports no metadata should have to say so
+    only once.
     """
 
     image_bytes: bytes
@@ -515,7 +487,6 @@ class Adapter(Protocol):
         ...
 
 
-
 def build_request(
     payload: bytes,
     ec_level: str = "M",
@@ -531,33 +502,17 @@ def build_request(
 ) -> GenerateRequest:
     """Build the one legal :class:`GenerateRequest` a check may send to a target.
 
-    This is the single request-construction function in the product, and
-    therefore the single definition of "the framework considers this request
-    valid": an error level outside ``L``/``M``/``Q``/``H``, a version outside
-    1..40, a mask outside 0..7, a non-positive module size, a negative quiet zone,
-    a colour channel outside 0..255, or a payload that does not fit the requested
-    version and error level per the capacity tables in the payload's own mode is
-    refused here, before any target sees it.  Everything the ``IV-*`` checks send
-    instead goes through the deliberate bypass in
-    ``qrcheck/checks/support.py``.
-
-    Args:
-        payload: The bytes to encode.  ``bytearray`` and ``memoryview`` are
-            accepted and normalised; text is refused, because the caller's
-            encoding choice must be visible rather than guessed.
-        ec_level: The requested error-correction level.
-        output_format: ``png`` or ``svg``, matched case-insensitively.
-        module_size_px: Requested module edge in pixels, when pinned.
-        quiet_zone_modules: Requested quiet zone in modules, when pinned.
-        foreground_rgb: Requested dark-module colour as three 0..255 channels.
-        background_rgb: Requested light-module colour as three 0..255 channels.
-        logo_overlay_path: Optional logo bitmap to composite onto the symbol.
-        version: Optional version pin, 1..40.
-        mask: Optional mask pin, 0..7.
-
-    Returns:
-        The request, with the format lowered and the payload normalised to
-        ``bytes``.
+    The single request-construction function in the product, and therefore the
+    single definition of "the framework considers this request valid": an error
+    level outside ``L``/``M``/``Q``/``H``, a version outside 1..40, a mask
+    outside 0..7, a non-positive module size, a negative quiet zone, a colour
+    channel outside 0..255, or a payload that does not fit the requested version
+    and error level per the capacity tables in the payload's own mode is refused
+    here, before any target sees it.  Everything the ``IV-*`` checks send instead
+    goes through the deliberate bypass in ``qrcheck/checks/support.py``.
+    ``bytearray`` and ``memoryview`` payloads are normalised and the format is
+    lowered; text is refused, because the caller's encoding choice must be
+    visible rather than guessed.
 
     Raises:
         ValueError: A field is outside its documented range, or the payload does
@@ -762,7 +717,6 @@ def _utf8_text(payload: bytes) -> str | None:
     return text if text.encode("utf-8") == payload else None
 
 
-
 def require_capabilities(
     adapter: Adapter,
     needed: frozenset[Capability] | Iterable[Capability],
@@ -772,16 +726,12 @@ def require_capabilities(
     The gate is read-only: it reads ``adapter.capabilities`` and nothing else, and
     returns immediately for an empty requirement without touching the adapter at
     all.  It performs no I/O and has no side effect, which is what makes both
-    callers safe -- ``registry/resolve.py`` resolving a check to ``skipped`` before
-    execution, and an adapter refusing a request it is about to receive.  An
-    unsupported request therefore never reaches a target and never consumes its
-    ``timeout_s``.
-
-    Args:
-        adapter: The target the request is destined for.
-        needed: The capabilities the operation requires.  A single member (or its
-            name) is accepted for a one-capability operation; a member is itself a
-            string, so it would otherwise iterate as characters.
+    callers safe -- ``registry/resolve.py`` resolving a check to ``skipped``
+    before execution, and an adapter refusing a request it is about to receive --
+    so an unsupported request never reaches a target and never consumes its
+    ``timeout_s``.  A single member (or its name) is accepted for a
+    one-capability operation, because a member is itself a string and would
+    otherwise iterate as characters.
 
     Raises:
         TargetUnsupported: At least one requirement is not declared.  The message
@@ -819,32 +769,15 @@ def decode_returned_image(
 
     The single implementation of the ``returns`` contract, shared by the
     ``library`` and ``cli`` adapters, so a target's own convention is decoded in
-    one place:
-
-    ``raw_bytes``
-        `value` is the artefact itself, as ``bytes`` (``bytearray`` and
-        ``memoryview`` are normalised).
-    ``base64``
-        `value` is base64 text, as a ``str`` or as ASCII ``bytes``, decoded with
-        ``validate=True`` so a stray character is a failure rather than silently
-        skipped.
-    ``bytes_path``
-        `value` is a path the *target* chose, holding the artefact.
-    ``file_path``
-        `value` is a path the *framework* supplied (the ``output_arg`` or
-        ``kwargs_map`` output path) which the target then wrote.
-
-    A relative path is resolved against `base_dir` when one is given, which is how
-    a CLI target's working directory is honoured without the adapter rewriting the
-    path the target reported.
-
-    Args:
-        value: What the target returned, or the path it wrote.
-        returns: The configured ``returns`` kind.
-        base_dir: Directory a relative path from the target is resolved against.
-
-    Returns:
-        The artefact bytes, never empty.
+    one place: ``raw_bytes`` is the artefact itself as ``bytes`` (``bytearray``
+    and ``memoryview`` are normalised); ``base64`` is base64 text as a ``str`` or
+    ASCII ``bytes``, decoded with ``validate=True`` so a stray character is a
+    failure rather than silently skipped; ``bytes_path`` is a path the *target*
+    chose, holding the artefact; and ``file_path`` is a path the *framework*
+    supplied (the ``output_arg`` or ``kwargs_map`` output path) which the target
+    then wrote.  A relative path is resolved against `base_dir` when one is given,
+    which is how a CLI target's working directory is honoured without the adapter
+    rewriting the path the target reported.
 
     Raises:
         TargetContractError: `value` does not match `returns` (wrong type, an
@@ -968,29 +901,21 @@ def _path_bytes(
 def resolve_dotted_path(data: object, path: str) -> object:
     """Walk `path` into `data`, supporting mapping keys and sequence indices.
 
-    This is the one dotted-path lookup in the product; the ``cli`` and ``http``
-    adapters both import it, so a configured ``image_field`` or ``metadata_map``
-    source means the same thing for either transport.  A segment is read as a
-    mapping key when the current value is a mapping and as a zero-based index when
-    it is a sequence of items -- ``"images.0.png"`` reads key ``images``, then
-    element ``0``, then key ``png``.
-
-    The raw response body is *not* reachable through this function: ``_body``
-    names it and is handled by the ``http`` adapter, because it is a property of
-    that transport rather than of a path into a parsed value.
-
-    Args:
-        data: The parsed response or metadata value to walk into.
-        path: A non-empty dotted path.
-
-    Returns:
-        The value the path names.
+    The one dotted-path lookup in the product; the ``cli`` and ``http`` adapters
+    both import it, so a configured ``image_field`` or ``metadata_map`` source
+    means the same thing for either transport.  A segment is read as a mapping key
+    when the current value is a mapping and as a zero-based index when it is a
+    sequence of items -- ``"images.0.png"`` reads key ``images``, then element
+    ``0``, then key ``png``.  The raw response body is *not* reachable through
+    this function: ``_body`` names it and is handled by the ``http`` adapter,
+    because it is a property of that transport rather than of a path into a
+    parsed value.
 
     Raises:
         KeyError: A segment is absent, a sequence segment is not a non-negative
             integer index, an index is out of range, or the current value is
-            neither a mapping nor a sequence.  ``KeyError`` is a ``LookupError``,
-            and the message carries the full path and the failing segment.
+            neither a mapping nor a sequence.  The message carries the full path
+            and the failing segment.
         ValueError: `path` is not a non-empty string -- a framework defect, since
             the configuration schema rejects an empty field path at load time.
     """
@@ -1043,22 +968,12 @@ def apply_metadata_map(
     The four framework fields are exactly ``version``, ``ec``, ``mask`` and
     ``mode``.  Each configured entry maps one of them to the source key or dotted
     path that carries it in the target's response, so no vendor field name is ever
-    hard-coded in an adapter.
-
-    The values returned are the target's claims: evidence for
-    ``GeneratedSymbol.declared_*``, never the assertion a check makes.  ``version``
-    and ``mask`` are coerced to integers, ``ec`` and ``mode`` to stripped text.
-
-    Args:
-        raw: The parsed metadata the target reported.
-        metadata_map: Framework field name to source key or dotted path.  An empty
-            mapping returns an empty result without touching `raw`, which is the
-            normal case for a target that reports nothing.
-
-    Returns:
-        A mapping from each *configured* framework field to its coerced value, in
-        :data:`METADATA_FIELDS` order.  A field that is not configured is absent
-        rather than ``None``.
+    hard-coded in an adapter.  The values returned are the target's claims:
+    evidence for ``GeneratedSymbol.declared_*``, never the assertion a check
+    makes.  ``version`` and ``mask`` are coerced to integers, ``ec`` and ``mode``
+    to stripped text, and a field that is not configured is absent rather than
+    ``None``; an empty mapping returns an empty result without touching `raw`,
+    which is the normal case for a target that reports nothing.
 
     Raises:
         TargetContractError: A configured source is absent from `raw`, resolves to
@@ -1159,13 +1074,6 @@ def ensure_image_bytes(data: bytes, output_format: str) -> bytes:
     image library -- Pillow is reachable only through ``qrcheck/evidence/mux.py``.
     Whether the bytes are a *valid* image is decided later, by the decode layer,
     and must not be duplicated here.
-
-    Args:
-        data: The artefact the target returned.
-        output_format: The format the request asked for.
-
-    Returns:
-        The bytes, unchanged, when they pass the gate.
 
     Raises:
         TargetContractError: The body is empty, unrecognisable, or recognisably a

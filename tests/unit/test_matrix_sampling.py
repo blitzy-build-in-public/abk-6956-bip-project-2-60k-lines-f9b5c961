@@ -1,48 +1,35 @@
 """Grid sampling: ``N = 4V + 17`` read from pixels, the snap, the fallback and ``sampling_failed``.
 
-:mod:`qrcheck.decode.matrix` is the product's **only** version source. The pinned
-``zxing-cpp`` 2.2.0 reports no version and no mask, and the secondary decoder reports
-neither, yet ``SY-VERSION-MIN``, ``SY-MASK``, ``SY-MATRIX-EQUIV`` and the measured quiet
-zone all read the module grid -- so one sampling defect corrupts four checks at once while
-each of them keeps returning a confident verdict. That failure mode, described in AAP
-§0.8.1 ("How ``N`` is chosen, and what happens when it cannot be"), is what this module
-exists to prevent, and it is why the refusal paths below are exercised as carefully as the
+:mod:`qrcheck.decode.matrix` is the product's **only** version source: the pinned ``zxing-cpp``
+2.2.0 reports no version and no mask, the secondary decoder reports neither, yet
+``SY-VERSION-MIN``, ``SY-MASK``, ``SY-MATRIX-EQUIV`` and the measured quiet zone all read the
+module grid -- so one sampling defect corrupts four checks at once while each of them keeps
+returning a confident verdict. That is why the refusal paths are exercised as carefully as the
 happy path: ``sampling_failed`` is a diagnosis, a shifted grid is a wrong answer.
 
-Every image is synthesised in-fixture. :func:`segno.make_qr` supplies the module matrix,
-``segno`` renders it at a known module size and quiet zone, and
-:mod:`qrcheck.evidence.mux` is the image boundary in both directions
-(:func:`~qrcheck.evidence.mux.decode_image` for the pixel array,
-:func:`~qrcheck.evidence.mux.encode_png` for the inverted artefact the quiet-zone case
-needs). Because the geometry is therefore known exactly, the four symbol corners are
-handed to the sampler as its ``position`` quad instead of being obtained from a decoder,
-so no decoder is needed for the pixel-level cases and nothing here touches the network, a
+Every image is synthesised in-fixture: ``segno.make_qr`` supplies the module matrix, ``segno``
+renders it at a known module size and quiet zone, and :mod:`qrcheck.evidence.mux` is the image
+boundary in both directions. Because the geometry is therefore known exactly, the four symbol
+corners are handed to the sampler as its ``position`` quad instead of being obtained from a
+decoder, so the pixel-level cases need no decoder and nothing here touches the network, a
 subprocess or a file outside ``tmp_path``.
 
-What is asserted, and why each assertion carries weight:
-
-* the sampled grid is element for element the oracle's matrix and its dimension is
-  ``4V + 17`` -- Version 40 (177 modules) is included because an implementation that snaps
-  to 178 produces a grid one module too wide and every downstream matrix assertion fails
-  with a confusing message;
-* :func:`~qrcheck.decode.matrix.version_from_dimension` inverts
-  :func:`~qrcheck.decode.matrix.module_count_for_version` over Versions 1-40 and refuses
-  every illegal dimension instead of silently snapping it;
-* the finder pattern's dark run, the pitch it implies, the snap to a legal count and the
-  timing-pattern confirmation are all measured, so a pitch estimator that reads seven
-  modules as six fails here rather than inside four other checks;
-* a count the pitch guard accepts but the timing pattern does not is **refused**, and the
-  refusal keeps its numbers, the rectified square and the transition counts, which is what
-  the evidence store needs to explain it;
-* the ``straight_qrcode`` fallback recovers the grid when no quadrangle is available, and
-  marks the path it took;
-* when both paths fail the result is ``None`` with ``reason="sampling_failed"``, and the
-  matrix-dependent checks report that reason rather than a verdict;
-* sampling imports no decoder, so it survives single-decoder mode (AAP §0.3.2).
-
-No threshold of ``qrcheck.toml`` appears in this file (AAP §0.4.3): the rendering
-parameters are this module's own fixture constants, and the module-size tolerance belongs
-to ``RN-MODULE-SIZE`` rather than to sampling.
+Pinned: the sampled grid is element for element the oracle's matrix with dimension ``4V + 17``,
+Version 40 included, because an implementation that snaps to 178 produces a grid one module too
+wide and every downstream matrix assertion fails with a confusing message;
+:func:`~qrcheck.decode.matrix.version_from_dimension` inverts
+:func:`~qrcheck.decode.matrix.module_count_for_version` over Versions 1-40 and refuses every
+illegal dimension instead of silently snapping it; the finder pattern's dark run, the pitch it
+implies, the snap to a legal count and the timing-pattern confirmation are all measured, so a pitch
+estimator that reads seven modules as six fails here rather than inside four other checks; a count
+the pitch guard accepts but the timing pattern does not is **refused**, and the refusal keeps its
+numbers, the rectified square and the transition counts, which is what the evidence store needs to
+explain it; the ``straight_qrcode`` fallback recovers the grid when no quadrangle is available and
+marks the path it took; both paths failing gives ``None`` with ``reason="sampling_failed"``, which
+the matrix-dependent checks report rather than a verdict; and sampling imports no decoder, so it
+survives single-decoder mode (AAP §0.3.2). No threshold of ``qrcheck.toml`` appears in this file
+(AAP §0.4.3): the rendering parameters are this module's own fixture constants and the module-size
+tolerance belongs to ``RN-MODULE-SIZE``.
 """
 
 from __future__ import annotations
@@ -142,24 +129,10 @@ def _render(
     scale: int = _MODULE_SIZE_PX,
     border: int = _QUIET_ZONE_MODULES,
 ) -> tuple[segno.QRCode, bytes]:
-    """Render one Model 2 symbol and return it with the PNG bytes of its raster.
-
-    ``segno.make_qr`` is Model 2 by construction and takes no ``micro`` argument, which is
-    why it is used instead of ``segno.make`` (that one returns a Micro QR symbol for a
-    short payload, and a Micro symbol has no ``4V + 17`` dimension at all). ``boost_error``
-    is disabled so the pinned version and error level are the ones the oracle actually
-    encodes with, exactly as every other call site in the product does (AAP §0.3.5).
-
-    Args:
-        version: The version to pin, 1-40.
-        ec_level: The error-correction level to pin.
-        payload: The payload to encode.
-        scale: Pixels per module.
-        border: Quiet zone in modules.
-
-    Returns:
-        ``(symbol, png_bytes)``, where ``png_bytes`` is the raster at exactly
-        ``(module_count + 2 * border) * scale`` pixels per side.
+    """Render one Model 2 symbol and return it with the PNG bytes of its raster. ``segno.make_qr``
+    is Model 2 by construction and takes no ``micro`` argument, which is why it is used instead
+    of ``segno.make`` (that one returns a Micro QR symbol for a short payload, and a Micro
+    symbol has no ``4V + 17`` dimension at all).
     """
     symbol = segno.make_qr(payload, version=version, error=ec_level, boost_error=False)
     stream = io.BytesIO()
@@ -169,16 +142,9 @@ def _render(
 
 def _luma(png_bytes: bytes) -> numpy.ndarray:
     """Return a rendered PNG as the two-dimensional ``uint8`` luminance array the sampler takes.
-
-    This is the production path for an artefact: the bytes are opened through the
-    framework's single image boundary, and only the mode is normalised here, because Pillow
-    may hand back a bitonal image whose array is not ``uint8``.
-
-    Args:
-        png_bytes: A PNG artefact.
-
-    Returns:
-        A ``numpy.uint8`` array of shape ``(H, W)``.
+    This is the production path for an artefact: the bytes are opened through the framework's
+    single image boundary, and only the mode is normalised here, because Pillow may hand back a
+    bitonal image whose array is not ``uint8``.
     """
     image = decode_image(png_bytes)
     if image.mode != "L":
@@ -187,19 +153,10 @@ def _luma(png_bytes: bytes) -> numpy.ndarray:
 
 
 def _inverted(png_bytes: bytes) -> bytes:
-    """Return the 255-complement of a rendered PNG, encoded back to PNG bytes.
-
-    A light-on-dark symbol is a legal request (``RN-CONTRAST``) but the inverse of what a
-    finder-pattern measurement expects, so it is the cheapest way to produce a valid image
-    whose module geometry genuinely cannot be established. The transform goes through the
-    image object the framework's own decoder returned, so no part of this module opens or
-    encodes an image for itself.
-
-    Args:
-        png_bytes: A PNG artefact.
-
-    Returns:
-        The inverted artefact's PNG bytes.
+    """Return the 255-complement of a rendered PNG, encoded back to PNG bytes. A light-on-dark
+    symbol is a legal request (``RN-CONTRAST``) but the inverse of what a finder-pattern
+    measurement expects, so it is the cheapest way to produce a valid image whose module
+    geometry genuinely cannot be established.
     """
     image = decode_image(png_bytes)
     if image.mode != "L":
@@ -208,17 +165,9 @@ def _inverted(png_bytes: bytes) -> bytes:
 
 
 def _oracle_grid(symbol: segno.QRCode) -> Matrix:
-    """Return the oracle's module matrix as the sampler's own matrix type.
-
-    segno exposes the matrix as rows of ``0``/``1`` bytes; the sampler works in
-    ``numpy.bool_`` with ``True`` for a dark module, so the conversion is stated once here
-    instead of at each call site.
-
-    Args:
-        symbol: The rendered symbol.
-
-    Returns:
-        A ``(N, N)`` ``numpy.bool_`` array, ``True`` for a dark module.
+    """Return the oracle's module matrix as the sampler's own matrix type. segno exposes the
+    matrix as rows of ``0``/``1`` bytes; the sampler works in ``numpy.bool_`` with ``True`` for
+    a dark module, so the conversion is stated once here instead of at each call site.
     """
     return numpy.array(
         [[bool(module) for module in row] for row in symbol.matrix], dtype=numpy.bool_
@@ -231,21 +180,9 @@ def _quad_around_symbol(
     span_modules: float | None = None,
     offset_modules: float = 0.0,
 ) -> list[tuple[float, float]]:
-    """Return four symbol corners in source-image pixels for a known rendered symbol.
-
-    A decoder reports the symbol's own corners, which exclude the quiet zone, so the quad
-    starts ``border * scale`` pixels in. The two knobs are what make the refusal cases
-    reachable: ``span_modules`` changes how many modules the quad covers (a quad that
-    overshoots the symbol is a wrong pitch), and ``offset_modules`` shifts it off the
-    symbol's corner (a quad that starts light cannot measure a finder pattern).
-
-    Args:
-        version: The version the rendered symbol has, which fixes its module count.
-        span_modules: Modules the quad covers per side; defaults to the symbol's own count.
-        offset_modules: Displacement in modules, applied to both axes.
-
-    Returns:
-        The four corners in traversal order.
+    """Return four symbol corners in source-image pixels for a known rendered symbol. A decoder
+    reports the symbol's own corners, which exclude the quiet zone, so the quad starts ``border
+    * scale`` pixels in.
     """
     module_count = module_count_for_version(version)
     side = (module_count if span_modules is None else span_modules) * _MODULE_SIZE_PX
@@ -259,18 +196,7 @@ def _quad_around_symbol(
 
 
 def _one_pixel_per_module(version: int, ec_level: str) -> numpy.ndarray:
-    """Return a symbol rendered at exactly one pixel per module and no quiet zone.
-
-    That is the shape the secondary decoder hands over as ``straight_qrcode``, and the
-    shape of the fallback path's input.
-
-    Args:
-        version: The version to pin.
-        ec_level: The error-correction level to pin.
-
-    Returns:
-        A ``(N, N)`` ``uint8`` array.
-    """
+    """Return a symbol rendered at exactly one pixel per module and no quiet zone."""
     _, png_bytes = _render(version, ec_level, scale=1, border=0)
     return _luma(png_bytes)
 
@@ -288,12 +214,9 @@ def _one_pixel_per_module(version: int, ec_level: str) -> numpy.ndarray:
     ],
 )
 def test_sampled_matrix_matches_the_oracle(version: int, ec_level: str) -> None:
-    """The sampled grid equals segno's matrix, element for element, at the known geometry.
-
-    The whole point of grid sampling: the product has no other version source, so the grid
-    it recovers has to be the grid the encoder wrote. The quadrangle is the symbol's own
-    bounding box, which is the geometry a decoder reports, and ``straight_qrcode`` is
-    omitted entirely -- the primary path must need nothing from the secondary decoder.
+    """The sampled grid equals segno's matrix, element for element, at the known geometry. The
+    whole point of grid sampling: the product has no other version source, so the grid it
+    recovers has to be the grid the encoder wrote.
     """
     symbol, png_bytes = _render(version, ec_level)
     expected = _oracle_grid(symbol)
@@ -316,12 +239,10 @@ def test_sampled_matrix_matches_the_oracle(version: int, ec_level: str) -> None:
 
 def test_sampling_the_same_image_twice_yields_the_same_digest() -> None:
     """Two samplings of one artefact are byte-identical, and hash exactly as the oracle's grid.
-
     ``matrix_sha256`` is what ``DT-DETERMINISTIC`` compares across two calls of an identical
     request, so a sampler that produced a different grid from identical pixels -- a
     dictionary-ordered tap, a rounding wobble -- would be reported as a non-deterministic
-    target. The digest is also compared against the oracle's grid, which is the stronger
-    statement: the sampler reproduces the encoder, not merely itself.
+    target.
     """
     symbol, png_bytes = _render(2, "M")
     image = _luma(png_bytes)
@@ -353,11 +274,8 @@ def test_version_from_dimension_inverts_the_module_count() -> None:
 @pytest.mark.parametrize("dimension", _ILLEGAL_DIMENSIONS)
 def test_illegal_dimensions_are_refused_rather_than_snapped(dimension: int) -> None:
     """A dimension that is not a legal ``4V + 17`` yields ``None``; it is never rounded.
-
     Documented contract of :func:`~qrcheck.decode.matrix.version_from_dimension`: an
-    out-of-range count, a negative one and one not congruent to 1 modulo 4 all return
-    ``None``. A helper that snapped instead would hand a version to every consumer of a
-    garbled grid.
+    out-of-range count, a negative one and one not congruent to 1 modulo 4 all return ``None``.
     """
     assert version_from_dimension(dimension) is None
 
@@ -385,15 +303,12 @@ def test_module_count_for_version_refuses_a_value_that_is_not_an_integer(value: 
 
 
 def test_estimate_measures_the_finder_pitch_and_confirms_the_timing_pattern() -> None:
-    """Each measurement the snapshot of ``N`` rests on is pinned to its exact known value.
-
-    The rendered pitch is known, so the estimator's numbers are asserted rather than
-    compared against a second run of the same code: the finder pattern's dark run is seven
-    modules wide (ISO/IEC 18004 §7.3.3), the pitch is that run over seven, the estimate is
-    the square's side over the pitch, the snap lands on the legal count, and the timing
-    pattern shows exactly ``N - 16`` alternations on both axes (§7.3.5). A pitch estimator
-    that divided the run by six would move the estimate, the pitch and the snap, and this
-    test is what fails first.
+    """Each measurement the snapshot of ``N`` rests on is pinned to its exact known value. The
+    rendered pitch is known, so the estimator's numbers are asserted rather than compared
+    against a second run of the same code: the finder pattern's dark run is seven modules wide
+    (ISO/IEC 18004 §7.3.3), the pitch is that run over seven, the estimate is the square's side
+    over the pitch, the snap lands on the legal count, and the timing pattern shows exactly ``N
+    - 16`` alternations on both axes (§7.3.5).
     """
     version = 2
     module_count = module_count_for_version(version)
@@ -414,15 +329,11 @@ def test_estimate_measures_the_finder_pitch_and_confirms_the_timing_pattern() ->
 
 
 def test_a_quad_that_overshoots_the_symbol_is_refused_by_the_timing_pattern() -> None:
-    """A wrong pitch is snapped by the pitch guard and then refused by the timing pattern.
-
-    The quadrangle spans two modules more than the symbol, so the pitch measured from the
-    finder pattern is right while the square is too wide: the estimate lands between legal
-    counts, snaps to the symbol's own count because the implied pitch is still within
-    tolerance, and only the timing pattern can reject it. That is the second guard doing
-    the work the first could not, and the refusal has to keep its numbers -- the estimate,
-    the transition counts and the rectified square -- because that is everything a reader
-    of the evidence has to explain the failure.
+    """A wrong pitch is snapped by the pitch guard and then refused by the timing pattern. The
+    quadrangle spans two modules more than the symbol, so the pitch measured from the finder
+    pattern is right while the square is too wide: the estimate lands between legal counts,
+    snaps to the symbol's own count because the implied pitch is still within tolerance, and
+    only the timing pattern can reject it.
     """
     version = 1
     module_count = module_count_for_version(version)
@@ -452,11 +363,10 @@ def test_a_quad_that_overshoots_the_symbol_is_refused_by_the_timing_pattern() ->
 
 
 def test_a_quad_that_begins_inside_the_symbol_finds_no_finder_pattern() -> None:
-    """A quadrangle offset off the symbol's corner starts light, so no pitch exists at all.
-
-    This is the case the module's own documentation calls out: a quad that does not begin at
-    the symbol's corner is *refused*, never silently re-anchored from the rectified image's
-    dark extent, because re-anchoring would turn a wrong measurement into a confident one.
+    """A quadrangle offset off the symbol's corner starts light, so no pitch exists at all. This
+    is the case the module's own documentation calls out: a quad that does not begin at the
+    symbol's corner is *refused*, never silently re-anchored from the rectified image's dark
+    extent, because re-anchoring would turn a wrong measurement into a confident one.
     """
     version = 1
     _, png_bytes = _render(version, "M")
@@ -475,12 +385,10 @@ def test_a_quad_that_begins_inside_the_symbol_finds_no_finder_pattern() -> None:
 
 
 def test_a_pitch_no_legal_count_can_match_is_refused_before_sampling() -> None:
-    """A square far too narrow for the measured pitch snaps to nothing at all.
-
-    With the quadrangle covering twelve modules of a twenty-one-module symbol the estimate
-    is twelve, whose nearest legal counts imply a pitch more than the tolerance away from
-    the measured one, so the count is refused *before* a grid is sampled and the reason says
-    so. This is the first of the two guards, on its own.
+    """A square far too narrow for the measured pitch snaps to nothing at all. With the quadrangle
+    covering twelve modules of a twenty-one-module symbol the estimate is twelve, whose nearest
+    legal counts imply a pitch more than the tolerance away from the measured one, so the count
+    is refused *before* a grid is sampled and the reason says so.
     """
     version = 1
     module_count = module_count_for_version(version)
@@ -504,12 +412,8 @@ def test_a_pitch_no_legal_count_can_match_is_refused_before_sampling() -> None:
 
 def test_the_rectified_fallback_recovers_the_grid_without_a_quadrangle() -> None:
     """With no ``position`` at all, the secondary decoder's rectified image still yields the grid.
-
     The fallback exists because the secondary decoder hands over an already-rectified square
-    for free, so a symbol whose quadrangle the primary decoder never reported stays
-    measurable. What is asserted beyond the grid is that the path is *labelled*: ``source``
-    names ``straight_qrcode`` on the result and in its evidence projection, so no reader can
-    mistake a fallback sampling for a primary one.
+    for free, so a symbol whose quadrangle the primary decoder never reported stays measurable.
     """
     version = 2
     module_count = module_count_for_version(version)
@@ -532,12 +436,8 @@ def test_the_rectified_fallback_recovers_the_grid_without_a_quadrangle() -> None
 
 
 def test_both_paths_refusing_yields_sampling_failed() -> None:
-    """No quadrangle and no usable rectified image is a failure, and it says so.
-
-    The shape asserted here is the one the checks branch on: ``matrix``, ``version`` and
-    ``module_count`` are all ``None`` and ``reason`` is ``sampling_failed``, which is a
-    diagnosis a check can report instead of inventing a verdict from an absent grid. The
-    estimate carries the last path's reason, so the evidence names what was unusable.
+    """No quadrangle and no usable rectified image is a failure, and it says so. The estimate
+    carries the last path's reason, so the evidence names what was unusable.
     """
     _, png_bytes = _render(1, "M")
     non_square = numpy.zeros((21, 22), dtype=numpy.uint8)
@@ -555,12 +455,9 @@ def test_both_paths_refusing_yields_sampling_failed() -> None:
 
 
 def test_a_refused_primary_with_an_unusable_fallback_still_reports_its_diagnosis() -> None:
-    """When every path refuses, the numbers behind the refusal survive into the evidence.
-
-    A quadrangle that was rectified but not accepted leaves a measured estimate behind, and
-    the flat fallback that follows it is refused for its own reason. Whichever estimate is
-    finally reported, the result is a ``sampling_failed`` with a reason, a numeric record
-    and -- because the caller asked for it -- the rectified square, never a wrong grid.
+    """When every path refuses, the numbers behind the refusal survive into the evidence. A
+    quadrangle that was rectified but not accepted leaves a measured estimate behind, and the
+    flat fallback that follows it is refused for its own reason.
     """
     version = 1
     module_count = module_count_for_version(version)
@@ -587,12 +484,9 @@ def test_a_refused_primary_with_an_unusable_fallback_still_reports_its_diagnosis
 def test_version_min_reports_sampling_failed_when_no_grid_is_recovered(
     run_context: Any, patch_decode: Any, make_decode_result: Any
 ) -> None:
-    """``SY-VERSION-MIN`` fails with ``sampling_failed``, not with a version mismatch.
-
-    The check's version comes from the grid and from nowhere else, so a decode result that
-    carries no ``version`` must produce the sampling reason. Reporting ``value_mismatch``
-    instead would blame the target for a measurement the framework could not take, and
-    scoring it as a pass would hide a broken sampler behind a green run.
+    """``SY-VERSION-MIN`` fails with ``sampling_failed``, not with a version mismatch. The check's
+    version comes from the grid and from nowhere else, so a decode result that carries no
+    ``version`` must produce the sampling reason.
     """
     patch_decode(make_decode_result(matrix=None, version=None, mask=None))
     cases = list(SY_VERSION_MIN.cases(run_context))
@@ -609,12 +503,10 @@ def test_version_min_reports_sampling_failed_when_no_grid_is_recovered(
 def test_quiet_zone_reports_sampling_failed_when_no_pitch_can_be_measured(
     make_run_context: Any, stub_adapter: Any
 ) -> None:
-    """``RN-QUIET-ZONE`` fails with ``sampling_failed`` when the artefact defeats measurement.
-
-    The quiet zone is measured arithmetically from the modules' pitch, so an artefact whose
-    module geometry cannot be established -- here a valid, decodable symbol in the inverted
-    polarity, which no finder-pattern measurement recognises -- has no quiet-zone verdict to
-    report. It must therefore report the sampling reason rather than a measured margin.
+    """``RN-QUIET-ZONE`` fails with ``sampling_failed`` when the artefact defeats measurement. The
+    quiet zone is measured arithmetically from the modules' pitch, so an artefact whose module
+    geometry cannot be established -- here a valid, decodable symbol in the inverted polarity,
+    which no finder-pattern measurement recognises -- has no quiet-zone verdict to report.
     """
     _, png_bytes = _render(1, "M")
     inverted = _inverted(png_bytes)
@@ -638,14 +530,10 @@ def test_quiet_zone_reports_sampling_failed_when_no_pitch_can_be_measured(
 
 def test_sampling_imports_no_decoder() -> None:
     """The sampler's import graph is pinned: no ``cv2``, no ``PIL``, no decoder, no oracle.
-
-    Single-decoder mode is a supported degradation (AAP §0.3.2), so grid sampling has to
-    work when the secondary decoder is not installed at all -- which means the module may
-    not import ``cv2``, and it may not import the primary decoder or Pillow either, because
-    it takes arrays and returns arrays. The runtime half of the same property is
-    :func:`test_sampled_matrix_matches_the_oracle`, which samples with no
-    ``straight_qrcode`` and no decoder involvement whatsoever; this half is the static scan
-    that keeps a later convenience import from quietly reintroducing the dependency.
+    Single-decoder mode is a supported degradation (AAP §0.3.2), so grid sampling has to work
+    when the secondary decoder is not installed at all -- which means the module may not import
+    ``cv2``, and it may not import the primary decoder or Pillow either, because it takes
+    arrays and returns arrays.
     """
     module = importlib.import_module("qrcheck.decode.matrix")
     source = Path(module.__file__).read_text(encoding="utf-8")

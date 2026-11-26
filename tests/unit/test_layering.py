@@ -1,53 +1,30 @@
 """The inward-only dependency direction, held mechanically by an AST scan of the package.
 
-What this module settles
-------------------------
-The architecture's dependency direction is a contract, not a convention: the check layer sees
-the adapter port and nothing else of the adapter layer, the adapter layer never sees the check
-layer, and the product never depends on its own test suite (AAP §0.3.2, §0.3.4 "Extension
-boundary", NFR-6, §0.12).  This module asserts that contract by reading the package's source,
-so a breach fails a test instead of relying on a reviewer to notice it:
+The architecture's dependency direction is a contract, not a convention (AAP §0.3.2, §0.3.4
+"Extension boundary", NFR-6, §0.12), and this module asserts it by reading the package's source, so
+a breach fails a test instead of relying on a reviewer: ``qrcheck/checks/**`` may import
+``qrcheck.targets.base`` and nothing else from ``qrcheck.targets`` -- not a concrete adapter, and
+not the ``qrcheck.targets`` package itself, whose entry point is the only module allowed to know
+the concrete class names, since denying only the five leaf names would leave ``import
+qrcheck.targets`` and ``from qrcheck.targets import Capability`` open; ``qrcheck/targets/**`` never
+imports ``qrcheck.checks`` in any spelling; nothing under ``qrcheck/`` imports anything under
+``tests``; and the scan cannot pass vacuously, because both subtrees must still hold the modules
+the plan's tree fixes, synthetic offenders must be flagged by the same collector the assertions
+use, and the modules permitted to name a concrete adapter are one explicit, sorted allow-list.
 
-1. ``qrcheck/checks/**`` may import ``qrcheck.targets.base`` and nothing else from
-   ``qrcheck.targets`` -- not a concrete adapter, and not the ``qrcheck.targets`` package
-   itself, which is the adapter layer's entry point and the only module allowed to know the
-   concrete class names.  Denying only the five leaf module names would leave
-   ``import qrcheck.targets`` and ``from qrcheck.targets import Capability`` open, and those
-   are the spellings a check drifts into when it wants "the adapter" rather than the port.
-2. ``qrcheck/targets/**`` never imports ``qrcheck.checks`` in any spelling.
-3. Nothing under ``qrcheck/`` imports anything under ``tests``.
-4. The scan cannot pass vacuously: both subtrees must still hold the modules the plan's tree
-   fixes, synthetic offenders must be flagged by the same collector the assertions use, and
-   the modules permitted to name a concrete adapter are one explicit, sorted allow-list.
+Why the AST and not a search over the source text: a comment, a docstring or a log line that
+mentions ``qrcheck.targets.cli`` is not a dependency and a text search would report it as one,
+while the same search also misses the relative spelling -- every import here is read from the
+parsed tree, and a relative ``from ..targets.cli import CliAdapter`` is resolved through the
+importing file's own package path before it is judged.
 
-Why the AST, and not a search over the source text
---------------------------------------------------
-A comment, a docstring or a log line that mentions ``qrcheck.targets.cli`` is not a dependency,
-and a text search would report it as one; the same search also misses the relative spelling.
-Every import here is read from the parsed tree, and a relative ``from ..targets.cli import
-CliAdapter`` is resolved through the importing file's own package path before it is judged, so
-both spellings of one breach are seen and neither a comment nor a string literal is mistaken
-for a dependency.
-
-Limitations, stated rather than discovered later
-------------------------------------------------
-* A module name computed at run time -- ``importlib.import_module(name)`` with a variable --
-  is invisible to any static scan.  A *literal* adapter module name passed to
-  ``importlib.import_module`` or ``__import__`` is caught here, as is a literal adapter module
-  name stored in a table (:func:`_adapter_references`).  A computed one would still fail
-  review and the factory assertions of ``tests/unit/test_adapter_types.py``.
-* The scan judges the two boundaries the plan names.  It is not a general import-cycle
-  detector: :mod:`qrcheck.registry` reaching :mod:`qrcheck.checks` is the runner's concern.
-* Nothing is written to disk and no verdict is stored: the tree is parsed once per process
-  from the files on disk, so a fresh run always re-reads them.
-
-What this module must never do
-------------------------------
-It imports no part of the product (:func:`test_this_module_does_not_import_the_product` holds
-that): it reads source text, so a package that cannot be imported cannot mask a layering
-breach by failing first.  It writes no file, opens no socket, starts no process, skips
-nothing, retries nothing and carries no tunable threshold -- the two module counts below are
-the plan's tree inventory, not a limit to retune.
+Limitations, stated rather than discovered later: a module name computed at run time is invisible
+to any static scan, though a literal adapter module name passed to ``importlib.import_module`` or
+``__import__``, or stored in a table, is caught (:func:`_adapter_references`); the scan judges the
+two boundaries the plan names and is not a general import-cycle detector; and no verdict is stored,
+so a fresh run always re-reads the files on disk. The module imports no part of the product
+(:func:`test_this_module_does_not_import_the_product` holds that), because a package that cannot be
+imported must not be able to mask a layering breach by failing first.
 """
 
 from __future__ import annotations
@@ -124,13 +101,7 @@ _IMPORT_HOOKS: Final[frozenset[str]] = frozenset({"import_module", "__import__"}
 
 
 class _Reference(NamedTuple):
-    """One module reference found in a source file.
-
-    Attributes:
-        path: Repository-relative POSIX path of the file the reference sits in.
-        lineno: Line of the import statement or of the literal, as the AST reports it.
-        module: The absolute dotted module path the reference reaches.
-    """
+    """One module reference found in a source file."""
 
     path: str
     lineno: int
@@ -138,33 +109,20 @@ class _Reference(NamedTuple):
 
 
 def _python_files(root: Path) -> tuple[Path, ...]:
-    """Return every ``.py`` file under ``root``, sorted, excluding bytecode caches.
-
-    Sorted so that a diagnostic lists offenders in a stable order, which is what lets a reader
-    diff two failures and lets this module's own messages be asserted verbatim.
+    """Return every ``.py`` file under ``root``, sorted, excluding bytecode caches. Sorted so that
+    a diagnostic lists offenders in a stable order, which is what lets a reader diff two
+    failures and lets this module's own messages be asserted verbatim.
     """
     return tuple(sorted(path for path in root.rglob("*.py") if "__pycache__" not in path.parts))
 
 
 def _package_of(path: str) -> str:
-    """Return the dotted package a repository-relative module path lives in.
-
-    ``qrcheck/checks/support.py`` and ``qrcheck/checks/__init__.py`` both yield
-    ``qrcheck.checks``: the file name -- or ``__init__`` -- is dropped and the directory parts
-    become the package, which is what makes a relative import resolvable.
-    """
+    """Return the dotted package a repository-relative module path lives in."""
     return ".".join(path.split("/")[:-1])
 
 
 def _absolute_module(node: ast.ImportFrom, package: str) -> str:
-    """Resolve an ``ImportFrom`` to the absolute module it names, relative forms included.
-
-    One leading dot means "this package", two mean "the parent package", and so on.  The
-    resolved prefix is joined to the statement's module, so ``from ..targets.cli import X``
-    inside ``qrcheck/checks/`` reaches ``qrcheck.targets.cli`` and is judged as the breach it
-    is.  An empty ``module`` (``from . import base``) resolves to the package itself, whose
-    aliases the caller then joins.
-    """
+    """Resolve an ``ImportFrom`` to the absolute module it names, relative forms included."""
     if not node.level:
         return node.module or ""
     parts = package.split(".") if package else []
@@ -177,13 +135,9 @@ def _absolute_module(node: ast.ImportFrom, package: str) -> str:
 
 
 def _references(tree: ast.AST, path: str) -> tuple[_Reference, ...]:
-    """Return every module reference in one parsed file, sorted.
-
-    An ``ast.Import`` contributes each alias' name.  An ``ast.ImportFrom`` contributes the
-    resolved module *and* each ``module.alias``, so ``from qrcheck import targets`` is caught
-    as the ``qrcheck.targets`` reference it is and ``from qrcheck.targets import Capability``
-    fails on the package it names.  Only syntax reaches this function: a comment is absent from
-    the AST and a docstring is an expression, so neither can be mistaken for a dependency.
+    """Return every module reference in one parsed file, sorted. Only syntax reaches this
+    function: a comment is absent from the AST and a docstring is an expression, so neither can
+    be mistaken for a dependency.
     """
     package = _package_of(path)
     found: list[_Reference] = []
@@ -204,11 +158,10 @@ def _references(tree: ast.AST, path: str) -> tuple[_Reference, ...]:
 
 
 def _docstring_constants(tree: ast.AST) -> frozenset[int]:
-    """Return the identities of the string constants that are module, class or function docstrings.
-
-    Docstrings talk *about* the adapters throughout this package, so they must never count as
-    references; identifying them by ``id`` is exact, whereas any textual rule would have to
-    guess where prose ends.
+    """Return the identities of the string constants that are module, class or function
+    docstrings. Docstrings talk *about* the adapters throughout this package, so they must
+    never count as references; identifying them by ``id`` is exact, whereas any textual rule
+    would have to guess where prose ends.
     """
     bodies = (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)
     docstrings: set[int] = set()
@@ -227,12 +180,9 @@ def _docstring_constants(tree: ast.AST) -> frozenset[int]:
 
 
 def _literal_references(tree: ast.AST, path: str) -> tuple[_Reference, ...]:
-    """Return the references a file makes by naming an adapter module in code, not in prose.
-
-    Two spellings reach an adapter without an ``import`` statement: a literal module name
-    passed to ``importlib.import_module`` or ``__import__``, and a literal module name held in
-    a table -- which is exactly how the factory keeps its entries.  Both are recorded so a
-    module outside :data:`ALLOWED_ADAPTER_CONSUMERS` cannot reach an adapter that way either.
+    """Return the references a file makes by naming an adapter module in code, not in prose. Both
+    are recorded so a module outside :data:`ALLOWED_ADAPTER_CONSUMERS` cannot reach an adapter
+    that way either.
     """
     docstrings = _docstring_constants(tree)
     names = set(_ADAPTER_MODULES) | {_TARGETS}
@@ -253,13 +203,10 @@ def _literal_references(tree: ast.AST, path: str) -> tuple[_Reference, ...]:
 
 @lru_cache(maxsize=None)
 def _sources(root: Path) -> tuple[tuple[str, ast.AST], ...]:
-    """Parse every ``.py`` file under ``root`` once per process, as (path, tree) pairs.
-
-    The ASTs are memoised so the contract tests below cost one pass over the tree instead of
-    one each; the memo holds parsed source and nothing else -- no verdict, no allow-list
-    result, nothing read from disk a second time and nothing written anywhere.  A violation of
-    syntax raises :class:`SyntaxError` naming the file, which is the right failure: the scan
-    cannot certify a package it cannot parse.
+    """Parse every ``.py`` file under ``root`` once per process, as (path, tree) pairs. The ASTs
+    are memoised so the contract tests below cost one pass over the tree instead of one each;
+    the memo holds parsed source and nothing else -- no verdict, no allow-list result, nothing
+    read from disk a second time and nothing written anywhere.
     """
     base = root.parent
     parsed: list[tuple[str, ast.AST]] = []
@@ -271,11 +218,7 @@ def _sources(root: Path) -> tuple[tuple[str, ast.AST], ...]:
 
 
 def _scan(root: Path) -> tuple[_Reference, ...]:
-    """Return every import reference under ``root``, sorted across the whole subtree.
-
-    ``root`` is the package directory (a directory whose name is the top-level package), so
-    every path this returns is repository-relative and comparable with the allow-lists above.
-    """
+    """Return every import reference under ``root``, sorted across the whole subtree."""
     found: list[_Reference] = []
     for relative, tree in _sources(root):
         found.extend(_references(tree, relative))
@@ -292,10 +235,9 @@ def _adapter_references(root: Path) -> tuple[_Reference, ...]:
 
 
 def _literal_scan(root: Path) -> tuple[_Reference, ...]:
-    """Return only the literal references under ``root``, without the import statements.
-
-    Split out so a control can assert what the literal half sees on its own: prose that names an
-    adapter must appear in neither half.
+    """Return only the literal references under ``root``, without the import statements. Split out
+    so a control can assert what the literal half sees on its own: prose that names an adapter
+    must appear in neither half.
     """
     found: list[_Reference] = []
     for relative, tree in _sources(root):
@@ -315,9 +257,7 @@ def _violations(
     scope: str | None,
     reaches: Callable[[str], bool],
 ) -> list[tuple[str, int, str]]:
-    """Return every reference that ``reaches`` accepts, one entry per offending statement.
-
-    ``scope`` limits the judgement to a subtree (``None`` judges the whole package).  One
+    """Return every reference that ``reaches`` accepts, one entry per offending statement. One
     statement can contribute several candidate module paths -- the resolved module plus each
     imported name -- so the shortest offending candidate is the one reported, and the entries
     come back sorted by ``(path, lineno)``: a failure lists every offender in a stable order
@@ -347,12 +287,10 @@ def _is_port(module: str) -> bool:
 
 
 def _beyond_the_port(module: str) -> bool:
-    """Report whether ``module`` reaches anything of the adapter layer but the port.
-
-    The ``qrcheck.targets`` package itself counts: it is the adapter layer's entry point and the
-    one module allowed to know the concrete class names, so a check importing it is reaching for
-    an implementation rather than the abstraction.  ``qrcheck.targets.base`` and the names
-    exported from it do not.
+    """Report whether ``module`` reaches anything of the adapter layer but the port. The
+    ``qrcheck.targets`` package itself counts: it is the adapter layer's entry point and the
+    one module allowed to know the concrete class names, so a check importing it is reaching
+    for an implementation rather than the abstraction.
     """
     if module == _TARGETS:
         return True
@@ -382,10 +320,8 @@ def _names_an_adapter(module: str) -> bool:
 
 def test_checks_layer_reaches_only_the_adapter_port() -> None:
     """``qrcheck/checks/**`` imports :mod:`qrcheck.targets.base` and nothing else of that layer.
-
     AAP §0.3.4: a check depends on the abstraction and never on a concrete implementation, so a
-    fourth adapter kind needs no change to any check.  An import of a concrete adapter here, or
-    of the package that holds them, breaks that property and fails this test.
+    fourth adapter kind needs no change to any check.
     """
     violations = _violations(_scan(_PRODUCT_ROOT), scope=_CHECKS_SCOPE, reaches=_beyond_the_port)
     assert not violations, (
@@ -396,11 +332,9 @@ def test_checks_layer_reaches_only_the_adapter_port() -> None:
 
 
 def test_target_layer_never_reaches_the_check_layer() -> None:
-    """``qrcheck/targets/**`` never imports :mod:`qrcheck.checks`, in any spelling.
-
-    The seam is one-directional: the port is written for its consumers, never against them, so
-    an adapter cannot be tailored to a check.  Relative spellings are resolved before judging,
-    which is why ``from ..checks import support`` is caught as the breach it is.
+    """``qrcheck/targets/**`` never imports :mod:`qrcheck.checks`, in any spelling. The seam is
+    one-directional: the port is written for its consumers, never against them, so an adapter
+    cannot be tailored to a check.
     """
     violations = _violations(
         _scan(_PRODUCT_ROOT), scope=_TARGETS_SCOPE, reaches=_reaches_the_check_layer
@@ -413,11 +347,9 @@ def test_target_layer_never_reaches_the_check_layer() -> None:
 
 
 def test_product_never_reaches_the_test_suite() -> None:
-    """Nothing under ``qrcheck/`` imports anything under ``tests``.
-
-    The product ships without its tests: an import of the suite from the package would make the
-    installed distribution depend on files that are not installed, and would let a fixture stand
-    in for production code.
+    """Nothing under ``qrcheck/`` imports anything under ``tests``. The product ships without its
+    tests: an import of the suite from the package would make the installed distribution depend
+    on files that are not installed, and would let a fixture stand in for production code.
     """
     violations = _violations(_scan(_PRODUCT_ROOT), scope=None, reaches=_reaches_the_test_suite)
     assert not violations, (
@@ -458,13 +390,7 @@ def test_scan_covers_the_planned_modules() -> None:
 
 
 def test_adapters_are_named_only_by_the_declared_modules() -> None:
-    """Only :data:`ALLOWED_ADAPTER_CONSUMERS` reaches an adapter, by import or by literal name.
-
-    The reverse direction of the first rule, covering both spellings a module can reach an
-    adapter with: an ``import`` statement, and a literal module name passed to
-    ``importlib.import_module`` or held in the factory's own table.  Adding a legitimate importer
-    is a one-line change to that sorted allow-list, with the plan item that permits it.
-    """
+    """Only :data:`ALLOWED_ADAPTER_CONSUMERS` reaches an adapter, by import or by literal name."""
     violations = _violations(
         _adapter_references(_PRODUCT_ROOT), scope=None, reaches=_names_an_adapter
     )
@@ -481,12 +407,7 @@ def test_adapters_are_named_only_by_the_declared_modules() -> None:
 
 
 def test_adapters_import_siblings_only_where_declared() -> None:
-    """Inside ``qrcheck/targets/``, an adapter reaches a sibling only where that is declared.
-
-    Adapters meet at the port, which is what lets one be added or replaced without touching the
-    others.  :data:`ALLOWED_SIBLING_ADAPTER_IMPORTERS` records the single declared exception --
-    the defective target building on the conforming one (AAP §0.4.2).
-    """
+    """Inside ``qrcheck/targets/``, an adapter reaches a sibling only where that is declared."""
     violations = _violations(_scan(_PRODUCT_ROOT), scope=_TARGETS_SCOPE, reaches=_names_an_adapter)
     unexpected = [
         entry for entry in violations if entry[0] not in ALLOWED_SIBLING_ADAPTER_IMPORTERS
@@ -499,11 +420,9 @@ def test_adapters_import_siblings_only_where_declared() -> None:
 
 
 def _control_tree(tmp_path: Path) -> Path:
-    """Write a miniature package of synthetic offenders and return its directory.
-
-    The tree mirrors the real layout (``qrcheck/checks``, ``qrcheck/targets``, ``qrcheck/cli``)
-    so the same collector, the same package-path resolution and the same scope filters judge it.
-    Each file exercises one spelling the real tree could use.
+    """Write a miniature package of synthetic offenders and return its directory. The tree mirrors
+    the real layout (``qrcheck/checks``, ``qrcheck/targets``, ``qrcheck/cli``) so the same
+    collector, the same package-path resolution and the same scope filters judge it.
     """
     package = tmp_path / _PACKAGE
     for directory in ("", "checks", "targets", "cli"):
@@ -537,11 +456,10 @@ def _control_tree(tmp_path: Path) -> Path:
 
 
 def test_scanner_flags_a_synthetic_checks_offender(tmp_path: Path) -> None:
-    """The collector reports an absolute, a relative and a package-only adapter reference.
-
-    The module's own sanity: if the resolver regressed -- a wrong package path, an unjoined
-    alias, a dropped relative level -- the rules above would still pass, and this test is what
-    fails instead.
+    """The collector reports an absolute, a relative and a package-only adapter reference. The
+    module's own sanity: if the resolver regressed -- a wrong package path, an unjoined alias,
+    a dropped relative level -- the rules above would still pass, and this test is what fails
+    instead.
     """
     package = _control_tree(tmp_path)
     violations = _violations(_scan(package), scope=_CHECKS_SCOPE, reaches=_beyond_the_port)
@@ -553,10 +471,9 @@ def test_scanner_flags_a_synthetic_checks_offender(tmp_path: Path) -> None:
 
 
 def test_scanner_ignores_prose_and_the_port(tmp_path: Path) -> None:
-    """A comment, a docstring and a port import are not dependencies and are never reported.
-
-    The AST, not a text search, is what makes this true: the same words that would fail a grep
-    sit in ``checks/prose.py`` beside a legal ``from qrcheck.targets.base import Adapter``.
+    """A comment, a docstring and a port import are not dependencies and are never reported. The
+    AST, not a text search, is what makes this true: the same words that would fail a grep sit
+    in ``checks/prose.py`` beside a legal ``from qrcheck.targets.base import Adapter``.
     """
     package = _control_tree(tmp_path)
     checks = _violations(_scan(package), scope=_CHECKS_SCOPE, reaches=_beyond_the_port)
@@ -571,11 +488,10 @@ def test_scanner_ignores_prose_and_the_port(tmp_path: Path) -> None:
 
 
 def test_scanner_flags_synthetic_literals_and_cross_layer_spellings(tmp_path: Path) -> None:
-    """A literal adapter name and both reversed directions are reported, with their lines.
-
-    The factory keeps its entries as literal module names, so the literal half of the scan is
-    what holds the allow-list over a lazily resolved table; the two reversed imports are the
-    other direction of the contract, checked here in the same synthetic tree.
+    """A literal adapter name and both reversed directions are reported, with their lines. The
+    factory keeps its entries as literal module names, so the literal half of the scan is what
+    holds the allow-list over a lazily resolved table; the two reversed imports are the other
+    direction of the contract, checked here in the same synthetic tree.
     """
     package = _control_tree(tmp_path)
     literals = _violations(
@@ -598,12 +514,9 @@ def test_scanner_flags_synthetic_literals_and_cross_layer_spellings(tmp_path: Pa
 
 
 def test_this_module_does_not_import_the_product() -> None:
-    """This module reads the product's source and never imports it.
-
-    The scan has to hold on a package that cannot be imported -- a half-installed checkout, a
-    missing native decoder -- or a broken import would mask the layering breach it is meant to
-    report.  The assertion uses this module's own collector, so the constraint is checked in
-    code rather than promised in a docstring.
+    """This module reads the product's source and never imports it. The scan has to hold on a
+    package that cannot be imported -- a half-installed checkout, a missing native decoder --
+    or a broken import would mask the layering breach it is meant to report.
     """
     own_path = Path(__file__).resolve()
     relative = own_path.relative_to(_REPOSITORY).as_posix()

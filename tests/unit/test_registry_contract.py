@@ -2,66 +2,36 @@
 
 ``qrcheck/registry/check.py`` is the single owner of check identity and ordering and
 ``qrcheck/registry/resolve.py`` is the single place a shortfall becomes a skip (AAP §0.3.4
-"Identity and selection"; §0.8.1's single-owner table). A check that exists but never runs, a
-check registered under an identifier nobody declared, a requirement that quietly disappears, or
-a shortfall that is quietly counted as a pass would each let a report describe a run that never
-happened. This module is the mechanical proof that none of those can occur, and it holds nine
-things:
+"Identity and selection"). A check that exists but never runs, one registered under an identifier
+nobody declared, a requirement that quietly disappears, or a shortfall quietly counted as a pass
+would each let a report describe a run that never happened, so this module asserts that:
 
-1. the registry holds **exactly** the twenty-one identifiers of AAP §0.3.4 -- compared as a set
-   against one module-level literal and against ``CHECK_IDS``, with the count and the absence of
-   any duplicate asserted on both sides, because a dropped, renamed or doubled check is a
-   change to the acceptance criteria rather than to a test;
-2. a duplicate registration raises instead of replacing the registered check, and the real
-   registry is left exactly as it was found, which is what keeps a stub from corrupting the set
-   every other module in the session reads;
-3. every contract carries the six fields the registry declares, each of the declared type: an
-   identifier from ``CHECK_IDS``, a non-empty title, a family that is both a known family and
-   the one owning the identifier's prefix, a ``frozenset`` of :class:`Capability`, a ``tuple`` of
-   :data:`DEPENDENCY_TOKENS` members, and a callable ``cases``;
-4. iteration is by identifier ascending -- in ``registered_ids``, in ``iter_checks`` and inside
-   the registry view -- and it stays identical after the families are loaded again and after a
-   separate process imports them in the reverse of :data:`FAMILY_MODULES` order, so import order
-   cannot reach an artefact (AAP §0.3.4, §0.5.3);
-5. the nine family modules are the ones AAP §0.8.1 names, in the order it names them, and each
-   owns exactly the identifiers the plan's component-to-check-family mapping assigns it -- the
-   mapping that fixes the JUnit ``classname`` and the report section of every check;
-6. every check requires exactly the capabilities AAP §0.3.4's requirement table gives it, which
-   is the contract that lets a fourth adapter kind be added without touching a check: if
-   ``RN-SVG`` stopped requiring ``svg``, a PNG-only target would be handed an SVG request and
-   the failure would land in the wrong place;
-7. every check declares exactly the optional runtime dependency the plan names for it, and the
-   two target-independent checks require nothing of the target at all;
-8. an unmet capability resolves to ``skipped`` with ``unsupported_capability``, a missing
-   runtime dependency to ``skipped`` with ``missing_dependency``, the capability reason outranks
-   the dependency one, and the tallies prove the rule that matters: ``skipped`` rises while
-   ``passed`` stays at zero (AAP §0.3.4, §0.6.6 row 9). ``resolve`` raises for neither, because
-   a shortfall is a result rather than an exception;
-9. the expected failing set of each built-in self-check target is the declared one -- empty for
-   ``reference``, the nine identifiers of AAP §0.4.2 for ``defective``, whose complement is the
-   twelve that must pass in the same run -- it validates against the real registry, and an
-   expectation naming an unregistered check raises instead of shrinking what the acceptance gate
-   compares.
+* the registry holds **exactly** the twenty-one identifiers of AAP §0.3.4, with no duplicate, and a
+  duplicate registration raises instead of replacing the registered check;
+* every contract carries the declared fields and types, and iteration is by identifier ascending --
+  after the families are loaded again, and after a separate process imports them in the reverse of
+  :data:`FAMILY_MODULES` order -- so import order cannot reach an artefact (AAP §0.3.4, §0.5.3);
+* the nine family modules, their identifier ownership, every check's capability requirements and
+  its optional runtime dependency are the plan's; the requirements are what let a fourth adapter
+  kind be added without touching a check;
+* an unmet capability resolves to ``skipped``/``unsupported_capability``, a missing runtime
+  dependency to ``skipped``/``missing_dependency``, the capability reason outranks the dependency
+  one, and ``skipped`` rises while ``passed`` stays at zero (AAP §0.6.6 row 9); ``resolve`` raises
+  for neither, because a shortfall is a result rather than an exception;
+* each built-in self-check target's expected failing set is the declared one -- empty for
+  ``reference``, the nine identifiers of AAP §0.4.2 for ``defective`` -- validates against the real
+  registry, and an expectation naming an unregistered check raises rather than shrinking what the
+  acceptance gate compares;
+* ``qrcheck list --json`` enumerates all twenty-one checks ascending with sorted ``requires`` and
+  ``dependencies`` matching the same tables, so a check reachable from an import alone fails here;
+  the executed-set half of that criterion belongs to
+  ``tests/integration/test_registry_reachability.py``.
 
-One case remains, and it is the machine-readable surface criterion 8 reads: ``qrcheck list
---json`` enumerates all twenty-one checks, ascending, with sorted ``requires`` and ``dependencies``
-lists matching the same tables, so a check reachable from an import alone -- never listed, never
-executed -- fails here rather than passing unnoticed. The executed-set half of that criterion
-belongs to ``tests/integration/test_registry_reachability.py``.
-
-Registration only. Nothing here drives a target, decodes a symbol, reads a corpus record or
-writes a file: the subject is what the registry holds and what resolution decides from it, and
-the one child process this module starts prints the registered identifiers and nothing else. No
-case is skipped, marked, xfailed or retried, no threshold is written here (the plan's numbers
-live in ``qrcheck.toml``), and every assertion message names the check identifier it failed on.
-
-The dependency column of AAP §0.3.4 is asserted as the plan's table writes it, which is not how a
-one-line summary of the row reads: the ``PF-DECODE``/``CL-ARTIFACTS`` row gives those two no
-capability ("none (target-independent)") and the primary decoder as their dependency ("decode
-only"). So ``PF-DECODE`` -- which decodes a fixed probe image and needs nothing of the target --
-declares the primary decoder, while ``CL-ARTIFACTS``, which touches neither a decoder nor a
-target, declares no token at all. Both require no capability, which is the target-independence
-the two checks share.
+The dependency column is asserted as the AAP's table writes it, not as a one-line summary of the
+row reads: ``PF-DECODE`` decodes a fixed probe image and needs nothing of the target, so it
+declares the primary decoder, while ``CL-ARTIFACTS`` touches neither a decoder nor a target and
+declares no token; both require no capability. Nothing here drives a target, decodes a symbol,
+reads a corpus record or writes a file, and no threshold is written here.
 """
 
 from __future__ import annotations
@@ -338,16 +308,9 @@ _SUBPROCESS_TIMEOUT_S: Final[float] = 300.0
 
 def _no_cases(_ctx: object) -> Iterator[object]:
     """Yield nothing: the stub contracts this module registers contribute no case.
-
     ``CheckContract`` requires only that ``cases`` be callable, and the stubs below exist to
     exercise the registration and expectation rules rather than to run a check, so the
     generator is empty.
-
-    Args:
-        _ctx: The run context a real check would receive; unused.
-
-    Returns:
-        An empty iterator.
     """
     return iter(())
 
@@ -355,16 +318,9 @@ def _no_cases(_ctx: object) -> Iterator[object]:
 @pytest.fixture(autouse=True)
 def _families_loaded() -> tuple[str, ...]:
     """Import the nine check families before every case, as an entry point does.
-
     ``qrcheck.registry`` deliberately leaves the registry empty, because a package that
     populated it on import would make the executed set depend on whether some unrelated module
-    happened to import it. A test that never imports ``qrcheck.checks`` therefore sees an empty
-    registry and would fail every assertion in this module for the wrong reason. The call is
-    idempotent, so paying it per case costs nothing and removes any dependence on which module
-    pytest happened to import first.
-
-    Returns:
-        The registered identifiers, ascending.
+    happened to import it.
     """
     return load_families()
 
@@ -1017,7 +973,6 @@ def test_a_doctored_expectation_declaration_is_rejected_at_validation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The guard names each inconsistency, so a doctored declaration cannot pass unnoticed.
-
     ``SELF_CHECK_TARGETS`` is doctored on the module that owns it rather than mutated, because
     the real table is read-only and must stay that way: what is asserted is the four checks
     ``validate_against_registry`` makes of whatever declaration it is handed.
@@ -1059,9 +1014,8 @@ def test_a_target_with_no_declared_expectation_answers_none() -> None:
 
 
 def test_the_list_command_publishes_every_registered_check_as_json(cli_runner) -> None:
-    """``qrcheck list --json`` is the cheap half of the registry-reachability gate.
-
-    A check importable only from a test would fail the executed-set half in
+    """``qrcheck list --json`` is the cheap half of the registry-reachability gate. A check
+    importable only from a test would fail the executed-set half in
     ``tests/integration/test_registry_reachability.py``; it fails here first, because a check
     the listing omits is a check no CI consumer can trend.
     """

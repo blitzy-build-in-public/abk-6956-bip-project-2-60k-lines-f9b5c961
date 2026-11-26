@@ -1,112 +1,82 @@
 """``DM-RESILIENCE`` and ``DM-SEEDED``: damage one symbol seven ways, then reproduce it.
 
-Plan item served (AAP §0.8.1, the component-to-check-family line ``checks/damage.py`` ->
-``DM-RESILIENCE``, ``DM-SEEDED``; §0.9.1): the damage family, and nothing else.  No
-project rules exist for this product -- the review-rules source returns no user rules and
-AAP §0.12 records the same -- so the binding constraints are the AAP's own MUST/MUST NOT
-list, honoured here as if they were rules.  Two of them shape this file: every damage
-threshold lives in ``qrcheck.toml`` and is read from the resolved configuration (this
-module holds no threshold of its own), and no assertion is weakened, skipped or relaxed
-to keep a target green.
+The damage family and nothing else (AAP §0.8.1, §0.9.1).  Every threshold lives in
+``qrcheck.toml`` and is read from the resolved configuration -- this module holds no threshold
+of its own -- and no assertion is weakened, skipped or relaxed to keep a target green.
 
-The case matrix (AAP §0.8.1), stated once
------------------------------------------
-Both checks run the same **56 cases**: a fixed **8-record** sample crossed with the seven
-declared damage kinds in their declared order (:data:`~qrcheck.evidence.naming.DAMAGE_KINDS`).
-One case is one variant of one record, and its case identifier is
-``corpus:<record-id>@<kind>`` -- the AAP §0.3.4 ``corpus:<record-id>`` prefix plus the
-variant suffix, which :func:`qrcheck.report.model.failure_id` sanitizes for the evidence
-path.  The 8-record sample is the first eight corpus records in ``id`` order whose payload
-is between 8 and 64 bytes (:data:`_MIN_PAYLOAD_BYTES`, :data:`_MAX_PAYLOAD_BYTES`): the
-upper bound keeps the ``truncated_payload`` injection of the defective target from ever
-touching these records (it truncates only payloads longer than 64 bytes whose truncation
-keeps the version), and the whole window keeps them well inside capacity, so the damage
-budget is the only thing under test.
+Case matrix: both checks run the same 56 cases, a fixed 8-record sample crossed with the seven
+declared damage kinds in their declared order
+(:data:`~qrcheck.evidence.naming.DAMAGE_KINDS`).  One case is one variant of one record, and
+its case identifier is ``corpus:<record-id>@<kind>`` -- the AAP §0.3.4 prefix plus the variant
+suffix, which :func:`qrcheck.report.model.failure_id` sanitizes for the evidence path.  The
+sample is the first eight corpus records in ``id`` order whose payload is between
+:data:`_MIN_PAYLOAD_BYTES` and :data:`_MAX_PAYLOAD_BYTES`: the upper bound keeps the defective
+target's ``truncated_payload`` injection away from them (it truncates only payloads longer than
+64 bytes whose truncation keeps the version), and the window keeps them well inside capacity,
+so the damage budget is the only thing under test.
 
 Encoder invocations are declared, not incidental (:data:`EXPECTED_ENCODES`, AAP §0.4.3):
-``DM-RESILIENCE`` makes **8** -- one per sampled record, shared across that record's seven
-kinds -- and ``DM-SEEDED`` makes **0**.  There is no retry, no re-run and no second call
-anywhere in this module, so a count of nine or one is a framework defect and the counting
-test that reads the table above says so.  Decoder invocations are one per case for the
-damaged variant (56 each) plus, in ``DM-RESILIENCE``, one pristine reading per sampled
-record (8, memoised), because the occlusion budget is the recovery capacity of the EC level
-**decoded from the symbol** and that fact exists only after a decode.
+``DM-RESILIENCE`` makes 8 -- one per sampled record, shared across that record's seven kinds --
+and ``DM-SEEDED`` makes 0.  No retry, re-run or second call exists in this module, so a count of
+nine or one is a framework defect.  Decoder invocations are one per case for the damaged
+variant (56 each) plus, in ``DM-RESILIENCE``, one memoised pristine reading per sampled record
+(8), because the occlusion budget is the recovery capacity of the EC level decoded from the
+symbol and that fact exists only after a decode.
 
-What each check asserts
------------------------
-``DM-RESILIENCE`` applies one damage kind to the symbol the target returned and asserts
-that the **primary decoder** still returns the requested payload.  The secondary decoder's
-outcome is recorded and never asserted (AAP §0.3.2): opencv is fragile on damaged symbols,
-and a silent second opinion is not a disagreement, so a check that failed on it would
-report the corroborating decoder's weakness as the target's defect.  The occlusion budget
-is ``recovery_fraction(decoded EC level) - occlusion_margin``, taken from the level the
-symbol itself reports, never the requested one -- that is AAP §0.4.2's cascade containment,
-and it is why the defective target's ``wrong_ec_level`` injection cannot push damage past
-the symbol's real capacity and turn eight damage cases into failures.
+What each check asserts: ``DM-RESILIENCE`` applies one damage kind to the symbol the target
+returned and asserts that the **primary decoder** still returns the requested payload, while
+the secondary decoder's outcome is recorded and never asserted (AAP §0.3.2) -- opencv is
+fragile on damaged symbols and a silent second opinion is not a disagreement, so failing on it
+would report the corroborating decoder's weakness as the target's defect.  ``DM-SEEDED``
+re-applies the same damage to the symbol it already holds, with the same derived seed and the
+same resolved thresholds, and asserts the result is **byte-identical** to the variant
+``DM-RESILIENCE`` produced, before decoding it and asserting the payload again; it never calls
+the adapter, which makes "a damaged image is reproducible from what the report records" (AAP
+§0.5.2, criterion 4) a property of the product rather than of a re-run.
 
-``DM-SEEDED`` re-applies the same damage to the symbol it already holds, with the same
-derived seed and the same resolved thresholds, and asserts the result is **byte-identical**
-to the variant ``DM-RESILIENCE`` produced before decoding it and asserting the payload
-again.  It never calls the adapter, which is what makes "a damaged image is reproducible
-from what the report records" (AAP §0.5.2, criterion 4) a property of the product rather
-than of a re-run.
-
-The occluder budget, and why it is spent codeword by codeword
--------------------------------------------------------------
-The occlusion budget is ``recovery_fraction(decoded EC level) - occlusion_margin``, and it
-buys ``round(budget x eligible module count)`` modules of damage.  Those modules are spent
-whole codewords at a time, because the recovery fractions are stated per codeword and one
-occluded module corrupts the entire codeword it sits in: spreading the same modules one by
-one over the data area would corrupt up to eight times the codewords the budget allows and
-fail a conforming target at EC Q and EC H, which is measured rather than assumed.  A
-codeword is :data:`_MODULES_PER_CODEWORD` modules (ISO/IEC 18004 §7.6), so the two forms of
-the budget are the same number to within one codeword, and the codewords are located by
-replaying the standard's own placement traversal (:func:`_codeword_modules`) over the exact
+The occluder budget is ``recovery_fraction(decoded EC level) - occlusion_margin`` taken from
+the level the symbol itself reports, never the requested one -- AAP §0.4.2's cascade
+containment, and why the defective target's ``wrong_ec_level`` injection cannot push damage past
+the symbol's real capacity and turn eight damage cases into failures.  It buys
+``round(budget x eligible module count)`` modules, spent whole codewords at a time: the recovery
+fractions are stated per codeword and one occluded module corrupts the entire codeword it sits
+in, so spreading the same modules one by one would corrupt up to eight times the codewords the
+budget allows and fail a conforming target at EC Q and EC H.  A codeword is
+:data:`_MODULES_PER_CODEWORD` modules (ISO/IEC 18004 §7.6), and the codewords are located by
+replaying the standard's placement traversal (:func:`_codeword_modules`) over the exact
 function-pattern mask.
 
-The run-scoped symbol memo, and why it lives here
--------------------------------------------------
-``RunContext`` carries the adapter, the configuration, the corpus, the EC level, the seed,
-the availability map and the evidence store -- no symbol store.  The memo below is
-therefore this family's own, and three invariants keep it honest:
+The run-scoped symbol memo lives here because ``RunContext`` carries no symbol store, and three
+invariants keep it honest: it is cleared once, at the start of ``DM-RESILIENCE``'s case
+enumeration, which the runner always reaches first because it walks checks by identifier
+ascending; a record's symbol is encoded lazily on first touch, since case identifiers sort
+alphabetically and nothing may assume an order; and nothing else in the product may read it --
+the framework is single-process and sequential (AAP §0.3.6), so it needs no lock.
 
-* **It is cleared once, at the start of ``DM-RESILIENCE``'s case enumeration.**  The runner
-  walks checks by identifier ascending, so ``DM-RESILIENCE`` always precedes ``DM-SEEDED``,
-  and a second run in the same process can never inherit a stale symbol.
-* **A record's symbol is encoded lazily on first touch.**  Case identifiers sort
-  alphabetically, so ``@blur`` runs before ``@occluders`` and nothing may assume an order;
-  whichever kind runs first encodes, and the other six reuse it.
-* **Nothing else in the product may read it.**  It is the only mutable module state here,
-  it is written by the two checks in this file and read by ``DM-SEEDED``, and the framework
-  is single-process and sequential (AAP §0.3.6), so it needs no lock.
+Never: no retry, no ``xfail``, no threshold literal, no ``except Exception``, no bare
+``except``, no assertion on the secondary decoder under damage and none on wall-clock time (the
+only clock read produces ``duration_ms``, which every report masks).  ``TargetUnavailable`` and
+``TargetTimeout`` propagate to :mod:`qrcheck.runner`, which owns the one-error-result-per-check
+target-loss policy; the other three adapter errors are translated by
+:func:`qrcheck.checks.support.case_status_for_error`, the single translation in the product.  No
+image library is imported: Pillow is reachable only through :mod:`qrcheck.evidence.mux`, so a
+raster is built from the image mux handed us (:func:`_raster`) and every raster is encoded by
+:func:`qrcheck.evidence.mux.encode_png`.
 
-What it never does
-------------------
-No retry, no ``xfail``, no threshold literal, no ``except Exception``, no bare ``except``,
-no assertion on the secondary decoder under damage and none on wall-clock time (the only
-clock read produces ``duration_ms``, which every report masks).  ``TargetUnavailable`` and
-``TargetTimeout`` propagate to :mod:`qrcheck.runner`, which owns the one-error-result-per-
-check target-loss policy; the other three adapter errors are translated by
-:func:`qrcheck.checks.support.case_status_for_error`, the single translation in the product.
-No image library is imported: Pillow is reachable only through
-:mod:`qrcheck.evidence.mux`, so a raster is built from the reference image mux handed us
-(:func:`_raster`) and every raster is encoded by :func:`qrcheck.evidence.mux.encode_png`.
+Reason codes this family emits: ``value_mismatch`` (the damaged symbol no longer returns the
+requested payload, or the regenerated variant differs from the recorded one),
+``sampling_failed`` (only when the pristine, pre-damage measurement cannot recover the module
+grid or the symbol's own EC level, without which no budget exists), ``missing_dependency``
+(``DM-SEEDED`` selected without the ``DM-RESILIENCE`` run that holds the symbol), plus whatever
+:func:`~qrcheck.checks.support.case_status_for_error` reports for ``target_rejected``,
+``contract_error`` and ``unsupported_capability``.
 
-Reason codes this family emits: ``value_mismatch`` (the damaged symbol no longer returns
-the requested payload, or the regenerated variant differs from the recorded one),
-``sampling_failed`` (only when the pristine, pre-damage measurement cannot recover the
-module grid or the symbol's own EC level, without which no budget exists),
-``missing_dependency`` (``DM-SEEDED`` selected without the ``DM-RESILIENCE`` run that holds
-the symbol), plus whatever :func:`~qrcheck.checks.support.case_status_for_error` reports for
-``target_rejected``, ``contract_error`` and ``unsupported_capability``.
-
-Determinism (AAP §0.5.1, §0.5.2)
----------------------------------
-Every random draw comes from ``derive_seed(run_seed, "DM-RESILIENCE", case_id, kind)`` fed
-only into :class:`numpy.random.PCG64`; the derived seed is the result's ``seed``, the
-``<seed>`` of the ``damage-<kind>-<seed>.png`` artefact name, and the value ``DM-SEEDED``
-re-derives.  Identical inputs therefore produce identical damaged bytes, which is what makes
-criterion 4's byte-for-byte comparison meaningful.
+Determinism (AAP §0.5.1, §0.5.2): every random draw comes from
+``derive_seed(run_seed, "DM-RESILIENCE", case_id, kind)`` fed only into
+:class:`numpy.random.PCG64`; the derived seed is the result's ``seed``, the ``<seed>`` of the
+``damage-<kind>-<seed>.png`` artefact name, and the value ``DM-SEEDED`` re-derives.  Identical
+inputs therefore produce identical damaged bytes, which is what makes criterion 4's
+byte-for-byte comparison meaningful.
 """
 
 from __future__ import annotations
@@ -234,11 +204,9 @@ _FIRST_VERSION_WITH_VERSION_INFO: Final[int] = 7
 _FILL_VALUE: Final[float] = 255.0
 
 
-# --------------------------------------------------------------------------------------
 # The run-scoped memo: the symbol, the pristine reading and the damaged variant of each
 # sampled record.  DM-SEEDED's zero-encode assertion rests on it, so its lifetime is stated
 # in the module docstring and its only writer is DM-RESILIENCE's case executor.
-# --------------------------------------------------------------------------------------
 
 # The symbol the target returned for a record, keyed by record id: one encode per record,
 # shared across that record's seven kinds.
@@ -340,27 +308,19 @@ def _recall_reading(record_id: str) -> DecodeResult | None:
     return _READINGS.get(record_id)
 
 
-# --------------------------------------------------------------------------------------
 # The symbol's own structure (ISO/IEC 18004): which modules are function patterns, and which
 # eight modules form each codeword.  Both are needed before a single occluder can be placed:
 # covering a finder, separator, timing, alignment, format-information or version-information
 # module makes a symbol undetectable however much error-correction capacity remains, and a
 # budget expressed per codeword needs to know where the codewords are.
-# --------------------------------------------------------------------------------------
 
 
 def _alignment_centres(version: int) -> tuple[int, ...]:
     """Return the alignment-pattern centre coordinates of `version`.
 
-    ISO/IEC 18004 Annex E: Version 1 has none, and from Version 2 the centres are ``6``
-    followed by an evenly stepped sequence ending at ``4V + 10`` (the last centre), with
-    Version 32's nominal step of 26 divided differently -- hence the special case.
-
-    Args:
-        version: The symbol version, 1-40.
-
-    Returns:
-        The ascending centre coordinates, empty for Version 1.
+    ISO/IEC 18004 Annex E: Version 1 has none, and from Version 2 the centres are ``6`` followed by
+    an evenly stepped ascending sequence ending at ``4V + 10``, with Version 32's nominal step of 26
+    divided differently -- hence the special case.
 
     Raises:
         ValueError: `version` is not one of the versions this traversal accepts (1-40), which
@@ -381,23 +341,12 @@ def _alignment_centres(version: int) -> tuple[int, ...]:
 def _function_modules(module_count: int, version: int) -> numpy.ndarray:
     """Return the ``(N, N)`` mask of modules that carry no data, ``True`` where reserved.
 
-    The complete function-pattern set of ISO/IEC 18004, in the only form this module needs:
-
-    * the three finder patterns with their separators, as the three corner blocks -- those
-      blocks are one module wider than the finder footprint because their eighth row and
-      column also carry both copies of the 15-bit format information and the fixed dark
-      module, which live nowhere else;
-    * the horizontal and vertical timing patterns;
-    * every alignment pattern, skipping the three whose centres fall on the finder patterns;
-    * both version-information blocks, for Version 7 and above.
-
-    Args:
-        module_count: Modules per side, ``N = 4V + 17``.
-        version: The symbol version the two together imply.
-
-    Returns:
-        A boolean array of shape ``(N, N)``: ``True`` for a function module, ``False`` for a
-        module a codeword may occupy.
+    The complete function-pattern set of ISO/IEC 18004: the three finder patterns with their
+    separators as the three corner blocks -- one module wider than the finder footprint, because
+    their eighth row and column also carry both copies of the 15-bit format information and the
+    fixed dark module, which live nowhere else; the horizontal and vertical timing patterns; every
+    alignment pattern, skipping the three whose centres fall on the finder patterns; and both
+    version-information blocks, for Version 7 and above.  ``N = 4V + 17``.
 
     Raises:
         ValueError: `module_count` and `version` disagree, or `version` is outside 1-40.
@@ -439,23 +388,14 @@ def _codeword_modules(
 ) -> tuple[tuple[tuple[int, int], ...], ...]:
     """Return the module coordinates of every codeword, in placement order.
 
-    ISO/IEC 18004 §7.7.3: the symbol is filled from the bottom-right corner in two-module-
-    wide columns, alternating upwards and downwards, skipping the vertical timing column and
-    every function module, and each group of eight modules is one codeword.  Because the
-    encoder interleaves the Reed-Solomon blocks along exactly this order, consecutive
-    codewords belong to different blocks -- which is what makes a run of consecutive
-    codewords damage every block evenly.
-
-    The trailing group of fewer than eight modules a symbol may end with is the remainder
-    bits of ISO/IEC 18004 Table 1: they belong to no codeword and are dropped, which is why
-    this returns fewer than ``data modules / 8`` groups only when a symbol has remainder bits.
-
-    Args:
-        module_count: Modules per side, ``N = 4V + 17``.
-        reserved: The function-module mask of :func:`_function_modules`.
-
-    Returns:
-        One tuple of eight ``(row, column)`` pairs per codeword, in placement order.
+    ISO/IEC 18004 §7.7.3: the symbol is filled from the bottom-right corner in two-module-wide
+    columns, alternating upwards and downwards, skipping the vertical timing column and every
+    function module, and each group of eight modules is one codeword.  The encoder interleaves the
+    Reed-Solomon blocks along exactly this order, so consecutive codewords belong to different
+    blocks -- which is what makes a run of consecutive codewords damage every block evenly.  The
+    trailing group of fewer than eight modules a symbol may end with is the remainder bits of
+    ISO/IEC 18004 Table 1: they belong to no codeword and are dropped, so this returns fewer than
+    ``data modules / 8`` groups only when a symbol has remainder bits.
 
     Raises:
         ValueError: `reserved` is not an ``(N, N)`` boolean array.
@@ -482,11 +422,9 @@ def _codeword_modules(
     return tuple(codewords)
 
 
-# --------------------------------------------------------------------------------------
 # Pixel geometry: where the modules are on the image, and which of them an occluder may
 # cover.  Measured from the pixels rather than read from the request, because a target is
 # free to draw a smaller module, a different quiet zone or a different image size.
-# --------------------------------------------------------------------------------------
 
 
 @dataclasses.dataclass(frozen=True)
@@ -546,20 +484,13 @@ def _luma(pixels: numpy.ndarray) -> numpy.ndarray:
 def _frame(version: int, pixels: numpy.ndarray) -> _Frame | None:
     """Measure the module geometry of a symbol, or return ``None`` when it cannot be.
 
-    A measurement failure is a value rather than an exception: the pixels came from a
-    target, so an image with no contrast carries no grid to find, and the caller reports
-    that as ``sampling_failed`` evidence instead of turning it into a framework traceback.
-
-    Args:
-        version: The version the sampled grid implied, 1-40.
-        pixels: The symbol's pixels as returned by :func:`qrcheck.evidence.mux.decode_image`.
-
-    Returns:
-        The measured frame, or ``None`` when the image holds no dark module to anchor it.
+    A measurement failure is a value rather than an exception: the pixels came from a target, so an
+    image with no contrast carries no grid to find, and the caller reports that as
+    ``sampling_failed`` evidence instead of turning it into a framework traceback.
 
     Raises:
-        ValueError: `version` is outside 1-40, or `pixels` is not a 2- or 3-dimensional array
-            -- both producer defects rather than evidence about a target.
+        ValueError: `version` is outside 1-40, or `pixels` is not a 2- or 3-dimensional array --
+            both producer defects rather than evidence about a target.
     """
     module_count = module_count_for_version(version)
     luma = _luma(pixels)
@@ -594,19 +525,11 @@ def _frame(version: int, pixels: numpy.ndarray) -> _Frame | None:
 def _occluder_count(budget: float, eligible_modules: int) -> int:
     """Return how many codewords `budget` of a symbol's eligible area may lose.
 
-    The recovery fractions of :func:`qrcheck.checks.support.recovery_fraction` are stated
-    per codeword, and :data:`_MODULES_PER_CODEWORD` modules make one, so a budget spent over
-    the eligible module count converts to a codeword count by that divisor.  At least one
-    codeword is always damaged: at EC L the budget is a fiftieth of the area, which rounds to
-    nothing on a small symbol, and a case that damaged nothing would be vacuous.
-
-    Args:
-        budget: The fraction of the symbol's codewords that may be corrupted, already net of
-            the configured ``occlusion_margin``.
-        eligible_modules: How many modules a codeword may occupy.
-
-    Returns:
-        The number of codewords to corrupt, at least one.
+    The recovery fractions of :func:`qrcheck.checks.support.recovery_fraction` are stated per
+    codeword and :data:`_MODULES_PER_CODEWORD` modules make one, so a budget spent over the
+    eligible module count converts to a codeword count by that divisor.  At least one codeword is
+    always damaged: at EC L the budget is a fiftieth of the area, which rounds to nothing on a
+    small symbol, and a case that damaged nothing would be vacuous.
     """
     share = budget * eligible_modules / _MODULES_PER_CODEWORD
     return max(1, int(round(share)))
@@ -620,21 +543,12 @@ def _occluder_modules(
     """Return the modules of `count` codewords, chosen at seeded, evenly strided runs.
 
     Consecutive codewords belong to different Reed-Solomon blocks, so a run of consecutive
-    codewords damages every block evenly -- which is exactly what the documented recovery
-    capacity assumes, and what selecting codewords uniformly at random does *not* achieve
-    (a symbol with four blocks corrects only a quarter of the budget per block, and random
-    selection overshoots one block while leaving another untouched).  Several separated runs
-    rather than one keep the damaged area from becoming a single contiguous hole, and the
-    run's start is drawn from the seeded generator, so the placement is reproducible from
+    codewords damages every block evenly -- exactly what the documented recovery capacity assumes,
+    and what selecting codewords uniformly at random does not achieve, since random selection
+    overshoots one block while leaving another untouched.  Several separated runs rather than one
+    keep the damaged area from becoming a single contiguous hole, and the run's start is drawn from
+    the seeded generator, so the placement is reproducible from
     ``(run seed, check id, case id, kind)`` and differs between records.
-
-    Args:
-        codewords: The codeword module lists of :func:`_codeword_modules`.
-        count: How many codewords to corrupt; clamped to what exists.
-        seed: The derived seed governing the placement.
-
-    Returns:
-        The module coordinates to cover, in bit-placement order.
     """
     total = len(codewords)
     if total == 0:
@@ -655,11 +569,9 @@ def _occluder_modules(
     )
 
 
-# --------------------------------------------------------------------------------------
 # The seven damage kinds.  Each is a pure function of the symbol's pixels and the resolved
 # ``[checks.damage]`` values -- no clock, no module state, no filesystem -- and the two that
 # draw a random value take it from the case's derived seed only.
-# --------------------------------------------------------------------------------------
 
 
 def _bilinear(pixels: numpy.ndarray, xs: numpy.ndarray, ys: numpy.ndarray) -> numpy.ndarray:
@@ -751,15 +663,8 @@ def _homography(destination: numpy.ndarray, source: numpy.ndarray) -> numpy.ndar
 
     The standard four-point direct-linear-transform system, solved with
     :func:`numpy.linalg.solve`: for each correspondence ``(x, y) -> (u, v)``,
-
-    ``u = (a x + b y + c) / (g x + h y + 1)`` and ``v = (d x + e y + f) / (g x + h y + 1)``.
-
-    Args:
-        destination: Four ``(x, y)`` points of the destination quad.
-        source: The four matching ``(x, y)`` points of the source rectangle.
-
-    Returns:
-        ``[a, b, c, d, e, f, g, h]``.
+    ``u = (a x + b y + c) / (g x + h y + 1)`` and ``v = (d x + e y + f) / (g x + h y + 1)``, so
+    the result is ``[a, b, c, d, e, f, g, h]``.
 
     Raises:
         ValueError: the four points are degenerate, so no projective map exists.
@@ -854,18 +759,9 @@ def _downscale_pixels(
 def _blur_pixels(pixels: numpy.ndarray, radius_px: float) -> numpy.ndarray:
     """Blur `pixels` with a Gaussian whose standard deviation is half the radius.
 
-    A separable convolution, so the cost is linear in the kernel width rather than
-    quadratic, and an edge-padded source so the quiet zone's border is not darkened by
-    padding with zeros.  The kernel's weights are :mod:`numpy` floats, so the result is
-    identical on every run.
-
-    Args:
-        pixels: The source pixels.
-        radius_px: The blur radius in pixels, read as ``blur_radius_per_module`` times the
-            measured module pitch.
-
-    Returns:
-        The blurred pixels.
+    A separable convolution, so the cost is linear in the kernel width rather than quadratic, and
+    an edge-padded source so the quiet zone's border is not darkened by padding with zeros.  The
+    kernel's weights are :mod:`numpy` floats, so the result is identical on every run.
     """
     sigma = max(radius_px / 2.0, 1e-6)
     half = max(1, int(math.ceil(2.0 * sigma)))
@@ -944,21 +840,13 @@ def _occlude_pixels(
 def _raster(pixels: numpy.ndarray, reference: Any) -> Any:
     """Return the reference image's own raster class carrying `pixels`.
 
-    Pillow is reachable only through :mod:`qrcheck.evidence.mux` in this package, and mux
-    offers opening and PNG encoding rather than construction from an array -- deliberately,
-    because it is the framework's single image boundary.  The image mux handed us is
-    therefore used as the canvas: resizing it to the array's dimensions allocates a raster of
-    exactly that size, and ``putdata`` then replaces every pixel, so none of the reference's
-    content survives.  The result is an ordinary Pillow image, encoded by
-    :func:`qrcheck.evidence.mux.encode_png` like every other artefact of this framework.
-
-    Args:
-        pixels: The damaged pixels, ``(H, W, 3)`` uint8.
-        reference: The image :func:`qrcheck.evidence.mux.decode_image` returned for the
-            symbol, used only for its raster class and channel mode.
-
-    Returns:
-        The image carrying `pixels`.
+    Pillow is reachable only through :mod:`qrcheck.evidence.mux` in this package, and mux offers
+    opening and PNG encoding rather than construction from an array -- deliberately, because it is
+    the framework's single image boundary.  The image mux handed us is therefore used as the
+    canvas: resizing it to the array's dimensions allocates a raster of exactly that size, and
+    ``putdata`` then replaces every pixel, so none of the reference's content survives.  The result
+    is an ordinary Pillow image, encoded by :func:`qrcheck.evidence.mux.encode_png` like every
+    other artefact of this framework.
     """
     height, width = int(pixels.shape[0]), int(pixels.shape[1])
     canvas = reference.convert("RGB").resize((width, height))
@@ -998,28 +886,16 @@ def _damaged_pixels(
 ) -> tuple[numpy.ndarray, dict[str, Any]]:
     """Return the damaged pixels of one damage kind, plus the values actually applied.
 
-    Each kind reads its threshold from the resolved ``[checks.damage]`` record and nothing
-    else, and the measurements it returns are what ``request.json`` and ``decoded.json``
-    record, so a reader can re-derive the damage without consulting this file.
-
-    Args:
-        kind: One of :data:`~qrcheck.evidence.naming.DAMAGE_KINDS`.
-        pixels: The pristine symbol's pixels.
-        frame: The measured module geometry.
-        limits: The resolved :class:`qrcheck.config.models.DamageLimits`.
-        seed: The case's derived seed.
-        decoded_ec: The EC level the symbol itself reports, which the occlusion budget is
-            derived from.
-        reference: The symbol's image, used as the raster canvas where a kind needs one.
-
-    Returns:
-        The damaged pixels and a mapping of the applied values.
+    Each kind reads its threshold from the resolved ``[checks.damage]`` record and nothing else,
+    and the measurements returned here are what ``request.json`` and ``decoded.json`` record, so a
+    reader can re-derive the damage without consulting this file.  The occlusion budget comes from
+    `decoded_ec`, the level the symbol itself reports.
 
     Raises:
         ValueError: `kind` is not a declared damage kind -- a caller defect, since the case
             identifiers are built from the same declared tuple.
-        KeyError: `decoded_ec` is not one of ``L``/``M``/``Q``/``H``; the caller establishes
-            the level before it reaches here.
+        KeyError: `decoded_ec` is not one of ``L``/``M``/``Q``/``H``; the caller establishes the
+            level before it reaches here.
     """
     if kind == "occluders":
         budget = support.recovery_fraction(decoded_ec) - limits.occlusion_margin
@@ -1070,10 +946,8 @@ def _damaged_pixels(
     )
 
 
-# --------------------------------------------------------------------------------------
 # Case machinery: identity, the sample, the request, the memoised symbol and reading, and
 # the two executors.  One request path, one case identifier, one assertion.
-# --------------------------------------------------------------------------------------
 
 
 @dataclasses.dataclass(frozen=True)

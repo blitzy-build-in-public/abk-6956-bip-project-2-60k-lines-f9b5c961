@@ -1,48 +1,35 @@
 """The 15-bit format-information contract of ``qrcheck.decode.format_info``.
 
-A Model 2 QR symbol carries its error correction level and its mask reference in
-the fifteen format bits that sit beside the top-left finder pattern and are
-repeated along the top-right and bottom-left edges. Those bits are the product's
-only source of the *mask* and its independent second source of the *EC level*:
-the pinned ``zxing-cpp`` 2.2.0 reports an EC level but neither version nor mask,
-and ``opencv`` reports none of the three, yet ``SY-MASK``, ``SY-MATRIX-EQUIV``
-and ``SY-EC-MATCH`` must assert all three (AAP IM-1). A wrong reading here is
-therefore wrong in three checks at once, so the contract is pinned exhaustively
-rather than by example.
+The fifteen format bits beside the top-left finder pattern, repeated along the top-right and
+bottom-left edges, carry the EC level and the mask reference, which makes them the product's only
+source of the *mask* and its independent second source of the *EC level*: ``zxing-cpp`` 2.2.0
+reports an EC level but neither version nor mask, ``opencv`` reports none of the three, yet
+``SY-MASK``, ``SY-MATRIX-EQUIV`` and ``SY-EC-MATCH`` must assert all three (IM-1) -- so a wrong
+reading here is wrong in three checks at once, and the contract is pinned exhaustively rather than
+by example.
 
-What is asserted, and why each assertion can fail:
+* **The code.** ISO/IEC 18004:2015(E) §7.9 defines a BCH(15, 5) code with generator ``0x537``,
+  codewords XOR-masked with ``0x5412`` and minimum Hamming distance 7; the 32 codewords are
+  generated through ``encode_format_info`` and never transcribed, so a hand-copied table cannot
+  drift.
+* **Three bits corrected, four never claimed.** ``2 * 3 < 7`` is why radius-three correction is
+  unambiguous, so all 32 x C(15, 3) = 14560 three-bit corruptions must come back as the original
+  pair with ``bit_errors == 3``, while a four-bit corruption must never be reported as that pair.
+* **Both copies, with their distances.** A majority vote across the two copies would invent a third
+  value present in neither, so the reader prefers the copy that spent less redundancy and reports
+  both.
+* **Never an exception.** An unreadable grid, an unusable module count and a copy damaged beyond
+  its redundancy all come back as ``None``: a symbol defect has to become a failed check, never an
+  ``error`` result that destroys the run-level attribution the self-check targets depend on.
+* **The placement convention, proved against a real symbol.** Every case writes its bits through
+  ``format_info_positions`` and reads them back through the same table, so a mirrored, rotated or
+  bit-reversed convention would satisfy all of them at once; the real-symbol proof therefore
+  samples a ``segno``-placed symbol and requires the recovered pair to be the ``error`` and
+  ``mask`` it was built with -- the one expectation this module cannot derive from its own table.
 
-* **The code.** ISO/IEC 18004:2015(E) §7.9 defines a BCH(15, 5) code whose
-  generator polynomial is ``0x537``, whose codewords are XOR-masked with
-  ``0x5412`` before placement, and whose minimum Hamming distance is 7. The 32
-  codewords are generated through ``encode_format_info`` and never transcribed,
-  so a hand-copied table cannot drift away from the implementation.
-* **Three bits corrected, four never claimed.** ``2 * 3 < 7`` is why radius-three
-  correction is unambiguous, so all 32 x C(15, 3) = 14560 three-bit corruptions
-  must come back as the original pair with ``bit_errors == 3``. A four-bit
-  corruption lies outside that radius: it must never be reported as the original
-  pair, and where a bounded-distance decoder answers with a different codeword
-  that answer must lie within the radius it reports.
-* **Both copies, with the evidence kept.** The fifteen bits are written twice;
-  the reader prefers the copy that spent less redundancy and reports both copies'
-  distances, because a majority vote across the copies would invent a third value
-  present in neither of them.
-* **Never an exception.** An unreadable grid, an unusable module count and a copy
-  damaged beyond its redundancy all come back as ``None``: a symbol defect has to
-  become a failed check, never an ``error`` result that destroys the run-level
-  attribution the self-check targets depend on.
-* **The placement convention, proved against a real symbol.** Every assertion that
-  builds a grid writes its bits through ``format_info_positions`` and reads them
-  back through the same table, so a mirrored, rotated or bit-reversed convention
-  would satisfy all of them at once. The real-symbol proof therefore samples the
-  format modules of a symbol ``segno`` placed by ISO/IEC 18004:2015(E) §7.9.1 and
-  requires the recovered pair to be the ``error`` and ``mask`` that symbol was
-  built with -- the one expectation this module cannot derive from its own table.
-
-Determinism: the codeword tables are a sorted product of the four EC levels and
-masks 0-7, every parametrisation id comes from a declaration rather than from
-iteration order, and nothing here reads a clock, a locale, ``hash()``, ``id()``
-or a threshold from ``qrcheck.toml``.
+Determinism: the codeword tables are a sorted product of the four EC levels and masks 0-7, every
+parametrisation id comes from a declaration rather than from iteration order, and nothing reads a
+clock, a locale, ``hash()``, ``id()`` or a threshold from ``qrcheck.toml``.
 """
 
 from __future__ import annotations
@@ -160,13 +147,9 @@ def _distance(left: int, right: int) -> int:
 
 
 def _bch_remainder(codeword: int) -> int:
-    """Remainder of ``codeword`` divided by :data:`BCH_GENERATOR`.
-
-    Deliberately a different formulation from the module's own ``_bch_codeword``:
-    bit-at-a-time elimination from the most significant bit downwards, instead of
-    a loop over ``bit_length``. A zero remainder is what makes a value a codeword
-    of the code whose generator is ``0x537`` (ISO/IEC 18004:2015(E) §7.9.1), and
-    computing it a second way is what keeps a shared off-by-one from hiding.
+    """Remainder of ``codeword`` divided by :data:`BCH_GENERATOR`. Deliberately a different
+    formulation from the module's own ``_bch_codeword``: bit-at-a-time elimination from the
+    most significant bit downwards, instead of a loop over ``bit_length``.
     """
     remainder = codeword
     for shift in range(remainder.bit_length() - 1, 9, -1):
@@ -181,12 +164,11 @@ def _sphere_size(radius: int) -> int:
 
 
 def _grid(module_count: int, copy_zero: int, copy_one: int) -> decode_base.Matrix:
-    """Build a module grid carrying ``copy_zero`` and ``copy_one`` in the two copies.
-
-    The result is the shape every consumer of the sampler sees -- a
-    ``numpy.bool_`` array of ``module_count`` squared modules, dark = ``True``,
-    indexed ``grid[row][column]`` -- with every module that carries no format bit
-    left light, so only the fifteen bits of each copy are ever set.
+    """Build a module grid carrying ``copy_zero`` and ``copy_one`` in the two copies. The result
+    is the shape every consumer of the sampler sees -- a ``numpy.bool_`` array of
+    ``module_count`` squared modules, dark = ``True``, indexed ``grid[row][column]`` -- with
+    every module that carries no format bit left light, so only the fifteen bits of each copy
+    are ever set.
     """
     grid = numpy.zeros((module_count, module_count), dtype=bool)
     for raw, positions in zip((copy_zero, copy_one), format_info_positions(module_count)):
@@ -212,12 +194,10 @@ def _flipped(
 
 @functools.lru_cache(maxsize=None)
 def _space_projection() -> tuple[tuple[tuple[int, str, int, int], ...], tuple[int, ...]]:
-    """Project the whole 15-bit space once: ``(decodable, undecodable)``.
-
-    Every one of the 32768 possible copies is offered to :func:`decode_bits`. The
-    first element holds ``(raw, ec_level, mask, bit_errors)`` for each copy the
-    decoder accepts and the second holds every copy it rejects, so the three
-    exhaustive assertions share one pass instead of re-deriving it.
+    """Project the whole 15-bit space once: ``(decodable, undecodable)``. The first element holds
+    ``(raw, ec_level, mask, bit_errors)`` for each copy the decoder accepts and the second
+    holds every copy it rejects, so the three exhaustive assertions share one pass instead of
+    re-deriving it.
     """
     decodable: list[tuple[int, str, int, int]] = []
     undecodable: list[int] = []
@@ -273,11 +253,7 @@ def test_the_constants_are_the_ones_iso_18004_states() -> None:
 def test_every_legal_codeword_decodes_to_the_pair_that_encoded_it(
     case: tuple[str, int],
 ) -> None:
-    """An undamaged copy of any legal codeword costs zero bit errors.
-
-    ``encode_format_info`` and ``decode_bits`` are inverses over all 32 pairs, which
-    is the premise every other assertion about damage and placement rests on.
-    """
+    """An undamaged copy of any legal codeword costs zero bit errors."""
     ec_level, mask = case
     raw = encode_format_info(ec_level, mask)
     assert 0 <= raw <= _MAX_RAW, f"{ec_level}/{mask} encoded to {raw!r}, not fifteen bits"
@@ -288,12 +264,11 @@ def test_every_legal_codeword_decodes_to_the_pair_that_encoded_it(
 def test_every_codeword_carries_its_data_bits_and_a_zero_bch_remainder(
     case: tuple[str, int],
 ) -> None:
-    """Unmasked, each codeword is ``indicator << 13 | mask << 10 | parity``.
-
-    This is the structural half of the contract: the ``0x5412`` mask is applied,
-    the ten parity bits are the remainder of the polynomial division by ``0x537``
-    (so the value is a codeword at all), and the five data bits are exactly the
-    two-bit EC indicator of Table 12 followed by the three-bit mask reference.
+    """Unmasked, each codeword is ``indicator << 13 | mask << 10 | parity``. This is the
+    structural half of the contract: the ``0x5412`` mask is applied, the ten parity bits are
+    the remainder of the polynomial division by ``0x537`` (so the value is a codeword at all),
+    and the five data bits are exactly the two-bit EC indicator of Table 12 followed by the
+    three-bit mask reference.
     """
     ec_level, mask = case
     unmasked = encode_format_info(ec_level, mask) ^ FORMAT_MASK
@@ -308,12 +283,9 @@ def test_every_codeword_carries_its_data_bits_and_a_zero_bch_remainder(
 
 
 def test_the_masked_and_unmasked_views_are_disjoint_so_the_mask_is_applied() -> None:
-    """The mask is not a no-op: no placed value is also a bare codeword.
-
-    ``0x5412`` has Hamming weight 5 while the code's minimum distance is 7, so
-    masking every codeword moves it out of the code entirely; the two sets of 32
-    values therefore cannot share a member. If ``encode_format_info`` forgot the
-    mask, this set would equal the unmasked one.
+    """The mask is not a no-op: no placed value is also a bare codeword. ``0x5412`` has Hamming
+    weight 5 while the code's minimum distance is 7, so masking every codeword moves it out of
+    the code entirely; the two sets of 32 values therefore cannot share a member.
     """
     placed = {encode_format_info(ec_level, mask) for ec_level, mask in CODEWORD_CASES}
     bare = {value ^ FORMAT_MASK for value in placed}
@@ -326,11 +298,8 @@ def test_the_masked_and_unmasked_views_are_disjoint_so_the_mask_is_applied() -> 
 def test_decoding_the_wrong_side_of_the_mask_never_recovers_the_pair(
     case: tuple[str, int],
 ) -> None:
-    """``decode_bits`` unmasks its own input, so it must not be fed an unmasked value.
-
-    Offered the unmasked codeword, the decoder unmasks a second time and lands five
-    bits away from the truth -- outside its radius of three. It may then return
-    nothing or another codeword, but never the pair that encoded it, which is what
+    """``decode_bits`` unmasks its own input, so it must not be fed an unmasked value. It may then
+    return nothing or another codeword, but never the pair that encoded it, which is what
     proves the ``0x5412`` step happens inside the decoder rather than in its caller.
     """
     ec_level, mask = case
@@ -339,12 +308,9 @@ def test_decoding_the_wrong_side_of_the_mask_never_recovers_the_pair(
 
 
 def test_the_minimum_hamming_distance_is_exactly_seven() -> None:
-    """The property that makes three-bit correction safe and four-bit correction unsafe.
-
-    All C(32, 2) = 496 codeword pairs are measured. A minimum distance of 7 is what
-    the closed-form ``floor((d - 1) / 2) = 3`` correction radius rests on, and what
-    guarantees no two radius-three spheres overlap. The masked and unmasked views
-    must show the same distances, because ``0x5412`` is a constant XOR.
+    """The property that makes three-bit correction safe and four-bit correction unsafe. The
+    masked and unmasked views must show the same distances, because ``0x5412`` is a constant
+    XOR.
     """
     placed = tuple(encode_format_info(ec_level, mask) for ec_level, mask in CODEWORD_CASES)
     bare = tuple(value ^ FORMAT_MASK for value in placed)
@@ -390,14 +356,10 @@ _UNUSABLE_GRIDS: Final[tuple[tuple[str, object], ...]] = (
 def test_every_three_bit_error_is_corrected_back_to_its_own_codeword(
     case: tuple[str, int],
 ) -> None:
-    """All 32 x C(15, 3) = 14560 three-bit corruptions are corrected, and reported.
-
-    The code's minimum distance is 7, so ``2 * 3 < 7`` guarantees the radius-three
-    spheres around the codewords are disjoint and exactly one candidate can lie
-    within three bits of a corrupted copy. ``bit_errors == 3`` is part of the
-    contract rather than a detail: the evidence records how much redundancy a copy
-    spent, and a decoder that snapped to the right answer while reporting zero would
-    hide that the symbol was damaged.
+    """All 32 x C(15, 3) = 14560 three-bit corruptions are corrected, and reported. ``bit_errors
+    == 3`` is part of the contract rather than a detail: the evidence records how much
+    redundancy a copy spent, and a decoder that snapped to the right answer while reporting
+    zero would hide that the symbol was damaged.
     """
     ec_level, mask = case
     raw = encode_format_info(ec_level, mask)
@@ -412,18 +374,10 @@ def test_every_three_bit_error_is_corrected_back_to_its_own_codeword(
 
 
 def test_a_four_bit_error_is_never_reported_as_the_original_pair() -> None:
-    """All 32 x C(15, 4) = 43680 four-bit corruptions, and what a decoder may say about them.
-
-    Four bit errors lie outside the radius-three sphere, so the original pair is
-    unreachable and must never be returned: a decoder that answered with it would be
-    claiming a correction the code cannot support. Two outcomes remain legitimate
-    and both are checked here. Most patterns are simply undecodable. The rest fall
-    inside a *different* codeword's sphere -- the minimum distance is 7, so a
-    four-bit corruption can sit exactly three bits from a neighbour -- and for those
-    the returned pair must itself be within the ``bit_errors`` it reports, which is
-    the only promise a bounded-distance decoder can make. That residual ambiguity is
-    precisely why the symbol carries two copies and why ``decode_format_info``
-    prefers the copy that spent less redundancy instead of trusting one copy alone.
+    """All 32 x C(15, 4) = 43680 four-bit corruptions, and what a decoder may say about them. Four
+    bit errors lie outside the radius-three sphere, so the original pair is unreachable and
+    must never be returned: a decoder that answered with it would be claiming a correction the
+    code cannot support.
     """
     patterns = tuple(itertools.combinations(range(15), 4))
     assert len(patterns) == math.comb(15, 4) == 1365
@@ -455,13 +409,10 @@ def test_a_four_bit_error_is_never_reported_as_the_original_pair() -> None:
 
 
 def test_the_whole_fifteen_bit_space_decodes_within_the_correction_radius() -> None:
-    """An exhaustive sweep of all 32768 possible copies, not a sample of them.
-
-    Every value a copy can present either decodes to a codeword no further than the
-    ``bit_errors`` it reports, or is rejected with ``None``. The count of decodable
-    values is ``32 x (1 + 15 + 105 + 455) = 18432`` only because those radius-three
-    spheres do not overlap, which restates the minimum distance of 7 as arithmetic
-    over the whole space; an overlapping pair would make the union smaller.
+    """An exhaustive sweep of all 32768 possible copies, not a sample of them. The count of
+    decodable values is ``32 x (1 + 15 + 105 + 455) = 18432`` only because those radius-three
+    spheres do not overlap, which restates the minimum distance of 7 as arithmetic over the
+    whole space; an overlapping pair would make the union smaller.
     """
     decodable, undecodable = _space_projection()
     assert len(decodable) + len(undecodable) == _MAX_RAW + 1 == 32768
@@ -503,12 +454,9 @@ def test_a_corrupted_copy_is_visible_per_copy_not_averaged_away(
     corrupted_copy: int,
     error_count: int,
 ) -> None:
-    """Damaging one copy leaves the pair intact and names the damaged copy.
-
-    A reader that merged the copies -- by majority vote, or by taking whichever bit
-    "looked" right -- would invent a third value present in neither copy and would
-    lose the fact that the symbol is damaged. The surviving copy wins at distance 0
-    and the damaged copy's own distance is kept beside it.
+    """Damaging one copy leaves the pair intact and names the damaged copy. A reader that merged
+    the copies -- by majority vote, or by taking whichever bit "looked" right -- would invent a
+    third value present in neither copy and would lose the fact that the symbol is damaged.
     """
     raw = encode_format_info(*SAMPLE_CASE)
     grid = _grid(GRID_MODULE_COUNT, raw, raw)
@@ -548,11 +496,10 @@ def test_the_copy_that_spent_less_redundancy_is_the_one_that_is_read(
 
 
 def test_a_copy_that_cannot_be_recovered_is_recorded_as_none() -> None:
-    """An unreadable copy is ``None`` beside the distance of the copy that was read.
-
-    ``None`` is not interchangeable with a distance of 0 or of 3: it says the copy
-    carries no recoverable codeword at all, which is evidence about the symbol that a
-    numeric distance would have silently discarded.
+    """An unreadable copy is ``None`` beside the distance of the copy that was read. ``None`` is
+    not interchangeable with a distance of 0 or of 3: it says the copy carries no recoverable
+    codeword at all, which is evidence about the symbol that a numeric distance would have
+    silently discarded.
     """
     raw = encode_format_info(*SAMPLE_CASE)
     unrecoverable = _space_projection()[1][0]
@@ -569,12 +516,10 @@ def test_a_copy_that_cannot_be_recovered_is_recorded_as_none() -> None:
 
 @pytest.mark.parametrize("version", VERSIONS, ids=_version_id)
 def test_each_copy_holds_fifteen_disjoint_positions(version: int) -> None:
-    """Thirty module positions, in range, disjoint, off the timing patterns.
-
-    ISO/IEC 18004:2015(E) §7.9.1 places the fifteen bits twice. The fixed dark
-    module at ``(4V + 9, 8)`` -- ``(N - 8, 8)`` -- belongs to neither copy, and row
-    6 and column 6 carry the timing patterns; shifting any of these by one would
-    still produce a plausible-looking answer, which is a worse failure than ``None``.
+    """Thirty module positions, in range, disjoint, off the timing patterns. The fixed dark module
+    at ``(4V + 9, 8)`` -- ``(N - 8, 8)`` -- belongs to neither copy, and row 6 and column 6
+    carry the timing patterns; shifting any of these by one would still produce a
+    plausible-looking answer, which is a worse failure than ``None``.
     """
     module_count = 4 * version + 17
     copy_zero, copy_one = format_info_positions(module_count)
@@ -623,16 +568,10 @@ def test_copy_one_follows_the_module_count(version: int) -> None:
 def test_a_real_symbol_reports_the_level_and_mask_it_was_built_with(
     case: tuple[int, str, int],
 ) -> None:
-    """A real symbol's own format modules decode to its own EC level and mask.
-
-    ``segno.make_qr`` builds Model 2 only and ``boost_error=False`` keeps the EC
-    level the case asked for (AAP §0.3.5), so ``symbol.error`` and ``symbol.mask``
-    are the expectation this module cannot supply for itself: they are what an
-    ISO/IEC 18004:2015(E) §7.9.1 placement put in the grid. The dimension is
-    asserted first because ``read_format_copies`` screens an illegal module count to
-    ``(None, None)``; both copies must then carry the same codeword, which is the
-    redundancy the standard writes; and the decoded pair must be the symbol's own
-    with no bit errors, which only a correct placement convention can produce.
+    """A real symbol's own format modules decode to its own EC level and mask. ``segno.make_qr``
+    builds Model 2 only and ``boost_error=False`` keeps the EC level the case asked for (AAP
+    §0.3.5), so ``symbol.error`` and ``symbol.mask`` are the expectation this module cannot
+    supply for itself: they are what an ISO/IEC 18004:2015(E) §7.9.1 placement put in the grid.
     """
     version, ec_level, mask = case
     symbol = segno.make_qr(
@@ -658,10 +597,9 @@ def test_a_real_symbol_reports_the_level_and_mask_it_was_built_with(
 
 @pytest.mark.parametrize("module_count", (20, 22, 178, 0, -3), ids=str)
 def test_an_illegal_module_count_is_a_programmer_error(module_count: int) -> None:
-    """A dimension that is not ``4V + 17`` is a caller bug, so it raises.
-
-    Symbol damage never reaches this: ``read_format_copies`` screens the grid first
-    and answers ``None``, which keeps a bad symbol out of the exception path.
+    """A dimension that is not ``4V + 17`` is a caller bug, so it raises. Symbol damage never
+    reaches this: ``read_format_copies`` screens the grid first and answers ``None``, which
+    keeps a bad symbol out of the exception path.
     """
     with pytest.raises(ValueError, match="Model 2"):
         format_info_positions(module_count)
@@ -680,10 +618,9 @@ def test_an_unusable_grid_reads_no_copy_and_returns_none(label: str, grid: objec
 
 @pytest.mark.parametrize("index", range(4), ids=("first", "second", "third", "fourth"))
 def test_a_grid_carrying_no_legal_format_information_decodes_to_none(index: int) -> None:
-    """A copy more than three bits from every codeword is undecodable, not guessed.
-
-    The values are the smallest few that this module's own distance arithmetic puts
-    outside every radius-three sphere, so they are not lifted out of the decoder.
+    """A copy more than three bits from every codeword is undecodable, not guessed. The values are
+    the smallest few that this module's own distance arithmetic puts outside every radius-three
+    sphere, so they are not lifted out of the decoder.
     """
     unrecoverable = _space_projection()[1][index]
     assert decode_bits(unrecoverable) is None
@@ -698,10 +635,9 @@ def test_a_grid_carrying_no_legal_format_information_decodes_to_none(index: int)
     ids=("all-light", "all-dark"),
 )
 def test_a_uniform_grid_decodes_to_none(label: str, dark: bool) -> None:
-    """A blank or a fully dark symbol carries no format information at all.
-
-    The ``0x5412`` mask is what makes the all-light case honest: without it, fifteen
-    light modules would present the all-zero word, which is a valid-looking codeword.
+    """A blank or a fully dark symbol carries no format information at all. The ``0x5412`` mask is
+    what makes the all-light case honest: without it, fifteen light modules would present the
+    all-zero word, which is a valid-looking codeword.
     """
     grid = numpy.full((GRID_MODULE_COUNT, GRID_MODULE_COUNT), dark, dtype=bool)
     assert decode_format_info(grid) is None, f"{label} decoded to format information"

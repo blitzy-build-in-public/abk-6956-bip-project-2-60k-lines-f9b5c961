@@ -1,36 +1,24 @@
 """The result model's invariants: what ``CaseResult`` and ``RunResult`` refuse.
 
-AAP §0.3.4 fixes both records exactly - ``CaseResult`` with its ten fields and
-``RunResult`` with its nine - and fixes what each per-result field of ``summary.json``
-holds: ``request``, ``decoded`` and ``expected`` are objects, and ``evidence_dir`` is a
-path relative to ``report_dir``. A record shape is only worth what its enforcement is
-worth, so every invariant a writer would otherwise have to rediscover is pinned here, at
-the model boundary where the value enters:
+AAP §0.3.4 fixes both records exactly -- ``CaseResult`` with its ten fields and ``RunResult`` with
+its nine -- and fixes what each per-result field of ``summary.json`` holds. A record shape is only
+worth what its enforcement is worth, so every invariant a writer would otherwise have to rediscover
+is pinned at the model boundary where the value enters: a ``duration_ms`` is finite and
+non-negative, because ``nan`` and ``inf`` are not tokens RFC 8259 defines and would render as text
+in the HTML table and the JUnit ``time``; ``request``, ``decoded`` and ``expected`` are Mappings,
+so no artefact carries an array or a scalar where its schema fixes an object; a string
+``decoded[TRACEBACK_KEY]`` has every absolute path in it rewritten into a portable form, which is
+what keeps an error case's ``decoded.json`` byte-identical across clones; ``evidence_dir`` is a
+non-empty relative posix path, so the empty string cannot name the report root as if it were a
+case's own evidence directory; a ``RunResult`` finishes at or after it starts, while a zero-length
+run stays legal; and one ``(check_id, case_id)`` pair appears once in a ``RunResult``, because that
+pair is the identity the failure ID and the evidence directory are derived from, so a repeat would
+write two cases into one directory while the tallies still balanced.
 
-* a ``duration_ms`` is finite and non-negative. A ``nan`` or an ``inf`` is not a token
-  RFC 8259 defines, so it would make ``summary.json`` unreadable for tooling (§0.1.1
-  FR-6) and would render as the text ``nan`` in the HTML table and the JUnit ``time``;
-* ``request``, ``decoded`` and ``expected`` are Mappings, so no artefact carries an
-  array or a scalar where its schema fixes an object;
-* ``decoded[TRACEBACK_KEY]``, when it holds a string, has every absolute path in it
-  rewritten into a portable form, so an error case's evidence names the module that failed
-  rather than the clone it ran in - which is what keeps ``decoded.json`` byte-identical
-  across clones and free of absolute paths (§0.5.4, §0.5.5);
-* ``evidence_dir`` is a non-empty relative posix path, so the empty string cannot name
-  the report root as if it were a case's own evidence directory;
-* a ``RunResult`` finishes at or after it starts, so the duration its HTML header
-  renders and its JUnit suite time sums is never negative, while a zero-length run stays
-  legal;
-* one ``(check_id, case_id)`` pair appears once in a ``RunResult``, because that pair is
-  the identity :func:`qrcheck.report.model.failure_id` and the evidence directory are
-  derived from (AAP §0.3.4 evidence layout, §0.1.1 FR-5) - a repeat would write two
-  cases into one directory while the tallies still balanced.
-
-Every rejected record is paired below with the record the same construction accepts, so
-no test here can pass by refusing everything, and each accepted case is one an existing
-caller really produces (``qrcheck/checks/support.py``, ``qrcheck/registry/resolve.py``,
-``tests/unit/test_failure_ids.py``). Nothing is read from ``qrcheck.toml``, no file is
-written and no process is started: these are pure functions of their inputs.
+Every rejected record is paired with the record the same construction accepts, so no test here can
+pass by refusing everything, and each accepted case is one an existing caller really produces.
+Nothing is read from ``qrcheck.toml``, no file is written and no process is started: these are pure
+functions of their inputs.
 """
 
 import dataclasses
@@ -472,14 +460,12 @@ def test_the_same_case_id_under_two_check_ids_is_accepted() -> None:
 
 
 def test_an_internal_fault_has_a_reason_of_its_own() -> None:
-    """An ``error`` row names the framework's fault, not a check's verdict.
-
-    AAP §0.6.6 row 11 contains an internal exception as an ``error`` result carrying
-    its traceback instead of aborting the run, so its cause needs a word of its own:
-    without one, a real capacity-gate ``ValueError`` raised on the framework side can
-    only be filed as ``capacity_violation`` - a check's verdict - and the ``reason``
-    ``summary.json`` records and the ``<error message=...>`` ``junit.xml`` emits then
-    describe the row as something it is not.
+    """An ``error`` row names the framework's fault, not a check's verdict. AAP §0.6.6 row 11
+    contains an internal exception as an ``error`` result carrying its traceback instead of
+    aborting the run, so its cause needs a word of its own: without one, a real capacity-gate
+    ``ValueError`` raised on the framework side can only be filed as ``capacity_violation`` - a
+    check's verdict - and the ``reason`` ``summary.json`` records and the ``<error
+    message=...>`` ``junit.xml`` emits then describe the row as something it is not.
     """
     assert Reason.INTERNAL_ERROR.value == "internal_error"
     assert Reason("internal_error") is Reason.INTERNAL_ERROR

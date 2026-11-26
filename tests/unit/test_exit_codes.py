@@ -1,57 +1,29 @@
 """The process contract: one test per exit code, and the precedence between them.
 
-AAP §0.3.4 fixes four process statuses and one order, and this module is the gate that holds
-them at the command line rather than at a model boundary:
+AAP §0.3.4 fixes four statuses and one order: ``0`` when the run completed with no ``failed`` and
+no ``error`` result, a ``skipped`` result never changing the outcome; ``1`` for at least one
+``failed`` and none errored; ``2`` for a configuration, selection, corpus-filter, corpus-file,
+primary-decoder or target-availability fault decided **before any check runs**, so no report is
+written and the diagnostic names the key, selector, filter, dependency or path to fix; ``3`` for an
+``error`` result, an unwritable ``report_dir`` or an unhandled framework exception. Precedence is
+``2`` before execution and, during and after a run, ``3`` outranks ``1`` which outranks ``0`` -- so
+exit code 2 never competes with a result, which is why :func:`qrcheck.cli.exit.exit_code_for`
+cannot return it and the tests below assert that property directly.
 
-    0  the run completed with no ``failed`` and no ``error`` result; a ``skipped`` result is
-       permitted and never changes the outcome
-    1  at least one check ``failed`` and none errored
-    2  a configuration, selection, corpus-filter, corpus-file, primary-decoder or
-       target-availability fault, decided **before any check runs**, so no report is written
-       and the diagnostic names the key, selector, filter, dependency or path to fix
-    3  any check ``error`` result, an unwritable ``report_dir``, or an unhandled framework
-       exception: the report is written, except for the unwritable directory, where the
-       results the run holds are streamed to stdout as one JSON object per line
+Every expected status is an ``EXIT_*`` constant, never a bare integer, because the vocabulary is
+decided in :mod:`qrcheck.cli.exit` alone. The two properties the constants cannot express --
+precedence, and "2 is decided before a run exists" -- are asserted as inequalities and as the
+absence of :data:`~qrcheck.cli.exit.EXIT_CONFIG` from the produced set.
 
-Precedence is ``2`` before execution and, during and after a run, ``3`` outranks ``1`` which
-outranks ``0``. Exit code 2 therefore never competes with a result, which is why
-:func:`qrcheck.cli.exit.exit_code_for` cannot return it and why the tests below assert that
-property directly.
-
-Where the numbers come from
----------------------------
-Every expected status is an ``EXIT_*`` constant, never a bare integer: the vocabulary is
-decided in :mod:`qrcheck.cli.exit` alone, and a test that spelled ``2`` could not tell a
-renamed constant from a passing case. The two properties the constants cannot express --
-precedence and "2 is decided before a run exists" -- are asserted as inequalities and as
-the absence of :data:`~qrcheck.cli.exit.EXIT_CONFIG` from the produced set.
-
-How the suite stays fast, and why these three doubles are the honest ones
-------------------------------------------------------------------------
-The command line is driven through the real click group (``invoke_cli``), so the option
-parsing, the exit-code plumbing of ``qrcheck/cli/{main,run,doctor,corpus,loc}.py``, the
-runner, the evidence store and the three writers are all the production objects. Only the
-three boundaries that would otherwise need a real generator, a real image or a real defect
-are doubled:
-
-* the target, by replacing the one factory table ``qrcheck/cli/run.py`` looks a target up in
-  with a mapping that returns the suite's :class:`~qrcheck.targets.base.Adapter` stub -- the
-  same table production code indexes, so the command's own resolution still runs;
-* the decode layer, through the suite's ``patch_decode`` fixture, because every check under
-  test asserts an exit code and not a decoding property;
-* one registered check's case generator, in the two internal-error tests, because the state
-  under test is "a case raised" and nothing in the product can be asked to raise on demand.
-
-What deliberately is not here: a target lost *during* a run is the one-error-per-check path
-that exits 3 and is asserted in ``tests/unit/test_runner_target_loss.py``, and the per-check
-adapter-invocation counts that prove no retry exists are asserted in
-``tests/unit/test_checks_negative.py``. This module pins the status of the process, not the
-policy of the runner or of a check.
-
-No user-specified rules exist for this project (AAP §0.12), so the binding constraints are
-the request's own: no check is skipped, ``xfail``-ed or retried, no threshold is restated
-here, no run reaches a network beyond the conftest's loopback guard, and every artefact each
-run produces stays under the test's ``tmp_path``.
+The command line is driven through the real click group (``invoke_cli``), so option parsing, the
+exit-code plumbing of ``qrcheck/cli/{main,run,doctor,corpus,loc}.py``, the runner, the evidence
+store and the three writers are the production objects; only the three boundaries that would
+otherwise need a real generator, a real image or a real defect are doubled -- the target factory
+table ``qrcheck/cli/run.py`` indexes, the decode layer through ``patch_decode``, and, in the two
+internal-error tests, one registered check's case generator, because "a case raised" is a state
+nothing in the product can be asked to raise on demand. A target lost *during* a run is
+``tests/unit/test_runner_target_loss.py``'s gate. Nothing is skipped, ``xfail``-ed or retried, no
+threshold is restated, and every artefact stays under the test's ``tmp_path``.
 """
 
 from __future__ import annotations
@@ -155,21 +127,10 @@ def tally_case_result(
     status: Status,
     reason: Reason | None,
 ) -> CaseResult:
-    """Return one result of `status`, with an identity unique within its run.
-
-    A :class:`~qrcheck.report.model.RunResult` refuses two results that share a
-    ``(check_id, case_id)`` pair, so the index participates in the case identifier and the
-    status participates in neither half of the pair.
-
-    Args:
-        make_case_result: The suite's ``CaseResult`` factory.
-        index: A zero-based index that keeps the identity unique.
-        status: The status the result carries.
-        reason: The reason that status requires, or ``None`` for a pass, which is the one
-            status the result model refuses a reason on.
-
-    Returns:
-        The constructed result.
+    """Return one result of `status`, with an identity unique within its run. A
+    :class:`~qrcheck.report.model.RunResult` refuses two results that share a ``(check_id,
+    case_id)`` pair, so the index participates in the case identifier and the status
+    participates in neither half of the pair.
     """
     return make_case_result(
         case_id=f"corpus:tally-{index:03d}",
@@ -188,22 +149,9 @@ def run_with_tallies(
     error: int,
 ) -> RunResult:
     """Return a run whose four tallies are exactly the requested counts.
-
     :class:`~qrcheck.report.model.RunResult` recomputes its tallies from its results and
     refuses a record whose counts disagree with them, so results are the only way to state a
-    tally. That is what makes the truth table below a statement about the run the product
-    builds rather than about a hand-filled :class:`~qrcheck.report.model.Counts`.
-
-    Args:
-        make_case_result: The suite's ``CaseResult`` factory.
-        make_run_result: The suite's ``RunResult`` factory.
-        passed: How many ``passed`` results the run holds.
-        failed: How many ``failed`` results it holds.
-        skipped: How many ``skipped`` results it holds.
-        error: How many ``error`` results it holds.
-
-    Returns:
-        The constructed run.
+    tally.
     """
     plan: tuple[tuple[int, Status, Reason | None], ...] = (
         (passed, Status.PASSED, None),
@@ -231,18 +179,7 @@ def run_with_tallies(
 
 
 def install_adapter(monkeypatch: pytest.MonkeyPatch, adapter: Any) -> None:
-    """Make ``qrcheck run`` build `adapter` for the configured target.
-
-    The command resolves a target through ``qrcheck.cli.run.ADAPTER_TYPES``, so replacing
-    that one table is the narrowest injection that leaves the command's own resolution,
-    validation and teardown in the path. The replacement accepts the call shape the command
-    uses -- the per-type target record positionally and the configured name as a keyword --
-    and returns the same stub for every lookup, which no run here makes twice.
-
-    Args:
-        monkeypatch: The fixture that owns the replacement's lifetime.
-        adapter: The protocol-conforming stub every lookup returns.
-    """
+    """Make ``qrcheck run`` build `adapter` for the configured target."""
 
     def build(target: object, *, name: str) -> Any:
         del target, name
@@ -254,20 +191,11 @@ def install_adapter(monkeypatch: pytest.MonkeyPatch, adapter: Any) -> None:
 def replace_case_generator(
     monkeypatch: pytest.MonkeyPatch, check_id: str
 ) -> CheckContract:
-    """Replace one registered check's cases with a single case that raises.
-
-    The registry is read through a read-only view of a module-private store, so a replacement
-    has to be written into that store: ``isolated_registry()`` is the documented way to do
-    that, but it empties the registry first, and the assertion this serves is precisely that
-    the *other* registered checks keep running. The entry is restored by ``monkeypatch`` at
-    the end of the test, whatever the outcome.
-
-    Args:
-        monkeypatch: The fixture that owns the replacement's lifetime.
-        check_id: The registered check whose case generator is replaced.
-
-    Returns:
-        The replacement contract, for a caller that wants to assert its identity.
+    """Replace one registered check's cases with a single case that raises. The registry is read
+    through a read-only view of a module-private store, so a replacement has to be written into
+    that store: ``isolated_registry()`` is the documented way to do that, but it empties the
+    registry first, and the assertion this serves is precisely that the *other* registered
+    checks keep running.
     """
 
     def execute(context: object) -> CaseResult:
@@ -290,32 +218,19 @@ def replace_case_generator(
 
 
 def read_summary(report_dir: Path) -> dict[str, Any]:
-    """Return ``summary.json`` of the run under `report_dir`, parsed.
-
-    The summary is the machine-readable statement of a run's tallies and results, so every
-    exit-0/1/3 assertion reads the code and the counts from the same artefact: a command that
-    exited 1 without reporting a failure, or exited 3 without reporting an error, would fail
-    here even though the integer alone looked right.
-
-    Args:
-        report_dir: The run's report root.
-
-    Returns:
-        The parsed summary.
+    """Return ``summary.json`` of the run under `report_dir`, parsed. The summary is the
+    machine-readable statement of a run's tallies and results, so every exit-0/1/3 assertion
+    reads the code and the counts from the same artefact: a command that exited 1 without
+    reporting a failure, or exited 3 without reporting an error, would fail here even though
+    the integer alone looked right.
     """
     return json.loads((report_dir / SUMMARY_FILENAME).read_text(encoding="utf-8"))
 
 
 def assert_no_report(report_dir: Path) -> None:
-    """Assert that no run described itself under `report_dir`.
-
-    Exit code 2 is decided before any check runs, so the report root must hold neither an
-    artefact nor an evidence directory: a report written on a configuration or prerequisite
-    fault would be read as a completed run. The whole tree is checked, not only
-    ``summary.json``, because a partially written report would be just as misleading.
-
-    Args:
-        report_dir: The run's report root.
+    """Assert that no run described itself under `report_dir`. Exit code 2 is decided before any
+    check runs, so the report root must hold neither an artefact nor an evidence directory: a
+    report written on a configuration or prerequisite fault would be read as a completed run.
     """
     assert sorted(report_dir.rglob("*")) == [], (
         f"an exit-2 run wrote {sorted(report_dir.rglob('*'))} under {report_dir}; exit code 2 "
@@ -324,17 +239,9 @@ def assert_no_report(report_dir: Path) -> None:
 
 
 def json_object_lines(stdout: str) -> list[dict[str, Any]]:
-    """Return one parsed object per line of `stdout`, asserting each line is an object.
-
-    The contract for an unwritable report directory is JSON lines: one canonical object per
-    result and no wrapper, so a CI consumer parses what the command could not file. A line
-    that is not a JSON object -- a banner, a summary sentence, a partial write -- fails here.
-
-    Args:
-        stdout: What the command wrote on standard output.
-
-    Returns:
-        The parsed objects, in the order the command wrote them.
+    """Return one parsed object per line of `stdout`, asserting each line is an object. The
+    contract for an unwritable report directory is JSON lines: one canonical object per result
+    and no wrapper, so a CI consumer parses what the command could not file.
     """
     payloads: list[dict[str, Any]] = []
     for line in stdout.splitlines():
@@ -350,21 +257,10 @@ def json_object_lines(stdout: str) -> list[dict[str, Any]]:
 
 
 def documented_code(*, failed: int, error: int) -> int:
-    """Return the status AAP §0.3.4 prescribes for a run carrying these two tallies.
-
-    The rule is stated once, here, in the form the plan states it: an ``error`` result
-    outranks a ``failed`` one, either outranks a clean run, and the ``skipped`` tally is not
-    consulted at all. The truth table below is generated from this reading rather than from
-    the implementation, so a change to ``exit_code_for`` that reorders the two arms fails the
-    table instead of moving with it.
-
-    Args:
-        failed: How many results carry status ``failed``.
-        error: How many results carry status ``error``.
-
-    Returns:
-        :data:`~qrcheck.cli.exit.EXIT_INTERNAL`, :data:`~qrcheck.cli.exit.EXIT_FAILED` or
-        :data:`~qrcheck.cli.exit.EXIT_OK`.
+    """Return the status AAP §0.3.4 prescribes for a run carrying these two tallies. The rule is
+    stated once, here, in the form the plan states it: an ``error`` result outranks a
+    ``failed`` one, either outranks a clean run, and the ``skipped`` tally is not consulted at
+    all.
     """
     if error > 0:
         return EXIT_INTERNAL
@@ -405,12 +301,11 @@ def test_exit_code_for_reads_the_four_counts(
     skipped: int,
     expected: int,
 ) -> None:
-    """Every combination of the tallies maps to the documented status, and never to 2.
-
-    Exit code 2 is decided before a run exists, so no run result can imply it: the
+    """Every combination of the tallies maps to the documented status, and never to 2. Exit code 2
+    is decided before a run exists, so no run result can imply it: the
     :data:`~qrcheck.cli.exit.EXIT_CONFIG` assertion is as much part of the contract as the
-    ``expected`` one, and it is what keeps a future refactor from folding a configuration
-    fault into the run's own verdict.
+    ``expected`` one, and it is what keeps a future refactor from folding a configuration fault
+    into the run's own verdict.
     """
     run_result = run_with_tallies(
         make_case_result,
@@ -444,11 +339,10 @@ def test_the_documented_corners(
     skipped: int,
     expected: int,
 ) -> None:
-    """The three corners the plan names, each with the code its sentence fixes.
-
-    A skipped result is counted in its own integer, so a run of skips and passes alone is a
-    clean run; a single failure is exit 1; and a failure beside an error is exit 3, because
-    the two arms are not additive and the internal fault is the one a reader has to see.
+    """The three corners the plan names, each with the code its sentence fixes. A skipped result
+    is counted in its own integer, so a run of skips and passes alone is a clean run; a single
+    failure is exit 1; and a failure beside an error is exit 3, because the two arms are not
+    additive and the internal fault is the one a reader has to see.
     """
     run_result = run_with_tallies(
         make_case_result,
@@ -466,12 +360,7 @@ def test_exit_code_for_never_returns_the_configuration_code(
     make_case_result: Callable[..., CaseResult],
     make_run_result: Callable[..., RunResult],
 ) -> None:
-    """Across the whole table the function produces exactly three of the four codes.
-
-    The absent one is :data:`~qrcheck.cli.exit.EXIT_CONFIG`: it is decided while the
-    configuration, the selection, the corpus and the primary decoder are settled, all of
-    which happen before a :class:`~qrcheck.report.model.RunResult` exists.
-    """
+    """Across the whole table the function produces exactly three of the four codes."""
     produced = {
         exit_code_for(
             run_with_tallies(
@@ -497,11 +386,9 @@ def test_exit_code_for_reads_the_tallies_not_a_pass_verdict(
     make_case_result: Callable[..., CaseResult],
     make_run_result: Callable[..., RunResult],
 ) -> None:
-    """Three runs of equal size and different composition take three different codes.
-
-    A function that answered "did anything go wrong" would return the same code for the
-    second and the third run; a function that read a stored verdict would return the same
-    code for all three. The code tracks the four integers and nothing else.
+    """Three runs of equal size and different composition take three different codes. A function
+    that answered "did anything go wrong" would return the same code for the second and the
+    third run; a function that read a stored verdict would return the same code for all three.
     """
     clean = run_with_tallies(
         make_case_result, make_run_result, passed=3, failed=0, skipped=0, error=0
@@ -525,12 +412,11 @@ def test_exit_three_outranks_exit_one_which_outranks_exit_zero(
     make_case_result: Callable[..., CaseResult],
     make_run_result: Callable[..., RunResult],
 ) -> None:
-    """The precedence is the integer order, and it holds on a run with both faults.
-
-    The numeric order is what an operating system reads, so the constants have to be ordered
-    the way the precedence is described: a wrapper that combined statuses by taking the
-    maximum -- the usual way a shell reports the worst of several steps -- must arrive at the
-    internal fault rather than the failed one.
+    """The precedence is the integer order, and it holds on a run with both faults. The numeric
+    order is what an operating system reads, so the constants have to be ordered the way the
+    precedence is described: a wrapper that combined statuses by taking the maximum -- the
+    usual way a shell reports the worst of several steps -- must arrive at the internal fault
+    rather than the failed one.
     """
     both = run_with_tallies(
         make_case_result, make_run_result, passed=0, failed=1, skipped=0, error=1
@@ -546,13 +432,10 @@ def test_exit_three_outranks_exit_one_which_outranks_exit_zero(
 
 
 def test_main_returns_the_exit_code_as_an_integer(capsys: pytest.CaptureFixture[str]) -> None:
-    """``main`` hands its caller an ``int``, which is the console script's whole contract.
-
-    Both entry points -- the ``qrcheck`` console script and ``python -m qrcheck`` -- pass
-    this value straight to :class:`SystemExit`, so a ``main`` that raised ``SystemExit``
-    itself would double-wrap it and one that returned ``None`` would report every run as a
-    success. ``list`` is the cheapest verb that reaches the registry, and its exit status is
-    :data:`~qrcheck.cli.exit.EXIT_OK` by construction.
+    """``main`` hands its caller an ``int``, which is the console script's whole contract. Both
+    entry points -- the ``qrcheck`` console script and ``python -m qrcheck`` -- pass this value
+    straight to :class:`SystemExit`, so a ``main`` that raised ``SystemExit`` itself would
+    double-wrap it and one that returned ``None`` would report every run as a success.
     """
     code = main(["list"])
 
@@ -572,13 +455,10 @@ def test_exit_zero_when_the_only_selected_check_is_skipped(
     stub_adapter: Any,
     report_dir: Path,
 ) -> None:
-    """A capability shortfall is a skip, and a skip is neither a failure nor a pass.
-
-    The target declares ``png`` alone, so the selected check -- which also demands
-    ``ec_level`` -- is resolved to ``skipped``/``unsupported_capability`` *before* execution:
-    the run exits 0, the skip is tallied in its own integer, and the target is never asked for
-    a symbol. Folding the skip into ``passed`` would make a run that covered nothing look
-    green, which is the reason the model keeps four separate counters.
+    """A capability shortfall is a skip, and a skip is neither a failure nor a pass. The target
+    declares ``png`` alone, so the selected check -- which also demands ``ec_level`` -- is
+    resolved to ``skipped``/``unsupported_capability`` *before* execution: the run exits 0, the
+    skip is tallied in its own integer, and the target is never asked for a symbol.
     """
     stub_adapter.capabilities = frozenset({Capability.png})
     install_adapter(monkeypatch, stub_adapter)
@@ -624,13 +504,12 @@ def test_exit_one_when_a_check_fails_without_erroring(
     committed_corpus: Sequence[Any],
     report_dir: Path,
 ) -> None:
-    """A failed check and nothing worse is exit 1, with every artefact still written.
-
-    The decode layer is stubbed to return a payload that is not the one requested, which is
-    the one defect ``RT-ROUNDTRIP`` asserts against: every case of the selected class fails
-    with ``value_mismatch``, no case errors, the process exits 1 and the full report exists --
-    the difference between "the generator is wrong" and "the framework broke" is the whole
-    reason the two codes are distinct.
+    """A failed check and nothing worse is exit 1, with every artefact still written. The decode
+    layer is stubbed to return a payload that is not the one requested, which is the one defect
+    ``RT-ROUNDTRIP`` asserts against: every case of the selected class fails with
+    ``value_mismatch``, no case errors, the process exits 1 and the full report exists -- the
+    difference between "the generator is wrong" and "the framework broke" is the whole reason
+    the two codes are distinct.
     """
     patch_decode(make_decode_result(payload_bytes=STUBBED_PAYLOAD))
     install_adapter(monkeypatch, stub_adapter)
@@ -670,11 +549,10 @@ def test_exit_two_for_an_unknown_configuration_key(
     toml_config_file: Callable[..., Path],
     report_dir: Path,
 ) -> None:
-    """A document with a key the schema does not declare is refused, and the key is named.
-
-    The diagnostic has to name the key, because exit code 2 exists to tell a reader what to
-    fix; and the report root has to stay empty, because a report written for a configuration
-    this run never accepted would describe a run that did not happen.
+    """A document with a key the schema does not declare is refused, and the key is named. The
+    diagnostic has to name the key, because exit code 2 exists to tell a reader what to fix;
+    and the report root has to stay empty, because a report written for a configuration this
+    run never accepted would describe a run that did not happen.
     """
     unknown_key = "mystery_probe_key"
     config = toml_config_file(text=f"seed = 1\n{unknown_key} = 2\n")
@@ -690,10 +568,9 @@ def test_exit_two_for_a_selection_that_matches_nothing(
     invoke_cli: Callable[..., Any],
     report_dir: Path,
 ) -> None:
-    """A selector that names no registered check is echoed verbatim, and nothing runs.
-
-    The selector is repeated rather than paraphrased, so a reader of a CI log can paste it
-    back; and the sweep happens before the target is built, so this needs no double at all.
+    """A selector that names no registered check is echoed verbatim, and nothing runs. The
+    selector is repeated rather than paraphrased, so a reader of a CI log can paste it back;
+    and the sweep happens before the target is built, so this needs no double at all.
     """
     selector = "NOPE-*"
 
@@ -708,10 +585,9 @@ def test_exit_two_for_a_corpus_filter_that_matches_nothing(
     invoke_cli: Callable[..., Any],
     report_dir: Path,
 ) -> None:
-    """A ``--class`` filter that leaves no record is a prerequisite fault, not an empty run.
-
-    A run over zero records would satisfy every assertion it has and prove nothing, which is
-    why the runner refuses it before the walk and the command exits 2 naming the globs.
+    """A ``--class`` filter that leaves no record is a prerequisite fault, not an empty run. A run
+    over zero records would satisfy every assertion it has and prove nothing, which is why the
+    runner refuses it before the walk and the command exits 2 naming the globs.
     """
     corpus_glob = "no-such-class-*"
 
@@ -730,13 +606,10 @@ def test_exit_two_for_a_missing_primary_decoder(
     stub_adapter: Any,
     report_dir: Path,
 ) -> None:
-    """Without the primary decoder the run refuses to start rather than skipping round-trip.
-
-    ``sys.modules`` is given a ``None`` entry for ``zxingcpp``, which is how an unavailable
-    module is modelled in-process: the probe's ``find_spec`` raises and the decoder reads as
-    absent. The diagnostic has to name the distribution and the lock file that pins it,
-    because a missing required decoder is an environment fault to install, not a target to
-    change; and no report may be written, so ``RT-ROUNDTRIP`` is never silently skipped.
+    """Without the primary decoder the run refuses to start rather than skipping round-trip. The
+    diagnostic has to name the distribution and the lock file that pins it, because a missing
+    required decoder is an environment fault to install, not a target to change; and no report
+    may be written, so ``RT-ROUNDTRIP`` is never silently skipped.
     """
     monkeypatch.setitem(sys.modules, "zxingcpp", None)
     install_adapter(monkeypatch, stub_adapter)
@@ -754,12 +627,7 @@ def test_exit_two_for_a_missing_corpus_file(
     toml_config_file: Callable[..., Path],
     report_dir: Path,
 ) -> None:
-    """An unreadable corpus is a prerequisite fault, and the path is named.
-
-    This is the run's own pre-flight path end to end: the command is configured with a
-    ``corpus_path`` that holds no file, the runner raises its prerequisite error before the
-    walk begins, and the process exits 2 having written nothing.
-    """
+    """An unreadable corpus is a prerequisite fault, and the path is named."""
     missing_corpus = "corpus/absent.jsonl"
     config = toml_config_file(corpus_path=missing_corpus)
 
@@ -776,16 +644,10 @@ def test_exit_two_for_a_target_unavailable_at_preflight(
     stub_adapter: Any,
     report_dir: Path,
 ) -> None:
-    """A target found unavailable *before* any case runs is exit 2, not exit 3.
-
-    The runner's prerequisite exception is where a pre-flight availability fault surfaces:
-    the target could not be reached, or was never usable, so no case ran and there is no run
-    to report -- which is exactly the condition the exit table puts at code 2. A target lost
-    *during* the walk is a different state: it produces one ``error`` result per affected
-    check, keeps the report, and exits 3, which is why the two are asserted in different
-    modules (``tests/unit/test_runner_target_loss.py`` holds the other half). The error is
-    raised here rather than provoked, because a real target that dies on first use is that
-    mid-run state, and no configuration can express "unreachable only before the first case".
+    """A target found unavailable *before* any case runs is exit 2, not exit 3. The runner's
+    prerequisite exception is where a pre-flight availability fault surfaces: the target could
+    not be reached, or was never usable, so no case ran and there is no run to report -- which
+    is exactly the condition the exit table puts at code 2.
     """
 
     def refuse(*args: object, **kwargs: object) -> RunResult:
@@ -820,13 +682,9 @@ def test_exit_three_when_a_check_raises_internally(
     patch_decode: Any,
     report_dir: Path,
 ) -> None:
-    """A raising case becomes one ``error`` result with its traceback, and the walk goes on.
-
-    Three assertions make this the state the plan describes rather than "the run aborted":
-    exactly one result carries ``error``, that result's decoded evidence holds the traceback
-    with the raised message inside it, and a result filed under a *later* check identifier is
-    still present. A command that stopped at the first exception would satisfy the first two
-    and fail the third, which is the point of asserting it separately.
+    """A raising case becomes one ``error`` result with its traceback, and the walk goes on. A
+    command that stopped at the first exception would satisfy the first two and fail the third,
+    which is the point of asserting it separately.
     """
     replace_case_generator(monkeypatch, RAISING_CHECK)
     install_adapter(monkeypatch, stub_adapter)
@@ -874,13 +732,9 @@ def test_exit_three_when_the_report_directory_is_unwritable(
     unwritable_report_dir: Path,
     report_dir: Path,
 ) -> None:
-    """A ``report_dir`` that cannot be created is exit 3, and the path is in the message.
-
-    A regular file stands where the directory belongs, so ``mkdir`` fails for every user
+    """A ``report_dir`` that cannot be created is exit 3, and the path is in the message. A
+    regular file stands where the directory belongs, so ``mkdir`` fails for every user
     including root -- a permission bit would prove nothing in a container that runs as root.
-    No result exists yet, because the directory is probed before the run starts, so the
-    stream is empty; the JSON-lines half of the contract is asserted in the next test, where
-    a run result does exist.
     """
     result = invoke_cli("run", "--report-dir", str(unwritable_report_dir))
 
@@ -896,13 +750,10 @@ def test_exit_three_streams_json_lines_when_the_report_cannot_be_written(
     stub_adapter: Any,
     report_dir: Path,
 ) -> None:
-    """A run whose report cannot be written still streams every result, one object per line.
-
-    The writer is made to fail rather than the directory, because a directory the probe
-    accepts and the writers then cannot use is the only state that has results *and* no
-    report, and ``chmod`` cannot produce it for root. What is asserted is the contract a CI
-    consumer depends on: the process exits 3, the path is named on stderr, and every line of
-    stdout parses as a JSON object, so the results the run found are never lost with the file.
+    """A run whose report cannot be written still streams every result, one object per line. The
+    writer is made to fail rather than the directory, because a directory the probe accepts and
+    the writers then cannot use is the only state that has results *and* no report, and
+    ``chmod`` cannot produce it for root.
     """
     stub_adapter.capabilities = frozenset({Capability.png})
     install_adapter(monkeypatch, stub_adapter)
@@ -932,11 +783,10 @@ def test_exit_three_outranks_exit_one_when_a_run_both_fails_and_errors(
     committed_corpus: Sequence[Any],
     report_dir: Path,
 ) -> None:
-    """A run carrying a failure *and* an error exits 3, and the summary reports both counts.
-
-    The precedence the plan states is only meaningful when both faults are present at once:
-    the internal fault is the worse of the two, so it decides the status, but the failure is
-    still counted and still reported -- a report that collapsed them, or a code that took the
+    """A run carrying a failure *and* an error exits 3, and the summary reports both counts. The
+    precedence the plan states is only meaningful when both faults are present at once: the
+    internal fault is the worse of the two, so it decides the status, but the failure is still
+    counted and still reported -- a report that collapsed them, or a code that took the
     failure, would each describe the run wrongly.
     """
     expected_failures = sum(
@@ -967,15 +817,9 @@ def test_exit_three_outranks_exit_one_when_a_run_both_fails_and_errors(
 
 
 def unreachable_target_document() -> str:
-    """Return a configuration document naming a target that can never be reached.
-
-    The ``library`` adapter resolves its callable from configuration, so a module that does
-    not exist is an unreachable target that needs no port, no process and no double. The
-    declared ``png`` capability matters: without it the probe would be refused for a missing
-    capability, which is a different fault and a different diagnostic.
-
-    Returns:
-        A complete TOML document for a configuration with one ``library`` target.
+    """Return a configuration document naming a target that can never be reached. The ``library``
+    adapter resolves its callable from configuration, so a module that does not exist is an
+    unreachable target that needs no port, no process and no double.
     """
     return (
         'default_adapter = "local"\n'
@@ -994,15 +838,13 @@ def test_the_other_subcommands_answer_in_the_same_vocabulary(
     toml_config_file: Callable[..., Path],
     tmp_path: Path,
 ) -> None:
-    """``list``, ``doctor``, ``corpus build`` and ``loc`` use the same four statuses.
-
-    Four short invocations, so that a code chosen in one command cannot drift from the code
-    its sibling returns for the same kind of fault: ``list`` always succeeds, ``doctor``
-    reports an unreachable target as a configuration-class failure (that is the product's
-    pre-flight target-availability gate, and the reason a *run* against a dying target is the
-    exit-3 state instead), and the two argument faults -- a negative seed and a path that
-    does not exist -- are exit 2 rather than the exit 1 a shell would expect from a failing
-    command.
+    """``list``, ``doctor``, ``corpus build`` and ``loc`` use the same four statuses. Four short
+    invocations, so that a code chosen in one command cannot drift from the code its sibling
+    returns for the same kind of fault: ``list`` always succeeds, ``doctor`` reports an
+    unreachable target as a configuration-class failure (that is the product's pre-flight
+    target-availability gate, and the reason a *run* against a dying target is the exit-3 state
+    instead), and the two argument faults -- a negative seed and a path that does not exist --
+    are exit 2 rather than the exit 1 a shell would expect from a failing command.
     """
     list_result = invoke_cli("list")
     assert list_result.exit_code == EXIT_OK

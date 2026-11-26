@@ -1,0 +1,86 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    name: Unit gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install pinned dependencies from the hash locks
+        run: |
+          python -m pip install --require-hashes -r requirements.lock
+          python -m pip install --require-hashes -r requirements-dev.lock
+
+      - name: Install the project (editable, no build isolation, no dependency resolution)
+        run: python -m pip install --no-build-isolation --no-deps -e .
+
+      - name: "Syntax gate: python -m compileall -q qrcheck tests"
+        run: python -m compileall -q qrcheck tests
+
+      - name: Unit gate (85 % coverage floor)
+        run: |
+          mkdir -p reports
+          pytest -m "not e2e" --junitxml=reports/pytest-unit.xml --cov=qrcheck --cov-fail-under=85
+
+      - name: Per-package coverage floor 90 % (config, registry, report)
+        run: coverage report --include='qrcheck/config/*,qrcheck/registry/*,qrcheck/report/*' --fail-under=90
+
+      - name: "Line-ceiling gate: qrcheck loc --limit 60000"
+        run: qrcheck loc --limit 60000
+
+  e2e:
+    name: End-to-end proof
+    runs-on: ubuntu-latest
+    needs: unit
+    timeout-minutes: 30
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install pinned dependencies from the hash locks
+        run: |
+          python -m pip install --require-hashes -r requirements.lock
+          python -m pip install --require-hashes -r requirements-dev.lock
+
+      - name: Install the project (editable, no build isolation, no dependency resolution)
+        run: python -m pip install --no-build-isolation --no-deps -e .
+
+      - name: Install the SVG rasterizer (rsvg-convert)
+        run: sudo apt-get install -y --no-install-recommends librsvg2-bin
+
+      - name: Corpus drift check (regenerate, then compare)
+        run: |
+          mkdir -p reports
+          qrcheck corpus build --seed 20240101 --out "$RUNNER_TEMP/corpus-regenerated.jsonl"
+          diff -u corpus/default.jsonl "$RUNNER_TEMP/corpus-regenerated.jsonl"
+
+      - name: "End-to-end proof (marker: e2e)"
+        run: pytest -m e2e --basetemp="$RUNNER_TEMP/pytest-e2e" --junitxml=reports/pytest-e2e.xml
+
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qrcheck-reports
+          path: reports/
+          if-no-files-found: warn

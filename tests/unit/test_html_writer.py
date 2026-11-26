@@ -1,42 +1,30 @@
 """The HTML page's substance: its panels, its verdicts, its images, its escapes.
 
-AAP §0.9.1 names this module as the place the writer's contract is held, and AAP §0.8.4
-fixes what the page promises its reader: a failing case's block shows the ``request.json``
-the evidence store wrote, and no page state may let a reader read a run that did not pass
-as a pass. Every case below is rendered through the product's own writers -
-:func:`qrcheck.report.html.write_html` for the page and
-:meth:`qrcheck.report.evidence.EvidenceStore.record` for the artefact the page is compared
-against - so nothing here re-implements the markup it asserts on.
+AAP §0.9.1 names this module as the place the writer's contract is held, and AAP §0.8.4 fixes what
+the page promises its reader: a failing case's block shows the ``request.json`` the evidence store
+wrote, and no page state may let a reader read a run that did not pass as a pass. Every case
+renders through the product's own writers -- :func:`qrcheck.report.html.write_html` for the page
+and :meth:`qrcheck.report.evidence.EvidenceStore.record` for the artefact the page is compared
+against -- so nothing here re-implements the markup it asserts on.
 
-These groups are pinned:
+Pinned: a run that recorded no result states that no case ran, keeps its four zero tallies,
+replaces the results table with the empty-state paragraph and stops offering a row that does not
+exist; the ``request.json`` panel parses to the recorded artefact with its identity envelope, and
+the envelope wins a collision with the request projection; the two verdicts that already worked
+stay exactly as they were, so a change to the empty-state branch cannot reorder the precedence AAP
+§0.3.4 fixes; and the page's own obligations are read back out of the document it wrote -- the
+header's identity, duration and four separate tallies, one row per result in ``(check_id,
+case_id)`` order carrying its own status word and machine-readable reason, a skip listed in the
+skip block under its reason rather than among the failures, the failing case's images decoded back
+out of their ``data:`` URIs and compared with the bytes the store wrote, a degradation banner only
+when the results themselves prove one, the errored case's traceback in its block, and a second
+write byte-identical to the first.
 
-* a run that recorded no result states that no case ran, keeps its four zero tallies,
-  replaces the results table with the empty-state paragraph, and stops offering a reader
-  a row that does not exist to re-run;
-* the ``request.json`` panel parses to the object in the recorded artefact, its identity
-  envelope included, and the envelope wins a collision with the request projection;
-* the two verdicts that already worked stay exactly as they were - an all-passing run is
-  still ``run passed`` and a run whose only results are skips is still
-  ``run passed (skips present)`` - so a change to the empty-state branch cannot reorder
-  the precedence AAP §0.3.4 fixes;
-* the page's own obligations are read back out of the document it wrote: the header's
-  identity, duration and four separate tallies; one row per result in
-  ``(check_id, case_id)`` order, each carrying its own status word and its
-  machine-readable reason; a skip listed in the skip block under the reason it carries
-  rather than among the failures; the failing case's images decoded back out of their
-  ``data:`` URIs and compared with the bytes the evidence store wrote; a degradation
-  banner only when the results themselves prove one; the errored case's traceback in its
-  block; and a second write byte-identical to the first.
-
-AAP §0.9.1 also puts self-containment and escaping on this module, and the panels above
-are the writer's widest sink of target-supplied text, so both are held here too: the page
-reaches no external origin and embeds every image as a ``data:`` URI, and text a target
-could have supplied - a case identifier, a request, a decoded outcome, the adapter name -
-stays escaped text that carries its non-ASCII characters literally and still parses back
-out of the panel.
-
-Every run is built in this module and written under ``tmp_path``; nothing reads a clock,
-the network, the environment or a directory this module did not create.
+Self-containment and escaping are held here too, because these panels are the writer's widest sink
+of target-supplied text: the page reaches no external origin and embeds every image as a ``data:``
+URI, and text a target could have supplied -- a case identifier, a request, a decoded outcome, the
+adapter name -- stays escaped text that carries its non-ASCII characters literally and still parses
+back out of the panel. Every run is built in this module and written under ``tmp_path``.
 """
 
 import dataclasses
@@ -223,12 +211,7 @@ def _png(payload: str, scale: int = 2) -> bytes:
 
 
 def _derived_png(payload: str, scale: int = 1) -> bytes:
-    """Return ``payload``'s symbol re-encoded by the product's own PNG encoder.
-
-    Both steps come from :mod:`qrcheck.evidence.mux`, the module that owns image encoding,
-    so this test needs no Pillow import of its own and every byte it embeds is produced the
-    way the product produces one.
-    """
+    """Return ``payload``'s symbol re-encoded by the product's own PNG encoder."""
     return encode_png(decode_image(_png(payload, scale=scale)))
 
 
@@ -313,10 +296,9 @@ def _figures(document: str) -> list[tuple[str, bytes]]:
 
 class _DocumentParser(HTMLParser):
     """Collect what a hostile fragment would change had the writer stopped escaping it.
-
-    ``convert_charrefs`` is on, so escaped text comes back as the characters it stands for:
-    if a case identifier reached the document unescaped, this parser would find a ``script``
-    start tag instead of the text, which is the difference the assertion reads.
+    ``convert_charrefs`` is on, so escaped text comes back as the characters it stands for: if
+    a case identifier reached the document unescaped, this parser would find a ``script`` start
+    tag instead of the text, which is the difference the assertion reads.
     """
 
     def __init__(self) -> None:

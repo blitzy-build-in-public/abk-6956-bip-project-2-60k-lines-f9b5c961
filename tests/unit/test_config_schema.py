@@ -1,63 +1,25 @@
 """The configuration contract: every key, every rule, its dotted-key diagnostic and the one
 deliberate exception to it.
 
-``qrcheck.toml`` is the product's primary contract (AAP §0.3.4, "Configuration contract"), and
-:mod:`qrcheck.config.schema` is its single declaration: the table names every key with the types
-it accepts, the one ``models.DEFAULT_*`` fallback it carries and the rule its value must satisfy,
-so no other module enumerates a key and no validator lives anywhere else. This module is what
-holds that claim to account, and it holds it five ways:
+:mod:`qrcheck.config.schema` is the single declaration of ``qrcheck.toml`` (AAP §0.3.4,
+"Configuration contract"), so every case here is derived from :data:`SCHEMA`, from ``models`` or
+from the committed document: a key added without a kind, a rule or a default fails here, each
+declared default is compared with the ``models.DEFAULT_*`` constant its table entry names, and each
+rejection asserts the offending **dotted** key path the exit-2 diagnostic prints. A representative
+subset of the faults is also driven through ``qrcheck run`` with a real ``--config`` path, where
+the answer is exit 2 and no report artefact at all.
 
-1. **Completeness, derived and never restated.** Every key of every group of
-   :data:`qrcheck.config.schema.SCHEMA` is parametrised from the table itself, so a key added
-   without a kind, a rule or a default fails here; each declared default is compared with the
-   ``models.DEFAULT_*`` constant the table references rather than with a literal; and
-   :func:`~qrcheck.config.schema.apply_defaults` must fill exactly the declared defaults -- no
-   more, and nothing for a required key. A threshold therefore has one declaration, which is what
-   lets ``qrcheck.toml`` retune it.
-2. **Every rule's rejection, named.** Unknown keys at all five levels, wrong kinds, absent and
-   unknown ``type`` values, every closed vocabulary, the ``callable`` syntax, the numeric ranges
-   and the ``default_adapter`` cross-check are driven through :func:`schema.validate`, and each
-   asserts the offending **dotted** key path that the exit-2 diagnostic prints.
-3. **The offline boundary and the template vocabulary.** Only ``127.0.0.1``, ``localhost`` and
-   ``::1`` are accepted as an ``http`` target's host, a non-``http``/``https`` scheme and a
-   ``user:password@`` prefix are refused, and every ``request_template`` string leaf must name one
-   of the eight ``models.TEMPLATE_FIELDS`` placeholders -- the range ``run`` refuses is the range
-   it also protects.
-4. **Exit 2 through the real command line.** A representative subset of the faults above is
-   written to a document under ``tmp_path`` and driven through ``qrcheck run`` with a real
-   ``--config`` path: exit code 2, the dotted key on stderr, and **no report artefact written**,
-   because the configuration is settled before anything runs.
-5. **``load_config``'s two failure channels.** A path is resolved against the configuration
-   file's own directory, ``report_dir`` is created and proven writable, the returned records are
-   immutable, and an unusable ``report_dir`` raises ``OSError``/``PermissionError`` -- never
-   ``ConfigError``, because it is an environment fault (exit 3) and not a configuration fault.
+The one deliberate exception: a capability *shortfall* -- a target declaring only ``png`` while a
+selected check requires ``svg`` -- is a ``skipped`` result with reason ``unsupported_capability``,
+not a configuration error, because whether a declared set can satisfy a check depends on the
+run-time ``--checks`` selection (AAP §0.12, fourth resolved conflict;
+``tests/unit/test_registry_contract.py`` asserts that half). An unknown capability *member* is
+still exit 2.
 
-The one exception to the "exit 2" vocabulary, carried here as a deliberate negative
----------------------------------------------------------------------------------
-A capability *shortfall* -- a target declaring only ``png`` while a selected check requires
-``svg`` -- is **not** a configuration error (AAP §0.12, fourth resolved conflict). Whether a
-declared capability set can satisfy a check depends on the run-time ``--checks`` selection, so
-the same document would be invalid for one selection and correct for the next; the shortfall is
-instead a ``skipped`` result with reason ``unsupported_capability`` (AAP §0.6.6 row 9), asserted
-in ``tests/unit/test_registry_contract.py``. An unknown capability *member* is still a
-configuration error, and that half is asserted below, because it is wrong whoever selects what.
-
-What is deliberately not done here
-----------------------------------
-* No test loads the repository's own ``qrcheck.toml`` through ``load_config``: that creates
-  ``reports/`` inside the checkout. The committed document is read with :mod:`tomllib` and
-  validated directly instead.
-* No threshold, sample count or angle is written as a literal. Every expected value comes from
-  ``SCHEMA`` or the ``models.DEFAULT_*`` constant the table references, so retuning a default
-  cannot leave an assertion behind.
-* No ``skip``, ``xfail``, marker, retry or sleep: every case is a pure in-process call or one
-  ``CliRunner`` invocation, nothing opens a socket, spawns a subprocess or reads a clock, and
-  every file is written under ``tmp_path``. Parametrised ids are sorted, so two runs of this
-  module report identically.
-* The ``report_dir``-unusable cases do not use ``chmod``: this suite runs as root in a container,
-  where a permission bit proves nothing. One case makes ``mkdir`` fail for every user (a regular
-  file stands where a directory is needed) and the other monkeypatches the loader's probe, so
-  both branches of the writability check are reached root-independently.
+Nothing here loads the repository's own ``qrcheck.toml`` through ``load_config``, which would
+create ``reports/`` inside the checkout, and the unusable-``report_dir`` cases never use ``chmod``,
+which proves nothing as root: one makes ``mkdir`` fail for every user and one monkeypatches the
+loader's probe.
 """
 
 from __future__ import annotations
@@ -106,47 +68,19 @@ _TARGET_NAME: Final[str] = "target"
 
 
 def _group_defaults(group: str) -> dict[str, Any]:
-    """Return every declared default of one schema group, keyed by its configuration key.
-
-    The result splats straight into the record that mirrors the group (``RenderConfig``,
-    ``PerformanceLimits``, ``DamageLimits``), which is how the "declared once" tests compare the
-    loader's records with the schema's table instead of with a second copy of the numbers.
-
-    Args:
-        group: A schema group path, as :data:`schema.SCHEMA` spells it.
-
-    Returns:
-        One entry per declared key of the group, in the table's declared order.
-    """
+    """Return every declared default of one schema group, keyed by its configuration key."""
     return {key: spec.default for key, spec in schema.SCHEMA[group].items()}
 
 
 def _declared_default(group: str, key: str) -> Any:
-    """Return the declared fallback of one key.
-
-    Args:
-        group: The group path holding the key.
-        key: The key within that group.
-
-    Returns:
-        The fallback value the table declares, untouched.
-    """
+    """Return the declared fallback of one key."""
     return schema.SCHEMA[group][key].default
 
 
 def _materialised(default: Any) -> Any:
-    """Return a declared default as the value ``apply_defaults`` resolves it to.
-
-    A collection default reaches a resolved document as a private mutable copy -- the empty tuple
-    of ``capabilities`` becomes a list -- while a scalar is returned unchanged. The conversion is
+    """Return a declared default as the value ``apply_defaults`` resolves it to. The conversion is
     spelled out here rather than importing the schema's private helper, so the expectation is
     independent of the implementation it checks.
-
-    Args:
-        default: A declared default.
-
-    Returns:
-        A list for a tuple default, a ``dict`` for a mapping default, else the value itself.
     """
     if isinstance(default, tuple):
         return list(default)
@@ -156,19 +90,10 @@ def _materialised(default: Any) -> Any:
 
 
 def _is_record_group(group: str) -> bool:
-    """Whether ``group`` is a per-target-*type* table rather than one ``apply_defaults`` fills.
-
-    ``apply_defaults`` fills the top level, ``[render]`` and both ``[checks.*]`` tables, plus the
-    common keys of every declared target. A per-type table (``targets.*.library`` and its
-    siblings) is not filled there: its optional keys -- ``metadata_map`` today -- are owned by the
-    record in :mod:`qrcheck.config.models` that the loader builds. The distinction is derived from
-    the group path's own shape, so a new table is classified by where it sits and not by a list.
-
-    Args:
-        group: A schema group path.
-
-    Returns:
-        ``True`` for ``targets.*.<type>``, ``False`` for every other group.
+    """Whether ``group`` is a per-target-*type* table rather than one ``apply_defaults`` fills. A
+    per-type table (``targets.*.library`` and its siblings) is not filled there: its optional
+    keys -- ``metadata_map`` today -- are owned by the record in :mod:`qrcheck.config.models`
+    that the loader builds.
     """
     parts = group.split(".")
     return len(parts) == 3 and parts[0] == "targets"
@@ -176,28 +101,15 @@ def _is_record_group(group: str) -> bool:
 
 def _defaults_document() -> dict[str, Any]:
     """Return the resolved document a document declaring nothing but a target resolves to.
-
-    ``apply_defaults`` cannot invent a ``[targets.<name>]`` table -- the names are the document's
-    -- so one reference target is declared here, which is what makes the common keys of
-    ``[targets.*]`` observable.
-
-    Returns:
-        The defaulted document, with one ``probe`` target carrying every common key.
+    ``apply_defaults`` cannot invent a ``[targets.<name>]`` table -- the names are the
+    document's -- so one reference target is declared here, which is what makes the common keys
+    of ``[targets.*]`` observable.
     """
     return schema.apply_defaults({"targets": {_PROBE_TARGET: {"type": "reference"}}})
 
 
 def _filled_table(group: str, document: Mapping[str, Any]) -> Any:
-    """Return the resolved table for ``group`` inside a defaulted document.
-
-    Args:
-        group: A schema group path.
-        document: A document returned by :func:`schema.apply_defaults`.
-
-    Returns:
-        The resolved mapping for the group, or ``None`` when the group's path cannot be followed
-        through the document -- which for a per-type table is the expected answer.
-    """
+    """Return the resolved table for ``group`` inside a defaulted document."""
     if group == "":
         return {key: document[key] for key in schema.SCHEMA[""] if key in document}
     if group == "targets.*":
@@ -291,14 +203,7 @@ _DEFAULT_CONSTANT_ALIASES: Final[Mapping[str, str]] = MappingProxyType(
 
 
 def _default_constant_name(key: str) -> str:
-    """Return the ``models`` constant a key's declared fallback is expected to live in.
-
-    Args:
-        key: A configuration key name.
-
-    Returns:
-        The constant name -- ``DEFAULT_<KEY>``, or the one documented alias of it.
-    """
+    """Return the ``models`` constant a key's declared fallback is expected to live in."""
     return _DEFAULT_CONSTANT_ALIASES.get(key, f"DEFAULT_{key.upper()}")
 
 
@@ -349,17 +254,8 @@ _VALID_TARGET_TABLES: Final[Mapping[str, Mapping[str, Any]]] = MappingProxyType(
 
 def _target_document(kind: str = "reference", **overrides: Any) -> dict[str, Any]:
     """Return a valid document declaring one target of ``kind``, optionally perturbed.
-
     ``default_adapter`` always names that target, so the cross-key rule is satisfied and a case
     exercises the key it means to.
-
-    Args:
-        kind: One of :data:`models.ADAPTER_TYPE_NAMES`.
-        **overrides: Target-table keys to replace, or new keys to add -- which is how the
-            unknown-key and bad-value cases are built.
-
-    Returns:
-        A raw document ready for :func:`schema.validate`.
     """
     table = dict(_VALID_TARGET_TABLES[kind])
     table.update(overrides)
@@ -367,15 +263,7 @@ def _target_document(kind: str = "reference", **overrides: Any) -> dict[str, Any
 
 
 def _target_document_without(kind: str, *omitted: str) -> dict[str, Any]:
-    """Return a valid document for ``kind`` with the named keys of its table removed.
-
-    Args:
-        kind: One of :data:`models.ADAPTER_TYPE_NAMES`.
-        *omitted: Keys of the per-type table to leave out.
-
-    Returns:
-        A raw document ready for :func:`schema.validate`.
-    """
+    """Return a valid document for ``kind`` with the named keys of its table removed."""
     table = {
         key: value
         for key, value in _VALID_TARGET_TABLES[kind].items()
@@ -385,14 +273,7 @@ def _target_document_without(kind: str, *omitted: str) -> dict[str, Any]:
 
 
 def _http_document(**overrides: Any) -> dict[str, Any]:
-    """Return a valid ``http`` target document with the named keys replaced.
-
-    Args:
-        **overrides: Keys of the ``http`` table to replace.
-
-    Returns:
-        A raw document ready for :func:`schema.validate`.
-    """
+    """Return a valid ``http`` target document with the named keys replaced."""
     return _target_document("http", **overrides)
 
 
@@ -409,15 +290,7 @@ _REFERENCE_TARGET: Final[str] = _declared_default("", "default_adapter")
 
 
 def _toml_literal(value: object) -> str:
-    """Render one scalar as a TOML literal.
-
-    Args:
-        value: A string, integer, float or boolean.
-
-    Returns:
-        The TOML spelling of the value; a string is JSON-quoted, which is a valid TOML basic
-        string.
-    """
+    """Render one scalar as a TOML literal."""
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, (int, float)):
@@ -426,29 +299,16 @@ def _toml_literal(value: object) -> str:
 
 
 def _toml_value(value: object) -> str:
-    """Render one configuration value as TOML, arrays included.
-
-    Args:
-        value: A scalar or a sequence of scalars.
-
-    Returns:
-        An array literal for a sequence, else :func:`_toml_literal`'s spelling.
-    """
+    """Render one configuration value as TOML, arrays included."""
     if isinstance(value, (list, tuple)):
         return "[" + ", ".join(_toml_literal(item) for item in value) + "]"
     return _toml_literal(value)
 
 
 def _emit_table(lines: list[str], prefix: str, table: Mapping[str, Any]) -> None:
-    """Write one table into ``lines``: its own values first, then one section per sub-table.
-
-    TOML reads a key after a table header as a member of that table, so a table's scalars and
-    arrays have to precede its children -- which is the order the loop below writes them in.
-
-    Args:
-        lines: The accumulating document lines.
-        prefix: The dotted path of this table, empty at the root.
-        table: The table to write.
+    """Write one table into ``lines``: its own values first, then one section per sub-table. TOML
+    reads a key after a table header as a member of that table, so a table's scalars and arrays
+    have to precede its children -- which is the order the loop below writes them in.
     """
     children: list[tuple[str, Mapping[str, Any]]] = []
     for key, value in table.items():
@@ -463,18 +323,10 @@ def _emit_table(lines: list[str], prefix: str, table: Mapping[str, Any]) -> None
 
 
 def _document_text(document: Mapping[str, Any]) -> str:
-    """Render a raw configuration document as TOML text for a file under ``tmp_path``.
-
-    The document is written exactly as the case built it, so the text a case is about is the
+    """Render a raw configuration document as TOML text for a file under ``tmp_path``. The
+    document is written exactly as the case built it, so the text a case is about is the
     mapping :func:`schema.validate` is called with in the in-process cases and the file
-    ``qrcheck run`` is pointed at in the command-line cases. A nested mapping becomes its own
-    section, which covers ``[targets.<name>]`` and ``[targets.<name>.request_template]``.
-
-    Args:
-        document: A raw configuration document.
-
-    Returns:
-        The document text, newline-terminated.
+    ``qrcheck run`` is pointed at in the command-line cases.
     """
     lines: list[str] = []
     _emit_table(lines, "", document)
@@ -482,18 +334,8 @@ def _document_text(document: Mapping[str, Any]) -> str:
 
 
 def _minimal_document(**overrides: Any) -> dict[str, Any]:
-    """Return the smallest document that loads and validates.
-
-    The five top-level keys take the schema's declared defaults, so ``report_dir`` and
-    ``corpus_path`` stay *relative* and everything a case produces lands inside the test's
-    ``tmp_path``; one ``[targets.reference]`` table satisfies the cross-key rule. A case
-    therefore states only the key it is about.
-
-    Args:
-        **overrides: Declared top-level keys to replace.
-
-    Returns:
-        A raw document ready for :func:`schema.validate` or :func:`_document_text`.
+    """Return the smallest document that loads and validates. A case therefore states only the key
+    it is about.
     """
     values: dict[str, Any] = {key: _declared_default("", key) for key in _TOP_LEVEL_KEYS}
     for key, value in overrides.items():
@@ -504,16 +346,9 @@ def _minimal_document(**overrides: Any) -> dict[str, Any]:
 
 
 def _report_artefacts(report_dir: Path) -> list[str]:
-    """Return every report artefact present under ``report_dir``.
-
-    The three names are the writers' fixed outputs (``summary.json``, ``junit.xml``,
-    ``index.html``), so an exit-2 path that wrote any of them would be caught here.
-
-    Args:
-        report_dir: The resolved report directory a document asks for.
-
-    Returns:
-        The sorted names of every entry found, or an empty list when the directory is absent.
+    """Return every report artefact present under ``report_dir``. The three names are the writers'
+    fixed outputs (``summary.json``, ``junit.xml``, ``index.html``), so an exit-2 path that
+    wrote any of them would be caught here.
     """
     if not report_dir.exists():
         return []
@@ -521,27 +356,12 @@ def _report_artefacts(report_dir: Path) -> list[str]:
 
 
 def _key_ids(pairs: tuple[tuple[str, ...], ...]) -> list[str]:
-    """Return one readable parametrize id per ``(group, key)`` pair.
-
-    Args:
-        pairs: The parametrised pairs.
-
-    Returns:
-        ``"<group or 'top'>/<key>"`` for each pair, in the order given, so a failing id names the
-        key that broke rather than an index.
-    """
+    """Return one readable parametrize id per ``(group, key)`` pair."""
     return [f"{group or 'top'}/{key}" for group, key in pairs]
 
 
 def _kind_ids(kinds: tuple[str, ...]) -> list[str]:
-    """Return one parametrize id per adapter kind.
-
-    Args:
-        kinds: The adapter type names.
-
-    Returns:
-        The names themselves, which are already unique and readable.
-    """
+    """Return one parametrize id per adapter kind."""
     return list(kinds)
 
 
@@ -552,16 +372,10 @@ def _kind_ids(kinds: tuple[str, ...]) -> list[str]:
 
 @pytest.mark.parametrize("group, key", KEY_CASES, ids=_key_ids(KEY_CASES))
 def test_every_declared_key_carries_a_kind_a_rule_and_a_default(group: str, key: str) -> None:
-    """Every key of the contract declares what it accepts, how it is judged and its fallback.
-
-    A key that gained no kind would accept anything, one that gained no rule would accept a value
+    """Every key of the contract declares what it accepts, how it is judged and its fallback. A
+    key that gained no kind would accept anything, one that gained no rule would accept a value
     it should refuse, and one that gained neither a fallback nor the required marker would be
-    silently optional. The parametrisation is the table itself, so this covers a key added later
-    without an edit here.
-
-    Args:
-        group: The schema group the key belongs to.
-        key: The configuration key.
+    silently optional.
     """
     spec = schema.SCHEMA[group][key]
     named = f"{group or 'top level'}:{key}"
@@ -575,17 +389,9 @@ def test_every_declared_key_carries_a_kind_a_rule_and_a_default(group: str, key:
 
 @pytest.mark.parametrize("group, key", DEFAULTED_KEY_CASES, ids=_key_ids(DEFAULTED_KEY_CASES))
 def test_the_declared_default_is_the_models_constant(group: str, key: str) -> None:
-    """Every declared fallback is the ``models.DEFAULT_*`` constant, not a second copy of it.
-
-    This is the "a threshold is declared once" rule made mechanical (AAP §0.12, NFR-3): the table
-    references a named constant, so retuning a default cannot leave the schema behind. The only
-    defaults without a named constant are the two empty collections -- the empty capability set
-    and the empty metadata mapping -- and each of those must be empty, because any other value
-    would be a number or a name written down away from ``models``.
-
-    Args:
-        group: The schema group the key belongs to.
-        key: The configuration key.
+    """Every declared fallback is the ``models.DEFAULT_*`` constant, not a second copy of it. This
+    is the "a threshold is declared once" rule made mechanical (AAP §0.12, NFR-3): the table
+    references a named constant, so retuning a default cannot leave the schema behind.
     """
     spec = schema.SCHEMA[group][key]
     named = f"{group or 'top level'}:{key}"
@@ -607,13 +413,8 @@ def test_the_declared_default_is_the_models_constant(group: str, key: str) -> No
 )
 def test_apply_defaults_fills_exactly_the_declared_defaults(group: str) -> None:
     """A resolved document carries every declared fallback of the group and invents nothing.
-
-    "Exactly" is the whole assertion: a missing key would leave a record field unset, and an extra
-    key would be one the schema never declared. A required key is present only because the probe
-    document supplied it.
-
-    Args:
-        group: The schema group being resolved.
+    "Exactly" is the whole assertion: a missing key would leave a record field unset, and an
+    extra key would be one the schema never declared.
     """
     filled = _filled_table(group, _defaults_document())
     named = group or "top level"
@@ -633,12 +434,7 @@ def test_apply_defaults_fills_exactly_the_declared_defaults(group: str) -> None:
 
 @pytest.mark.parametrize("group, key", REQUIRED_KEY_CASES, ids=_key_ids(REQUIRED_KEY_CASES))
 def test_apply_defaults_never_invents_a_required_key(group: str, key: str) -> None:
-    """A required key is never defaulted: only the document can supply it.
-
-    Args:
-        group: The schema group the key belongs to.
-        key: The required configuration key.
-    """
+    """A required key is never defaulted: only the document can supply it."""
     filled = _filled_table(group, _defaults_document())
     named = f"{group or 'top level'}:{key}"
     if filled is None:
@@ -654,9 +450,8 @@ def test_apply_defaults_never_invents_a_required_key(group: str, key: str) -> No
 
 def test_every_group_is_either_filled_or_a_per_type_table() -> None:
     """The two group classifications cover the contract, so no group silently escapes both tests.
-
-    Without this guard a group that stopped being reachable through ``apply_defaults`` would drop
-    out of the parametrisation above and its defaults would go unchecked.
+    Without this guard a group that stopped being reachable through ``apply_defaults`` would
+    drop out of the parametrisation above and its defaults would go unchecked.
     """
     assert set(TABLE_GROUPS).isdisjoint(RECORD_GROUPS), "a group is classified twice"
     assert set(TABLE_GROUPS) | set(RECORD_GROUPS) == set(GROUPS), "a group is classified nowhere"
@@ -677,15 +472,9 @@ def test_the_optional_per_type_default_is_owned_by_the_record(
     kind: str, toml_config_file: Any
 ) -> None:
     """An omitted optional per-type key resolves to the fallback its record declares.
-
-    ``metadata_map`` is the only optional per-type key today, and it is deliberately not filled by
-    ``apply_defaults``: each record in :mod:`qrcheck.config.models` declares its own empty mapping,
-    so filling it in the schema would declare one default in two places. This asserts the record
-    the loader builds carries the value the schema declares.
-
-    Args:
-        kind: The adapter type whose table is being loaded.
-        toml_config_file: The writer that puts the document under ``tmp_path``.
+    ``metadata_map`` is the only optional per-type key today, and it is deliberately not filled
+    by ``apply_defaults``: each record in :mod:`qrcheck.config.models` declares its own empty
+    mapping, so filling it in the schema would declare one default in two places.
     """
     document = _target_document_without(kind, *(key for k, key in OPTIONAL_PER_TYPE_CASES))
     config = load_config(toml_config_file(_document_text(document)))
@@ -701,10 +490,9 @@ def test_the_optional_per_type_default_is_owned_by_the_record(
 
 
 def test_the_two_built_in_targets_take_no_per_type_key() -> None:
-    """A configurable input on a built-in self-check target would be a key with no effect.
-
-    Both built-in kinds take only the common keys, so their per-type tables are empty and any key
-    a document writes there is an unknown key rather than a silently ignored one.
+    """A configurable input on a built-in self-check target would be a key with no effect. Both
+    built-in kinds take only the common keys, so their per-type tables are empty and any key a
+    document writes there is an unknown key rather than a silently ignored one.
     """
     builtin = sorted(
         kind for kind in models.ADAPTER_TYPE_NAMES if kind not in CONFIGURABLE_KINDS
@@ -728,11 +516,7 @@ def test_the_worked_examples_cover_every_adapter_kind() -> None:
     tuple(sorted(_VALID_TARGET_TABLES))
 ))
 def test_a_worked_example_document_is_accepted(kind: str) -> None:
-    """Each worked example validates, which is what makes every rejection a single perturbation.
-
-    Args:
-        kind: The adapter type the example document declares.
-    """
+    """Each worked example validates, which is what makes every rejection a single perturbation."""
     schema.validate(_target_document(kind))
 
 
@@ -740,12 +524,7 @@ def test_a_worked_example_document_is_accepted(kind: str) -> None:
     "kind, key", REQUIRED_PER_TYPE_CASES, ids=_key_ids(REQUIRED_PER_TYPE_CASES)
 )
 def test_every_required_per_type_input_is_demanded(kind: str, key: str) -> None:
-    """A per-type table missing one of its required inputs is rejected, naming that key.
-
-    Args:
-        kind: The adapter type whose table is being validated.
-        key: The required input left out.
-    """
+    """A per-type table missing one of its required inputs is rejected, naming that key."""
     with pytest.raises(schema.ConfigError) as excinfo:
         schema.validate(_target_document_without(kind, key))
     dotted = f"targets.{_TARGET_NAME}.{key}"
@@ -761,14 +540,10 @@ def test_every_required_per_type_input_is_demanded(kind: str, key: str) -> None:
 def test_the_limit_records_hold_the_thresholds_the_schema_declares(
     toml_config_file: Any,
 ) -> None:
-    """A document that omits every threshold resolves to the schema's declared fallbacks.
-
-    The records are compared with the table -- never with literals -- for both directions of the
-    "declared once" rule: the record each group mirrors is built from ``SCHEMA``'s own defaults,
-    and every field is then checked against the value ``apply_defaults`` fills.
-
-    Args:
-        toml_config_file: The writer that puts the document under ``tmp_path``.
+    """A document that omits every threshold resolves to the schema's declared fallbacks. The
+    records are compared with the table -- never with literals -- for both directions of the
+    "declared once" rule: the record each group mirrors is built from ``SCHEMA``'s own
+    defaults, and every field is then checked against the value ``apply_defaults`` fills.
     """
     config = load_config(toml_config_file(_document_text(_minimal_document())))
     assert config.render == models.RenderConfig(**_group_defaults("render"))
@@ -791,13 +566,9 @@ def test_the_limit_records_hold_the_thresholds_the_schema_declares(
 
 
 def test_a_supplied_threshold_reaches_its_record(toml_config_file: Any) -> None:
-    """A threshold the document supplies wins over the fallback, and the rest keep theirs.
-
-    One key from each limit table is moved by one unit inside its declared range; the values are
+    """A threshold the document supplies wins over the fallback, and the rest keep theirs. One key
+    from each limit table is moved by one unit inside its declared range; the values are
     computed from the declared defaults, so nothing here is a literal.
-
-    Args:
-        toml_config_file: The writer that puts the document under ``tmp_path``.
     """
     performance_key = "warmup"
     damage_key = "jpeg_quality"
@@ -825,13 +596,9 @@ def test_a_supplied_threshold_reaches_its_record(toml_config_file: Any) -> None:
 
 
 def test_the_package_facade_publishes_exactly_its_declared_surface() -> None:
-    """The package façade reports exactly its declared surface, so docs and introspection agree.
-
-    ``dir(qrcheck.config)`` answers ``__all__`` and nothing else: the façade re-exports the loader,
-    the error type, the records and the seed derivation, and the submodules it imports along the
-    way stay private. A name added without ``__all__`` -- or a documented name that is no longer
-    bound -- would make introspection and the documentation disagree about the surface every
-    consumer reads.
+    """The package façade reports exactly its declared surface, so docs and introspection agree. A
+    name added without ``__all__`` -- or a documented name that is no longer bound -- would
+    make introspection and the documentation disagree about the surface every consumer reads.
     """
     assert dir(qrcheck.config) == sorted(qrcheck.config.__all__), (
         f"dir() reports {dir(qrcheck.config)}, __all__ declares "
@@ -879,16 +646,9 @@ _UNKNOWN_KEY_CASES: Final[tuple[tuple[Mapping[str, Any], str], ...]] = tuple(
 def test_an_unknown_key_is_rejected_at_every_level(
     document: Mapping[str, Any], dotted: str
 ) -> None:
-    """An unknown key is a configuration error naming its dotted path, at every level.
-
-    The dotted path is the whole point of the diagnostic: it is what a reader has to edit, and it
-    is what the exit-2 message shows (AAP §0.3.4). A key that belongs to another adapter kind --
-    ``command`` on a ``library`` target -- is an unknown key here rather than a silently inert one,
-    which is why it appears in this table.
-
-    Args:
-        document: The document holding the unknown key.
-        dotted: The dotted path the diagnostic must name.
+    """An unknown key is a configuration error naming its dotted path, at every level. A key that
+    belongs to another adapter kind -- ``command`` on a ``library`` target -- is an unknown key
+    here rather than a silently inert one, which is why it appears in this table.
     """
     with pytest.raises(schema.ConfigError) as excinfo:
         schema.validate(document)
@@ -898,9 +658,8 @@ def test_an_unknown_key_is_rejected_at_every_level(
 
 
 def test_a_target_name_that_is_blank_is_rejected() -> None:
-    """A ``[targets.<name>]`` name has to be a non-empty string, and the diagnostic says so.
-
-    The fault belongs to the ``[targets]`` table rather than to any one key, because a blank name
+    """A ``[targets.<name>]`` name has to be a non-empty string, and the diagnostic says so. The
+    fault belongs to the ``[targets]`` table rather than to any one key, because a blank name
     is not a key at all -- it is a table whose identity cannot be reported.
     """
     with pytest.raises(schema.ConfigError) as excinfo:
@@ -991,16 +750,9 @@ _WRONG_KIND_CASES: Final[tuple[tuple[Mapping[str, Any], str, str], ...]] = tuple
 def test_a_value_of_the_wrong_kind_is_rejected(
     document: Mapping[str, Any], dotted: str, fragment: str
 ) -> None:
-    """A value of the wrong kind is rejected, naming the key and what arrived.
-
-    ``bool`` is refused for an integer key even though ``bool`` is an ``int`` subclass, and a
-    non-finite float is refused outright, because TOML can express ``inf`` and neither is a usable
-    bound or count.
-
-    Args:
-        document: The document holding the offending value.
-        dotted: The key the diagnostic must name.
-        fragment: The wording the diagnostic must contain.
+    """A value of the wrong kind is rejected, naming the key and what arrived. ``bool`` is refused
+    for an integer key even though ``bool`` is an ``int`` subclass, and a non-finite float is
+    refused outright, because TOML can express ``inf`` and neither is a usable bound or count.
     """
     with pytest.raises(schema.ConfigError) as excinfo:
         schema.validate(document)
@@ -1024,11 +776,7 @@ def test_an_absent_target_type_is_rejected() -> None:
     ids=["queue", "Library", "trailing-space", "empty"],
 )
 def test_a_type_outside_the_five_kinds_is_rejected(value: str) -> None:
-    """Only the five declared kinds are accepted, compared exactly and case-sensitively.
-
-    Args:
-        value: A value outside ``models.ADAPTER_TYPE_NAMES``.
-    """
+    """Only the five declared kinds are accepted, compared exactly and case-sensitively."""
     document = {"default_adapter": _TARGET_NAME, "targets": {_TARGET_NAME: {"type": value}}}
     with pytest.raises(schema.ConfigError) as excinfo:
         schema.validate(document)
@@ -1040,11 +788,7 @@ def test_a_type_outside_the_five_kinds_is_rejected(value: str) -> None:
     "kind", _RETURNS_KINDS, ids=_kind_ids(_RETURNS_KINDS)
 )
 def test_a_returns_value_outside_its_enum_is_rejected(kind: str) -> None:
-    """``returns`` is a closed vocabulary for every kind that declares it.
-
-    Args:
-        kind: The adapter type whose ``returns`` key is perturbed.
-    """
+    """``returns`` is a closed vocabulary for every kind that declares it."""
     with pytest.raises(schema.ConfigError) as excinfo:
         schema.validate(_target_document(kind, returns="stream"))
     assert excinfo.value.key == f"targets.{_TARGET_NAME}.returns"
@@ -1071,11 +815,7 @@ def test_a_method_outside_its_enum_is_rejected() -> None:
     "value", ["inkscape", "rsvg", "AUTO", ""], ids=["inkscape", "rsvg", "AUTO", "empty"]
 )
 def test_an_svg_rasterizer_outside_the_six_values_is_rejected(value: str) -> None:
-    """``[render] svg_rasterizer`` is one of the six documented names, exactly spelled.
-
-    Args:
-        value: A value outside ``models.SVG_RASTERIZERS``.
-    """
+    """``[render] svg_rasterizer`` is one of the six documented names, exactly spelled."""
     with pytest.raises(schema.ConfigError) as excinfo:
         schema.validate({"render": {"svg_rasterizer": value}})
     assert excinfo.value.key == "render.svg_rasterizer"
@@ -1086,14 +826,8 @@ def test_an_svg_rasterizer_outside_the_six_values_is_rejected(value: str) -> Non
     "member", ["teleport", "PNG", "", "png "], ids=["teleport", "PNG", "empty", "trailing-space"]
 )
 def test_an_unknown_capability_member_is_rejected(member: str) -> None:
-    """A capability *member* outside the 13 names is a configuration error naming the member.
-
-    Only membership is decidable here. Whether the declared *set* can satisfy a check depends on
-    the run-time ``--checks`` selection, which is the shortfall this module tests as a deliberate
-    negative further down.
-
-    Args:
-        member: A capability name outside ``models.CAPABILITY_NAMES``.
+    """A capability *member* outside the 13 names is a configuration error naming the member. Only
+    membership is decidable here.
     """
     with pytest.raises(schema.ConfigError) as excinfo:
         schema.validate(_target_document("reference", capabilities=["png", member]))
@@ -1118,21 +852,12 @@ def test_a_capability_that_is_not_a_string_is_rejected() -> None:
 
 
 def _document_for(dotted: str, value: Any) -> dict[str, Any]:
-    """Return a document declaring ``dotted`` with ``value`` and nothing else that is wrong.
-
-    One helper turns a dotted key path into the document a case needs, so a table below can state
-    a key, a value and the wording it expects without repeating the nesting: a top level key
-    replaces that key of the minimal document, a nested key becomes the table path that holds it,
-    and a target key becomes the valid document for a reference target with that one key replaced.
-    The minimal document is the base in every case, so a document is never rejected for a reason
-    the case is not about.
-
-    Args:
-        dotted: The dotted configuration key path, as a diagnostic spells it.
-        value: The value to place there.
-
-    Returns:
-        A raw document ready for :func:`schema.validate`.
+    """Return a document declaring ``dotted`` with ``value`` and nothing else that is wrong. One
+    helper turns a dotted key path into the document a case needs, so a table below can state a
+    key, a value and the wording it expects without repeating the nesting: a top level key
+    replaces that key of the minimal document, a nested key becomes the table path that holds
+    it, and a target key becomes the valid document for a reference target with that one key
+    replaced.
     """
     parts = dotted.split(".")
     if len(parts) == 3 and parts[0] == "targets":
@@ -1172,15 +897,10 @@ _MALFORMED_CALLABLE_CASES: Final[tuple[tuple[str, str], ...]] = tuple(
     ids=[value for value, _fragment in _MALFORMED_CALLABLE_CASES],
 )
 def test_a_malformed_callable_is_rejected(value: str, fragment: str) -> None:
-    """A ``callable`` must be a syntactically valid ``module:function`` path.
-
-    Syntax only: whether the module and the attribute exist is ``qrcheck doctor``'s answer and,
-    at run time, ``TargetUnavailable`` -- a missing module must not fail configuration loading,
-    because the same document is valid on the machine where the target is installed.
-
-    Args:
-        value: A malformed import path.
-        fragment: The wording the diagnostic must contain.
+    """A ``callable`` must be a syntactically valid ``module:function`` path. Syntax only: whether
+    the module and the attribute exist is ``qrcheck doctor``'s answer and, at run time,
+    ``TargetUnavailable`` -- a missing module must not fail configuration loading, because the
+    same document is valid on the machine where the target is installed.
     """
     with pytest.raises(schema.ConfigError) as excinfo:
         schema.validate(_target_document("library", callable=value))
@@ -1196,11 +916,7 @@ def test_a_malformed_callable_is_rejected(value: str, fragment: str) -> None:
     ids=["plain", "dotted-module", "dotted-attribute"],
 )
 def test_a_well_formed_callable_is_accepted(value: str) -> None:
-    """The documented shapes are accepted, so the rule is not narrower than the contract.
-
-    Args:
-        value: A well-formed import path.
-    """
+    """The documented shapes are accepted, so the rule is not narrower than the contract."""
     schema.validate(_target_document("library", callable=value))
 
 
@@ -1252,17 +968,7 @@ _RANGE_CASES: Final[tuple[tuple[str, Any, str], ...]] = tuple(
 def test_a_value_outside_its_range_is_rejected(
     dotted: str, value: Any, fragment: str
 ) -> None:
-    """Every numeric rule refuses the value on the wrong side of its bound, naming the key.
-
-    Each rule is composed from the table's generic validators, so this reaches the minimum, the
-    strict minimum, the maximum and both compositions of them. The wording is the diagnostic the
-    schema builds, which is what makes the exit-2 message an instruction rather than a verdict.
-
-    Args:
-        dotted: The key the diagnostic must name.
-        value: A value on the wrong side of the bound.
-        fragment: The wording the diagnostic must contain.
-    """
+    """Every numeric rule refuses the value on the wrong side of its bound, naming the key."""
     with pytest.raises(schema.ConfigError) as excinfo:
         schema.validate(_document_for(dotted, value))
     assert excinfo.value.key == dotted, f"expected key {dotted!r}, got {excinfo.value.key!r}"
@@ -1305,13 +1011,9 @@ _ACCEPTED_RANGE_CASES: Final[tuple[tuple[str, Any], ...]] = tuple(
 )
 def test_a_value_inside_its_range_is_accepted(dotted: str, value: Any) -> None:
     """The inclusive bounds the contract states are inside the range, not outside it.
-
-    ``occlusion_margin`` is the one exclusive upper bound (a margin of 0.10 would consume the whole
-    L-level recovery capacity), which is why 0.099 is the accepted neighbour asserted here.
-
-    Args:
-        dotted: The key being set.
-        value: A value inside the declared range.
+    ``occlusion_margin`` is the one exclusive upper bound (a margin of 0.10 would consume the
+    whole L-level recovery capacity), which is why 0.099 is the accepted neighbour asserted
+    here.
     """
     schema.validate(_document_for(dotted, value))
 
@@ -1328,12 +1030,7 @@ def test_a_value_inside_its_range_is_accepted(dotted: str, value: Any) -> None:
 def test_a_command_that_is_not_a_non_empty_argv_is_rejected(
     command: list[Any], fragment: str
 ) -> None:
-    """``command`` must be a non-empty argv of non-empty strings.
-
-    Args:
-        command: An argv the rule refuses.
-        fragment: The wording the diagnostic must contain.
-    """
+    """``command`` must be a non-empty argv of non-empty strings."""
     with pytest.raises(schema.ConfigError) as excinfo:
         schema.validate(_target_document("cli", command=command))
     assert excinfo.value.key == f"targets.{_TARGET_NAME}.command"
@@ -1358,11 +1055,7 @@ def test_an_empty_command_argument_is_rejected() -> None:
 
 @pytest.mark.parametrize("key", ["payload_arg", "output_arg"], ids=["payload-arg", "output-arg"])
 def test_an_argument_template_with_neither_a_placeholder_nor_a_flag_is_rejected(key: str) -> None:
-    """A template either carries ``{}`` for the value or starts with ``-`` as a flag.
-
-    Args:
-        key: Which of the two argument templates is perturbed.
-    """
+    """A template either carries ``{}`` for the value or starts with ``-`` as a flag."""
     with pytest.raises(schema.ConfigError) as excinfo:
         schema.validate(_target_document("cli", **{key: "argument"}))
     assert excinfo.value.key == f"targets.{_TARGET_NAME}.{key}"
@@ -1375,19 +1068,14 @@ def test_an_argument_template_with_neither_a_placeholder_nor_a_flag_is_rejected(
     ids=["positional", "flag-inline", "flag-short", "flag-long"],
 )
 def test_an_argument_template_with_a_placeholder_or_a_flag_is_accepted(value: str) -> None:
-    """Both documented template shapes are accepted.
-
-    Args:
-        value: A well-formed argument template.
-    """
+    """Both documented template shapes are accepted."""
     schema.validate(_target_document("cli", payload_arg=value, output_arg=value))
 
 
 def test_an_unknown_metadata_field_is_rejected() -> None:
-    """``metadata_map``'s keys are a closed vocabulary: the four framework fields.
-
-    A field the framework does not report has nowhere to go, so naming one cannot be honoured by
-    any adapter and is refused while the document is still a document.
+    """``metadata_map``'s keys are a closed vocabulary: the four framework fields. A field the
+    framework does not report has nowhere to go, so naming one cannot be honoured by any
+    adapter and is refused while the document is still a document.
     """
     with pytest.raises(schema.ConfigError) as excinfo:
         schema.validate(_target_document("library", metadata_map={"version": "v", "width": "w"}))
@@ -1399,11 +1087,7 @@ def test_an_unknown_metadata_field_is_rejected() -> None:
     "member", sorted(models.METADATA_FIELD_NAMES), ids=sorted(models.METADATA_FIELD_NAMES)
 )
 def test_every_metadata_field_the_framework_reports_is_accepted(member: str) -> None:
-    """Each of the four framework metadata fields can be mapped.
-
-    Args:
-        member: One of ``models.METADATA_FIELD_NAMES``.
-    """
+    """Each of the four framework metadata fields can be mapped."""
     schema.validate(_target_document("library", metadata_map={member: "payload.field"}))
 
 
@@ -1413,9 +1097,8 @@ def test_every_metadata_field_the_framework_reports_is_accepted(member: str) -> 
 
 
 def test_an_undeclared_default_adapter_is_rejected_and_lists_the_targets_sorted() -> None:
-    """``default_adapter`` must name a declared target, and the message lists them sorted.
-
-    The order matters because the message reaches stderr and CI logs are compared: the names are
+    """``default_adapter`` must name a declared target, and the message lists them sorted. The
+    order matters because the message reaches stderr and CI logs are compared: the names are
     rendered from ``sorted()``, never from the document's own order.
     """
     document = {
@@ -1494,12 +1177,8 @@ _REJECTED_URLS: Final[tuple[tuple[str, str], ...]] = tuple(
 @pytest.mark.parametrize("url", _ACCEPTED_URLS, ids=_ACCEPTED_URLS)
 def test_a_loopback_url_is_accepted(url: str) -> None:
     """The three loopback hosts are accepted over http and https, ports and brackets included.
-
-    This is the product's only outbound control: the framework cannot be aimed at a remote host,
-    which is what makes it verifiably offline rather than merely configured to be.
-
-    Args:
-        url: A loopback URL.
+    This is the product's only outbound control: the framework cannot be aimed at a remote
+    host, which is what makes it verifiably offline rather than merely configured to be.
     """
     schema.validate(_http_document(url=url))
 
@@ -1508,12 +1187,7 @@ def test_a_loopback_url_is_accepted(url: str) -> None:
     "url, fragment", _REJECTED_URLS, ids=[url or "empty" for url, _fragment in _REJECTED_URLS]
 )
 def test_a_url_outside_the_offline_boundary_is_rejected(url: str, fragment: str) -> None:
-    """A remote host, a non-http scheme or an embedded credential is a configuration error.
-
-    Args:
-        url: A URL the boundary refuses.
-        fragment: The wording the diagnostic must contain.
-    """
+    """A remote host, a non-http scheme or an embedded credential is a configuration error."""
     with pytest.raises(schema.ConfigError) as excinfo:
         schema.validate(_http_document(url=url))
     assert excinfo.value.key == f"targets.{_TARGET_NAME}.url"
@@ -1521,9 +1195,8 @@ def test_a_url_outside_the_offline_boundary_is_rejected(url: str, fragment: str)
 
 
 def test_every_declared_loopback_host_is_accepted() -> None:
-    """Every host ``models.LOOPBACK_HOSTS`` declares is accepted, in the form a URL spells it.
-
-    The list is read from its one declaration rather than restated here, so a host added to it is
+    """Every host ``models.LOOPBACK_HOSTS`` declares is accepted, in the form a URL spells it. The
+    list is read from its one declaration rather than restated here, so a host added to it is
     exercised without an edit -- which is what keeps the schema and the HTTP adapter's own
     construction-time check from widening apart.
     """
@@ -1541,11 +1214,7 @@ def test_every_declared_loopback_host_is_accepted() -> None:
     "field", sorted(models.TEMPLATE_FIELDS), ids=sorted(models.TEMPLATE_FIELDS)
 )
 def test_every_documented_placeholder_is_accepted(field: str) -> None:
-    """Each placeholder of the one vocabulary may appear in a template leaf.
-
-    Args:
-        field: One of ``models.TEMPLATE_FIELDS``.
-    """
+    """Each placeholder of the one vocabulary may appear in a template leaf."""
     schema.validate(_http_document(request_template={"payload": "{" + field + "}"}))
 
 
@@ -1567,15 +1236,7 @@ def test_a_template_using_every_placeholder_at_once_is_accepted() -> None:
 def test_an_unknown_or_malformed_placeholder_names_its_leaf(
     template: Mapping[str, Any], suffix: str
 ) -> None:
-    """An unknown placeholder is reported at the leaf that carries it, not at the whole table.
-
-    Naming the leaf is what turns the diagnostic into an edit: ``...request_template.data.image``
-    is a path a reader can follow, while ``request_template`` alone is not.
-
-    Args:
-        template: The offending template.
-        suffix: The leaf the dotted path must end with.
-    """
+    """An unknown placeholder is reported at the leaf that carries it, not at the whole table."""
     with pytest.raises(schema.ConfigError) as excinfo:
         schema.validate(_http_document(request_template=template))
     expected = f"targets.{_TARGET_NAME}.request_template.{suffix}"
@@ -1615,12 +1276,7 @@ def test_a_json_string_template_is_accepted() -> None:
     ids=["bad-json", "json-array", "wrong-kind"],
 )
 def test_a_template_that_is_not_a_json_object_is_rejected(template: Any, fragment: str) -> None:
-    """A template must be a table or the JSON text of an object, and nothing else.
-
-    Args:
-        template: The offending value.
-        fragment: The wording the diagnostic must contain.
-    """
+    """A template must be a table or the JSON text of an object, and nothing else."""
     with pytest.raises(schema.ConfigError) as excinfo:
         schema.validate(_http_document(request_template=template))
     assert excinfo.value.key == f"targets.{_TARGET_NAME}.request_template"
@@ -1637,10 +1293,9 @@ def test_a_template_carrying_a_toml_datetime_is_rejected() -> None:
 
 
 def test_a_template_without_placeholders_or_inside_an_array_is_accepted() -> None:
-    """Literal text, escaped braces and a placeholder inside an array are all accepted.
-
-    A template leaf is only a placeholder if it carries a ``{}`` field: plain text and escaped
-    ``{{...}}`` braces are literal, and an array of placeholders is walked element by element.
+    """Literal text, escaped braces and a placeholder inside an array are all accepted. A template
+    leaf is only a placeholder if it carries a ``{}`` field: plain text and escaped ``{{...}}``
+    braces are literal, and an array of placeholders is walked element by element.
     """
     schema.validate(
         _http_document(
@@ -1697,18 +1352,10 @@ _PATH_KEY_CASES: Final[tuple[tuple[str, str, str], ...]] = tuple(
 def test_a_path_no_filesystem_call_can_use_is_rejected(
     key: str, value: str, fragment: str
 ) -> None:
-    """A path key must be a non-empty string that carries no NUL byte.
-
-    A NUL is the one character refused rather than merely unhelpful: no filesystem call accepts
-    one, and ``pathlib`` answers it with a ``ValueError``, which is not the ``OSError`` the exit-3
-    contract covers -- so a typo would surface as an internal error instead of a diagnostic naming
-    the key. Resolving the path itself belongs to the loader, which is why nothing here reads the
-    filesystem.
-
-    Args:
-        key: The path key being set.
-        value: A value no filesystem call can use.
-        fragment: The wording the diagnostic must contain.
+    """A path key must be a non-empty string that carries no NUL byte. A NUL is the one character
+    refused rather than merely unhelpful: no filesystem call accepts one, and ``pathlib``
+    answers it with a ``ValueError``, which is not the ``OSError`` the exit-3 contract covers
+    -- so a typo would surface as an internal error instead of a diagnostic naming the key.
     """
     with pytest.raises(schema.ConfigError) as excinfo:
         schema.validate(_minimal_document(**{key: value}))
@@ -1727,12 +1374,7 @@ def test_a_path_no_filesystem_call_can_use_is_rejected(
 def test_a_kwargs_map_maps_non_empty_strings_to_non_empty_strings(
     kwargs_map: Mapping[Any, Any], fragment: str
 ) -> None:
-    """``kwargs_map`` is checked for shape only: its keys are whatever the callable takes.
-
-    Args:
-        kwargs_map: An ill-shaped mapping.
-        fragment: The wording the diagnostic must contain.
-    """
+    """``kwargs_map`` is checked for shape only: its keys are whatever the callable takes."""
     with pytest.raises(schema.ConfigError) as excinfo:
         schema.validate(_target_document("library", kwargs_map=kwargs_map))
     assert excinfo.value.key == f"targets.{_TARGET_NAME}.kwargs_map"
@@ -1758,15 +1400,9 @@ def test_a_kwargs_map_maps_non_empty_strings_to_non_empty_strings(
 def test_a_template_key_and_leaf_value_are_checked(
     template: Mapping[Any, Any], expected_key: str, fragment: str
 ) -> None:
-    """A template is sent as JSON, so only what JSON carries is accepted.
-
-    A TOML table's keys are strings, but a mapping built in code need not be, and a leaf that JSON
-    cannot represent has to be refused while the document is still a document.
-
-    Args:
-        template: An ill-shaped template.
-        expected_key: The dotted path the diagnostic must name.
-        fragment: The wording the diagnostic must contain.
+    """A template is sent as JSON, so only what JSON carries is accepted. A TOML table's keys are
+    strings, but a mapping built in code need not be, and a leaf that JSON cannot represent has
+    to be refused while the document is still a document.
     """
     with pytest.raises(schema.ConfigError) as excinfo:
         schema.validate(_http_document(request_template=template))
@@ -1799,13 +1435,9 @@ def test_an_unparseable_url_is_rejected() -> None:
 
 
 def _cli_case_documents() -> tuple[tuple[Mapping[str, Any], str], ...]:
-    """Return one complete document per fault the command line is driven with.
-
-    Each document is the valid minimal (or worked-example) one with a single fault, so the case is
-    about that fault and not about a document that is broken in several ways at once.
-
-    Returns:
-        ``(document, dotted key)`` pairs, sorted by the key, so the ids are stable.
+    """Return one complete document per fault the command line is driven with. Each document is
+    the valid minimal (or worked-example) one with a single fault, so the case is about that
+    fault and not about a document that is broken in several ways at once.
     """
     unknown_top_level = _minimal_document()
     unknown_top_level["nonsense"] = 1
@@ -1851,17 +1483,9 @@ def test_a_configuration_fault_exits_two_and_writes_no_report(
     dotted: str,
 ) -> None:
     """A configuration fault reaches the shell as exit 2, naming the key, with no report written.
-
     Exit 2 is the configuration code (AAP §0.3.4): it is decided before any check runs, so the
-    report directory holds nothing and stdout stays empty -- a CI consumer therefore never sees a
-    half-written report, and a mistyped option can never be mistaken for a failing generator.
-    The dotted key in the stderr text is the whole contract: it names what to edit.
-
-    Args:
-        cli_runner: The ``CliRunner`` fixture, whose two streams are kept apart.
-        toml_config_file: The writer that puts the document under ``tmp_path``.
-        document: The document holding the fault.
-        dotted: The dotted key the diagnostic must name.
+    report directory holds nothing and stdout stays empty -- a CI consumer therefore never sees
+    a half-written report, and a mistyped option can never be mistaken for a failing generator.
     """
     path = toml_config_file(_document_text(document))
     result = cli_runner.invoke(
@@ -1890,17 +1514,7 @@ def test_a_configuration_fault_exits_two_and_writes_no_report(
 def test_a_valid_configuration_is_not_a_configuration_fault(
     cli_runner: Any, toml_config_file: Any
 ) -> None:
-    """The same command line accepts the committed defaults, so exit 2 is not unconditional.
-
-    ``doctor`` is used rather than ``run``: it loads and validates the configuration and resolves
-    the target without executing a check, and it exits 0 once every blocking prerequisite passes.
-    Together with the cases above it pins both sides of the boundary -- the same document shape is
-    accepted here and refused when one key is wrong.
-
-    Args:
-        cli_runner: The ``CliRunner`` fixture.
-        toml_config_file: The writer that puts the document under ``tmp_path``.
-    """
+    """The same command line accepts the committed defaults, so exit 2 is not unconditional."""
     path = toml_config_file(_document_text(_minimal_document()))
     result = cli_runner.invoke(
         qrcheck_cli, ["--config", str(path), "doctor", "--json"], catch_exceptions=False
@@ -1922,20 +1536,9 @@ def test_a_valid_configuration_is_not_a_configuration_fault(
 
 def test_a_capability_shortfall_is_not_a_configuration_error(toml_config_file: Any) -> None:
     """A target declaring fewer capabilities than a check needs still loads -- and is not exit 2.
-
     Whether a declared capability set can satisfy a check depends on the run-time ``--checks``
     selection (AAP §0.12, fourth resolved conflict): the same document is invalid for one
-    selection and correct for the next, so it cannot be a property of the document at all. The
-    shortfall is a ``skipped`` result with reason ``unsupported_capability`` instead (AAP §0.6.6
-    row 9), counted separately and never as a pass -- asserted by
-    ``tests/unit/test_registry_contract.py``, which owns that half of the contract.
-
-    This test is the negative that keeps the resolution from being undone here: a document whose
-    only ``png`` capability cannot satisfy the ``svg``-requiring ``RN-SVG`` check must validate
-    and load.
-
-    Args:
-        toml_config_file: The writer that puts the document under ``tmp_path``.
+    selection and correct for the next, so it cannot be a property of the document at all.
     """
     shortfall = "png"
     missing = "svg"
@@ -1962,14 +1565,7 @@ def test_a_capability_shortfall_is_not_a_configuration_error(toml_config_file: A
 def test_a_relative_path_is_resolved_against_the_configuration_files_directory(
     toml_config_file: Any,
 ) -> None:
-    """Both paths resolve against the document's own directory, never the working directory.
-
-    That is what makes ``qrcheck --config /anywhere/qrcheck.toml`` behave predictably, and it is
-    why a document written under ``tmp_path`` keeps every artefact of a run inside ``tmp_path``.
-
-    Args:
-        toml_config_file: The writer that puts the document under ``tmp_path``.
-    """
+    """Both paths resolve against the document's own directory, never the working directory."""
     path = toml_config_file(_document_text(_minimal_document()))
     config = load_config(path)
     base = path.parent
@@ -1986,11 +1582,7 @@ def test_a_relative_path_is_resolved_against_the_configuration_files_directory(
 
 
 def test_an_absolute_path_is_honoured_as_written(tmp_path: Path) -> None:
-    """An absolute report directory in the document is used unchanged, not re-rooted.
-
-    Args:
-        tmp_path: The per-test temporary directory.
-    """
+    """An absolute report directory in the document is used unchanged, not re-rooted."""
     absolute = tmp_path / "absolute-reports"
     document = _minimal_document(report_dir=str(absolute))
     path = tmp_path / "qrcheck.toml"
@@ -2002,14 +1594,10 @@ def test_an_absolute_path_is_honoured_as_written(tmp_path: Path) -> None:
 
 
 def test_the_report_directory_is_created_and_left_empty(toml_config_file: Any) -> None:
-    """The loader creates ``report_dir`` and removes its writability probe.
-
-    The probe is what proves the directory is writable -- a permission bit or a mount flag can be
-    wrong for the reason the run will actually hit -- and it must leave no trace, because the
+    """The loader creates ``report_dir`` and removes its writability probe. The probe is what
+    proves the directory is writable -- a permission bit or a mount flag can be wrong for the
+    reason the run will actually hit -- and it must leave no trace, because the
     artifact-cleanup check inspects what a run leaves behind.
-
-    Args:
-        toml_config_file: The writer that puts the document under ``tmp_path``.
     """
     path = toml_config_file(_document_text(_minimal_document()))
     config = load_config(path)
@@ -2020,14 +1608,10 @@ def test_the_report_directory_is_created_and_left_empty(toml_config_file: Any) -
 
 
 def test_the_loaded_records_are_immutable(toml_config_file: Any) -> None:
-    """Every resolved record refuses mutation, so a run cannot drift once the file is read.
-
-    A read-only target mapping, an argv tuple and a capability ``frozenset`` are the three the
+    """Every resolved record refuses mutation, so a run cannot drift once the file is read. A
+    read-only target mapping, an argv tuple and a capability ``frozenset`` are the three the
     contract names; the frozen records are checked as well, because a field that could be
     reassigned would let one command's override leak into another's.
-
-    Args:
-        toml_config_file: The writer that puts the document under ``tmp_path``.
     """
     config = load_config(toml_config_file(_document_text(_target_document("cli"))))
     target = config.targets[_TARGET_NAME]
@@ -2049,14 +1633,9 @@ def test_the_loaded_records_are_immutable(toml_config_file: Any) -> None:
 
 
 def test_a_report_directory_that_cannot_be_created_raises_oserror(tmp_path: Path) -> None:
-    """An uncreatable ``report_dir`` is an environment fault, never a ``ConfigError``.
-
-    A regular file stands where the directory's parent must be, so ``mkdir`` fails for every user
-    including root -- which is why this does not rely on ``chmod``. The CLI maps the ``OSError``
-    to exit 3, not 2: nothing about the document is wrong.
-
-    Args:
-        tmp_path: The per-test temporary directory.
+    """An uncreatable ``report_dir`` is an environment fault, never a ``ConfigError``. A regular
+    file stands where the directory's parent must be, so ``mkdir`` fails for every user
+    including root -- which is why this does not rely on ``chmod``.
     """
     blocker = tmp_path / "a-regular-file"
     blocker.write_text("a directory cannot be created below this\n", encoding="utf-8")
@@ -2075,15 +1654,10 @@ def test_a_report_directory_that_cannot_be_created_raises_oserror(tmp_path: Path
 def test_a_failing_writability_probe_raises_oserror(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """A probe write that fails is an environment fault too, and the probe is what finds it.
-
-    The loader's own view of :mod:`tempfile` is replaced, so only the writability probe is
-    affected and the interpreter's module is untouched: a ``chmod``-based version of this test
-    would pass or fail depending on whether the suite runs as root, which it does in a container.
-
-    Args:
-        monkeypatch: The fixture that installs and reverts the replacement.
-        tmp_path: The per-test temporary directory.
+    """A probe write that fails is an environment fault too, and the probe is what finds it. The
+    loader's own view of :mod:`tempfile` is replaced, so only the writability probe is affected
+    and the interpreter's module is untouched: a ``chmod``-based version of this test would
+    pass or fail depending on whether the suite runs as root, which it does in a container.
     """
     path = tmp_path / "qrcheck.toml"
     path.write_text(_document_text(_minimal_document()), encoding="utf-8")
@@ -2106,11 +1680,7 @@ def test_a_failing_writability_probe_raises_oserror(
 
 
 def test_a_missing_configuration_file_is_a_configuration_fault(tmp_path: Path) -> None:
-    """A file that cannot be read is exit 2 and carries no key, because no key owns it.
-
-    Args:
-        tmp_path: The per-test temporary directory.
-    """
+    """A file that cannot be read is exit 2 and carries no key, because no key owns it."""
     missing = tmp_path / "absent.toml"
     with pytest.raises(schema.ConfigError) as excinfo:
         load_config(missing)
@@ -2129,13 +1699,7 @@ def test_a_missing_configuration_file_is_a_configuration_fault(tmp_path: Path) -
 def test_an_unparsable_document_is_a_configuration_fault(
     tmp_path: Path, content: Any, fragment: str
 ) -> None:
-    """A document that cannot be parsed is exit 2, naming the file rather than a key.
-
-    Args:
-        tmp_path: The per-test temporary directory.
-        content: The bytes or text written to the configuration file.
-        fragment: The wording the diagnostic must contain.
-    """
+    """A document that cannot be parsed is exit 2, naming the file rather than a key."""
     path = tmp_path / "qrcheck.toml"
     if isinstance(content, bytes):
         path.write_bytes(content)
@@ -2148,11 +1712,7 @@ def test_an_unparsable_document_is_a_configuration_fault(
 
 
 def test_loading_the_same_file_twice_returns_equal_records(toml_config_file: Any) -> None:
-    """Loading is deterministic: the same document resolves to equal records every time.
-
-    Args:
-        toml_config_file: The writer that puts the document under ``tmp_path``.
-    """
+    """Loading is deterministic: the same document resolves to equal records every time."""
     path = toml_config_file(_document_text(_minimal_document()))
     assert load_config(path) == load_config(path)
 
@@ -2163,13 +1723,10 @@ def test_loading_the_same_file_twice_returns_equal_records(toml_config_file: Any
 
 
 def test_the_committed_configuration_validates_and_holds_the_declared_defaults() -> None:
-    """The repository's own document is valid and carries the fallbacks the schema declares.
-
-    The file is read with :mod:`tomllib` and validated directly; ``load_config`` is deliberately
+    """The repository's own document is valid and carries the fallbacks the schema declares. The
+    file is read with :mod:`tomllib` and validated directly; ``load_config`` is deliberately
     not used here, because it creates ``report_dir`` and would litter the checkout with a
-    ``reports/`` tree. Every expectation is compared with ``apply_defaults({})`` rather than with
-    a literal, so the committed document is checked against the one declaration and retuning a
-    default in ``models`` without retuning this file fails here.
+    ``reports/`` tree.
     """
     assert _COMMITTED_CONFIG.is_file(), f"{_COMMITTED_CONFIG} is missing"
     raw = tomllib.loads(_COMMITTED_CONFIG.read_text(encoding="utf-8"))

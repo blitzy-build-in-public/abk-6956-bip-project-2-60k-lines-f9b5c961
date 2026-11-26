@@ -1,49 +1,28 @@
 """The shared fixture surface for the ``qrcheck`` test suite: fixtures only, never tests.
 
-Every module under ``tests/unit/`` and ``tests/integration/`` consumes what is defined
-here, so no test module re-implements a report directory, a configuration record, a stub
-adapter, a decoded result or the offline guard.  Nothing in this module is collected as a
-test: it defines no ``test_*`` function and no ``Test*`` class, registers no marker (the
-``e2e`` marker belongs to ``pyproject.toml``), and installs no retry, re-run, quarantine
-or skip hook -- a retry has to surface as the declared adapter-invocation count plus one,
-which is what the counting stub exists to make visible.
+Every module under ``tests/unit/`` and ``tests/integration/`` consumes what is defined here, so no
+test module re-implements a report directory, a configuration record, a stub adapter, a decoded
+result or the offline guard. This module defines no ``test_*`` function, no ``Test*`` class and no
+retry, re-run, quarantine or skip hook: a retry has to surface as the declared adapter-invocation
+count plus one, which is what the counting stub exists to make visible.
 
-What the fixtures guarantee
----------------------------
-* A fresh, writable report root per test (:func:`report_dir`), without pre-creating the
-  ``evidence/`` subtree: ``qrcheck.report.evidence.EvidenceStore`` owns that layout.
-* A fully populated :class:`qrcheck.config.models.Config` built **in memory** from the
-  defaults declared in ``qrcheck/config/schema.py`` (:func:`config_factory`), so no test
-  reads, mutates or depends on the committed ``qrcheck.toml``; plus one writer that puts a
-  minimal valid document into ``tmp_path`` (:func:`toml_config_file`) for the tests that
-  must drive the real CLI through a real ``--config`` path.
-* Protocol-conforming target stubs (:class:`StubAdapter`, :class:`CountingAdapter`,
-  :class:`RaisingAdapter`), recognised by ``isinstance(stub, Adapter)``, whose request log
-  is the evidence of how many times a check called its target.
-* The decoded-evidence stubs every check's negative case is driven through
-  (:func:`make_decode_result`, :func:`make_decoder_outcome`) and the injection that puts
-  one in front of the checks without a target, an image or a decoder (:func:`patch_decode`).
-* A :class:`qrcheck.registry.check.RunContext` a check's ``cases(ctx)`` can be called with
-  (:func:`make_run_context`), the committed and freshly built corpora, and a fixed small
-  subset of them (:func:`corpus_subset`) so a unit test stays at millisecond cost.
-* The determinism comparator (:func:`mask_volatile`) that masks exactly the three volatile
-  fields of the result model, and the autouse :func:`no_outbound_network` guard that makes
-  any outbound socket connect fail loudly, enforcing the product's fully-offline MUST.
-
-Thresholds never appear in this module
---------------------------------------
-Every numeric default a fixture supplies is read from ``qrcheck/config/schema.py``
-(:data:`~qrcheck.config.schema.SCHEMA`) or from the ``models.DEFAULT_*`` constant that
-table references, so retuning a threshold in ``qrcheck.toml`` cannot leave a fixture
-asserting a stale value, and a test that needs a different threshold passes one override
-instead of restating the record.
-
-Fixtures that are also plain callables
---------------------------------------
-The builders and the masking comparator are module-level functions *and* fixtures of the
-same name, so a test may either request them by name (``def test_x(make_decode_result)``)
-or import the function directly; both paths reach one implementation, and the duplicate
-declaration is a name binding, not a second definition.
+* :func:`report_dir` gives a fresh, writable report root per test, and pre-creates no ``evidence/``
+  subtree: ``qrcheck.report.evidence.EvidenceStore`` owns that layout.
+* :func:`config_factory` builds a fully populated :class:`qrcheck.config.models.Config` in memory
+  from the defaults declared in ``qrcheck/config/schema.py``, so no test reads, mutates or depends
+  on the committed ``qrcheck.toml``. Every numeric default a fixture supplies is read from that
+  table or the ``models.DEFAULT_*`` constant it references, so retuning a threshold cannot leave a
+  fixture asserting a stale value.
+* The target stubs (:class:`StubAdapter`, :class:`CountingAdapter`, :class:`RaisingAdapter`)
+  satisfy ``isinstance(stub, Adapter)`` and log every request, which is the evidence of how many
+  times a check called its target (:func:`make_run_context` also builds the ``RunContext`` a
+  check's ``cases(ctx)`` is called with, from the committed and freshly built corpora).
+* The builders and the masking comparator are module-level functions *and* fixtures of the same
+  name, so a test may request them by name or import the function directly; both paths reach one
+  implementation, and the duplicate declaration is a name binding, not a second definition.
+* :func:`mask_volatile` masks exactly the three volatile fields of the result model, and the
+  autouse :func:`no_outbound_network` guard makes any outbound socket connect fail loudly,
+  enforcing the product's fully-offline MUST.
 """
 
 from __future__ import annotations
@@ -65,20 +44,12 @@ import numpy
 import pytest
 from click.testing import CliRunner
 
-# Every local import below names a single owner of something a fixture hands out, so nothing
-# is re-implemented here. Three of them are worth stating, because a reader cannot recover
-# the reason from the code:
-#
-# * ``qrcheck.report.evidence`` is imported for ``EvidenceStore``, which
-#   ``RunContext.evidence`` is typed as (AAP §0.8.1). The run-context fixture cannot exist
-#   without it, so it is part of this file's scope even where a dependency list names only
-#   ``qrcheck/report/model.py`` from that package.
-# * ``qrcheck.decode`` -- the package facade -- is imported only to capture the *real*
-#   ``decode_symbol``: ``patch_decode`` replaces that module attribute with a stub, and
-#   ``real_decode`` has to keep the original callable reachable alongside it.
-# * ``click.testing.CliRunner`` is the harness the exit-code conditions are driven through
-#   (AAP §0.6.1 #7, §0.6.6 rows 1, 2, 10, 11) and ``click`` 8.1.8 is one of the product's
-#   seven pinned runtime dependencies, so using it adds no dependency of its own.
+# Every local import below names a single owner of what a fixture hands out. Three carry a reason
+# the code cannot show: ``qrcheck.report.evidence`` supplies the ``EvidenceStore`` that
+# ``RunContext.evidence`` is typed as (AAP §0.8.1); ``qrcheck.decode`` is imported only to capture
+# the *real* ``decode_symbol``, which :func:`patch_decode` replaces, so :func:`real_decode` keeps
+# the original callable reachable beside the stub; and ``click.testing.CliRunner`` is the harness
+# the exit-code conditions are driven through (AAP §0.6.1 #7, §0.6.6 rows 1, 2, 10, 11).
 from qrcheck.config import models, schema
 from qrcheck.corpus.builder import CorpusRecord, build_corpus
 from qrcheck.corpus.io import filter_by_class, load_corpus
@@ -208,54 +179,24 @@ _DECODE_ATTRIBUTE: Final[str] = "decode_symbol"
 
 
 def _schema_default(group: str, key: str) -> Any:
-    """Return the declared default of one configuration key.
-
-    The factory's only source of a default value: ``qrcheck/config/schema.py`` references
-    the ``models.DEFAULT_*`` constants, so reading the table here is what keeps a fixture
-    from carrying a second copy of a threshold (AAP §0.12).
-
-    Args:
-        group: The schema group path -- ``""`` for the top level, otherwise ``render``,
-            ``checks.performance``, ``checks.damage`` or ``targets.*``.
-        key: The key within that group.
-
-    Returns:
-        The declared fallback for the key, exactly as the schema holds it.
-
-    Raises:
-        KeyError: ``group`` or ``key`` is not declared, which is a defect in this module
-            rather than a configuration fault.
+    """Return the declared default of one configuration key. The factory's only source of a
+    default value: ``qrcheck/config/schema.py`` references the ``models.DEFAULT_*`` constants,
+    so reading the table here is what keeps a fixture from carrying a second copy of a
+    threshold (AAP §0.12).
     """
     return schema.SCHEMA[group][key].default
 
 
 def _group_defaults(group: str) -> dict[str, Any]:
-    """Return every declared default of one schema group, keyed by the configuration key.
-
-    The result can be splatted straight into the frozen record that mirrors the group
-    (``RenderConfig``, ``PerformanceLimits``, ``DamageLimits``), which is how the config
-    factory proves it supplies what the schema declares and nothing retyped.
-
-    Args:
-        group: The schema group path, as :func:`_schema_default` takes it.
-
-    Returns:
-        One entry per declared key of the group, in the schema's declared order.
-    """
+    """Return every declared default of one schema group, keyed by the configuration key."""
     return {key: spec.default for key, spec in schema.SCHEMA[group].items()}
 
 
 def _default_targets() -> Mapping[str, models.TargetConfig]:
-    """Return the two built-in self-check targets, keyed by name in name order.
-
-    ``reference`` and ``defective`` take only the common keys (AAP §0.3.4), so their
-    records are :class:`~qrcheck.config.models.TargetConfig` instances; neither declares
-    ``capabilities`` because both adapters declare all thirteen themselves. The mapping is
-    read-only and sorted, matching the loader's contract, and it names both targets so a
-    test can switch ``default_adapter`` without rebuilding the mapping.
-
-    Returns:
-        A read-only mapping of target name to its resolved record.
+    """Return the two built-in self-check targets, keyed by name in name order. ``reference`` and
+    ``defective`` take only the common keys (AAP §0.3.4), so their records are
+    :class:`~qrcheck.config.models.TargetConfig` instances; neither declares ``capabilities``
+    because both adapters declare all thirteen themselves.
     """
     common = {
         "timeout_s": float(_schema_default("targets.*", "timeout_s")),
@@ -270,17 +211,10 @@ def _default_targets() -> Mapping[str, models.TargetConfig]:
 
 
 def _toml_scalar(value: object) -> str:
-    """Render one value as a TOML scalar for the minimal configuration document.
-
-    Only the shapes the minimal document needs are handled -- a string, an integer and a
-    float -- because the writer exists to produce a *valid* document; a test that needs an
-    invalid one writes the text itself.
-
-    Args:
-        value: The value to render.
-
-    Returns:
-        The TOML literal for the value, quoted and escaped where it is a string.
+    """Render one value as a TOML scalar for the minimal configuration document. Only the shapes
+    the minimal document needs are handled -- a string, an integer and a float -- because the
+    writer exists to produce a *valid* document; a test that needs an invalid one writes the
+    text itself.
     """
     if isinstance(value, bool):
         return "true" if value else "false"
@@ -290,19 +224,10 @@ def _toml_scalar(value: object) -> str:
 
 
 def _minimal_config_text(**overrides: Any) -> str:
-    """Build the smallest configuration document that loads and validates.
-
-    Five top-level keys plus one ``[targets.reference]`` table, every value taken from the
-    schema's declared defaults unless overridden. ``report_dir`` and ``corpus_path`` are
-    written as *relative* paths -- ``reports`` and ``corpus/default.jsonl`` -- because
-    ``qrcheck/config/load.py`` resolves them against the configuration file's directory, so
-    a document written into a test's ``tmp_path`` keeps all of its output there.
-
-    Args:
-        **overrides: Top-level key overrides, applied to the default document.
-
-    Returns:
-        The document text, newline-terminated.
+    """Build the smallest configuration document that loads and validates. ``report_dir`` and
+    ``corpus_path`` are written as *relative* paths -- ``reports`` and ``corpus/default.jsonl``
+    -- because ``qrcheck/config/load.py`` resolves them against the configuration file's
+    directory, so a document written into a test's ``tmp_path`` keeps all of its output there.
     """
     values: dict[str, Any] = {
         key: _schema_default("", key)
@@ -321,30 +246,15 @@ def _minimal_config_text(**overrides: Any) -> str:
 
 def _content_hash(*parts: str | int) -> str:
     """Return a stable hexadecimal digest over `parts`, used for synthetic run identities.
-
     SHA-256, never the builtin ``hash()``: a run identity is compared across processes and
-    machines, and ``hash()`` is salted per process (AAP §0.5.5). The digest is hex, so it
-    can never be mistaken for the UUID or the timestamp the result model refuses.
-
-    Args:
-        *parts: The identity components, in a fixed order.
-
-    Returns:
-        The hexadecimal digest of the joined components.
+    machines, and ``hash()`` is salted per process (AAP §0.5.5).
     """
     joined = "|".join(str(part) for part in parts)
     return hashlib.sha256(joined.encode("utf-8")).hexdigest()
 
 
 def _payload_text(payload: bytes | None) -> str | None:
-    """Return `payload` as text when it round-trips through UTF-8, else ``None``.
-
-    Args:
-        payload: The payload bytes, or ``None`` when nothing was decoded.
-
-    Returns:
-        The decoded text, or ``None`` for absent or non-UTF-8 bytes.
-    """
+    """Return `payload` as text when it round-trips through UTF-8, else ``None``."""
     if payload is None:
         return None
     try:
@@ -354,19 +264,8 @@ def _payload_text(payload: bytes | None) -> str | None:
 
 
 def _stub_matrix(version: int = 2) -> Matrix:
-    """Return a deterministic, synthetic module grid for a Model 2 symbol of `version`.
-
-    The grid is ``4V + 17`` modules on a side (ISO/IEC 18004 Model 2), dark = ``True``,
-    with a dark border and a single dark centre module. It is a *stub*: it is not a valid
-    QR symbol and is never decoded. Its only jobs are to be a real
-    :data:`~qrcheck.decode.base.Matrix` so ``matrix_sha256`` is exercised and to give a
-    negative-case test something well-defined to replace with the defect it asserts against.
-
-    Args:
-        version: The symbol version the grid dimension should correspond to.
-
-    Returns:
-        A read-only-by-convention ``numpy`` boolean grid of shape ``(N, N)``.
+    """Return a deterministic, synthetic module grid for a Model 2 symbol of `version`. It is a
+    *stub*: it is not a valid QR symbol and is never decoded.
     """
     side = 4 * version + 17
     grid = numpy.zeros((side, side), dtype=numpy.bool_)
@@ -389,24 +288,9 @@ def _stub_matrix(version: int = 2) -> Matrix:
 
 class StubAdapter:
     """A protocol-conforming target that produces canned bytes and records every request.
-
     Satisfies :class:`qrcheck.targets.base.Adapter` exactly -- ``name``, ``capabilities``,
-    ``generate(request)`` and ``close()`` -- so ``isinstance(adapter, Adapter)`` holds and
-    a check cannot tell it from a real target. ``capabilities`` defaults to all thirteen
-    members, because a stub that left one out would turn the affected checks into
-    ``skipped`` results and hide the assertion a test meant to exercise.
-
-    ``generate`` appends its request to :attr:`requests` and returns a
-    :class:`~qrcheck.targets.base.GeneratedSymbol` built from the configured bytes, or the
-    symbol ``responder`` returns when one is set. The ``declared_*`` fields are the
-    metadata a target *claims*; they are evidence only and are never an assertion.
-
-    ``close`` is idempotent and only counts its calls, so a runner that closes an adapter
-    twice is observable rather than exceptional.
-
-    Raises:
-        Nothing of its own: ``generate`` raises only what ``responder`` raises, which is how
-        a test injects one of the five adapter errors without a second stub class.
+    ``generate(request)`` and ``close()`` -- so ``isinstance(adapter, Adapter)`` holds and a
+    check cannot tell it from a real target.
     """
 
     def __init__(
@@ -423,22 +307,7 @@ class StubAdapter:
         elapsed_ms: float = 0.0,
         responder: Callable[[GenerateRequest], GeneratedSymbol] | None = None,
     ) -> None:
-        """Configure the stub's identity, declared capabilities and canned answer.
-
-        Args:
-            name: The configured target name every diagnostic quotes.
-            capabilities: What the stub declares it can do, as members or their string
-                values. ``None`` declares all thirteen, so no check is skipped by accident.
-            image_bytes: The artefact the stub returns.
-            output_format: The format the stub claims it produced.
-            declared_version: The version the stub claims, as evidence only.
-            declared_ec: The EC level the stub claims, as evidence only.
-            declared_mask: The mask the stub claims, as evidence only.
-            declared_mode: The mode the stub claims, as evidence only.
-            elapsed_ms: The target-side timing the stub reports, never asserted.
-            responder: An optional callable producing the symbol for each request, so one
-                stub can serve a whole check family.
-        """
+        """Configure the stub's identity, declared capabilities and canned answer."""
         self.name: str = name
         declared = Capability if capabilities is None else capabilities
         self.capabilities: frozenset[Capability] = frozenset(
@@ -457,17 +326,7 @@ class StubAdapter:
         self.closed: bool = False
 
     def generate(self, request: GenerateRequest) -> GeneratedSymbol:
-        """Record `request` and return the stub's answer.
-
-        Args:
-            request: The request the framework built for one case.
-
-        Returns:
-            The configured symbol, or what ``responder`` returned for `request`.
-
-        Raises:
-            BaseException: Whatever ``responder`` raises, unchanged.
-        """
+        """Record `request` and return the stub's answer."""
         self.requests.append(request)
         return self._produce(request)
 
@@ -492,17 +351,12 @@ class StubAdapter:
 
 
 class CountingAdapter(StubAdapter):
-    """A stub that counts its invocations, which is how a declared count is held to.
-
-    The count is cumulative over the whole case walk of a check and is reset only when a
-    test calls :meth:`reset`, so AAP §0.4.3's declared invocation counts -- two for
-    ``DT-DETERMINISTIC``, eight for ``DM-RESILIENCE``, one hundred and five for
-    ``PF-ENCODE``, none for the three target-independent checks and one per case otherwise
-    -- are asserted against a number a retry cannot hide: a retry registers as the declared
-    count plus one.
-
-    ``raise_on_call`` schedules a failure at a chosen invocation, so one adapter can serve a
-    check that must survive a target loss after succeeding once.
+    """A stub that counts its invocations, which is how a declared count is held to. The count is
+    cumulative over the whole case walk of a check and is reset only when a test calls
+    :meth:`reset`, so AAP §0.4.3's declared invocation counts -- two for ``DT-DETERMINISTIC``,
+    eight for ``DM-RESILIENCE``, one hundred and five for ``PF-ENCODE``, none for the three
+    target-independent checks and one per case otherwise -- are asserted against a number a
+    retry cannot hide: a retry registers as the declared count plus one.
     """
 
     def __init__(self, **kwargs: Any) -> None:
@@ -531,33 +385,15 @@ class CountingAdapter(StubAdapter):
         self._scheduled.clear()
 
     def raise_on_call(self, number: int, error: BaseException) -> None:
-        """Schedule `error` to be raised by the `number`-th invocation, counted from one.
-
-        Args:
-            number: The 1-based invocation that should fail.
-            error: The exception instance to raise.
-
-        Raises:
-            ValueError: ``number`` is not a positive integer.
-        """
+        """Schedule `error` to be raised by the `number`-th invocation, counted from one."""
         if number < 1:
             raise ValueError(f"raise_on_call needs a 1-based invocation, got {number}")
         self._scheduled[number] = error
 
     def generate(self, request: GenerateRequest) -> GeneratedSymbol:
-        """Record `request`, then raise a scheduled failure or return the stub's answer.
-
-        The request is recorded before the failure, so the counted invocation includes the
-        one that failed -- which is what keeps a retry visible as count plus one.
-
-        Args:
-            request: The request the framework built for one case.
-
-        Returns:
-            The configured symbol for an invocation that was not scheduled to fail.
-
-        Raises:
-            BaseException: The scheduled exception, when this invocation is the one.
+        """Record `request`, then raise a scheduled failure or return the stub's answer. The
+        request is recorded before the failure, so the counted invocation includes the one
+        that failed -- which is what keeps a retry visible as count plus one.
         """
         number = len(self.requests) + 1
         self.requests.append(request)
@@ -568,12 +404,9 @@ class CountingAdapter(StubAdapter):
 
 
 class RaisingAdapter(StubAdapter):
-    """A stub whose ``generate`` raises one of the five adapter errors.
-
-    The error vocabulary is closed (AAP §0.3.4), so a test proving a consumer handles a
-    target fault needs exactly this and no more. With ``fail_on_call`` unset every
-    invocation raises; with it set, only that 1-based invocation raises and later ones
-    answer normally, which is what lets a test prove a run continues past a target loss.
+    """A stub whose ``generate`` raises one of the five adapter errors. The error vocabulary is
+    closed (AAP §0.3.4), so a test proving a consumer handles a target fault needs exactly this
+    and no more.
     """
 
     def __init__(
@@ -583,31 +416,13 @@ class RaisingAdapter(StubAdapter):
         fail_on_call: int | None = None,
         **kwargs: Any,
     ) -> None:
-        """Build the raising stub around `error`.
-
-        Args:
-            error: The exception instance ``generate`` raises. One of the five adapter
-                errors, though nothing here enforces that: the class is imported from the
-                port and instantiated by the caller.
-            fail_on_call: The 1-based invocation that raises, or ``None`` for all of them.
-            **kwargs: Every :class:`StubAdapter` option.
-        """
+        """Build the raising stub around `error`."""
         super().__init__(**kwargs)
         self.error: BaseException = error
         self.fail_on_call: int | None = fail_on_call
 
     def generate(self, request: GenerateRequest) -> GeneratedSymbol:
-        """Record `request` and raise, or answer once the scheduled failure has passed.
-
-        Args:
-            request: The request the framework built for one case.
-
-        Returns:
-            The configured symbol, when ``fail_on_call`` names an earlier invocation.
-
-        Raises:
-            BaseException: The configured adapter error, when this invocation is the one.
-        """
+        """Record `request` and raise, or answer once the scheduled failure has passed."""
         number = len(self.requests) + 1
         self.requests.append(request)
         if self.fail_on_call is None or number == self.fail_on_call:
@@ -621,21 +436,9 @@ def adapter_raising(
     fail_on_call: int | None = None,
     name: str = "raising",
 ) -> Adapter:
-    """Return a protocol-conforming adapter whose ``generate`` raises `error`.
-
-    A plain function as well as a fixture (:func:`error_adapter`), because a test that
-    parametrises over the five adapter errors builds them inline. The error class comes
-    from the port, so a renamed error breaks this module rather than every test.
-
-    Args:
-        error: The exception instance to raise; one of ``TargetUnavailable``,
-            ``TargetTimeout``, ``TargetRejected``, ``TargetContractError`` or
-            ``TargetUnsupported``.
-        fail_on_call: The 1-based invocation that raises, or ``None`` for every one.
-        name: The configured target name the stub reports.
-
-    Returns:
-        A :class:`RaisingAdapter`, which satisfies the ``Adapter`` protocol.
+    """Return a protocol-conforming adapter whose ``generate`` raises `error`. A plain function as
+    well as a fixture (:func:`error_adapter`), because a test that parametrises over the five
+    adapter errors builds them inline.
     """
     return RaisingAdapter(error, fail_on_call=fail_on_call, name=name)
 
@@ -652,23 +455,7 @@ def adapter_raising(
 
 
 def _decoder_outcome(**overrides: Any) -> DecoderOutcome:
-    """Return one decoder outcome, valid by default, with `overrides` applied.
-
-    The status defaults to ``decoded`` and the payload to the stub's payload; overriding
-    ``status`` to ``undetected`` or ``error`` clears the payload for that status rather than
-    leaving a decoded payload beside a status that says nothing was decoded.
-
-    Args:
-        **overrides: Any :class:`~qrcheck.decode.base.DecoderOutcome` field.
-
-    Returns:
-        The constructed outcome.
-
-    Raises:
-        ValueError: An override puts a field outside its closed vocabulary, or supplies a
-            ``payload_sha256`` that disagrees with ``payload``.
-        TypeError: An override names a field the record does not have.
-    """
+    """Return one decoder outcome, valid by default, with `overrides` applied."""
     status = overrides.get("status", "decoded")
     payload = overrides.pop("payload", _STUB_PAYLOAD if status == "decoded" else None)
     fields: dict[str, Any] = {
@@ -692,22 +479,7 @@ make_decoder_outcome: Final[Callable[..., DecoderOutcome]] = _decoder_outcome
 
 
 def _baseline_decode_result(payload: bytes | None = _STUB_PAYLOAD) -> DecodeResult:
-    """Return a valid, self-consistent :class:`~qrcheck.decode.base.DecodeResult`.
-
-    Both decoders are present, in the lexicographic order ``DECODER_ORDER`` fixes, and both
-    agree on the payload, so ``agreement`` is ``agree``; the EC level agrees between the
-    decoder's metadata and the format information, the version and mask are in range, the
-    grid is a real ``Matrix`` and the digest is computed by the record itself from that grid.
-    Passing ``None`` as the payload yields the single consistent alternative: neither decoder
-    decoded anything, ``agreement`` is ``undetected``, and the payload-derived fields are
-    ``None``.
-
-    Args:
-        payload: The payload both decoders returned, or ``None`` when neither did.
-
-    Returns:
-        The baseline result.
-    """
+    """Return a valid, self-consistent :class:`~qrcheck.decode.base.DecodeResult`."""
     decoded = payload is not None
     outcomes = {
         name: _decoder_outcome(
@@ -770,27 +542,15 @@ def make_decode_result(**overrides: Any) -> DecodeResult:
 
 class _DecodePatcher:
     """Installs a stubbed decode entry in front of the checks, and controls what it returns.
-
-    The patch targets are the bindings the checks actually resolve. ``qrcheck/checks/support.py``
-    imports ``qrcheck.decode.decode_symbol`` inside its own ``decode()`` call, so patching
-    that module attribute reaches every family that goes through the shared helper; a family
-    that imported the entry itself holds its own attribute, which is why every module in the
-    checks package that carries a ``decode_symbol`` attribute is patched too.
-
-    ``qrcheck.decode.consensus.decode_symbol`` is deliberately **not** patched: the captured
-    real function delegates to it, so leaving it intact is what keeps :func:`real_decode`
-    working while a patch is installed.
-
-    The instance is callable (:meth:`__call__`) and its :attr:`result` is assignable, so a
-    test may either install a result inline or swap it between cases of one walk.
+    ``qrcheck/checks/support.py`` imports ``qrcheck.decode.decode_symbol`` inside its own
+    ``decode()`` call, so patching that module attribute reaches every family that goes through
+    the shared helper; a family that imported the entry itself holds its own attribute, which
+    is why every module in the checks package that carries a ``decode_symbol`` attribute is
+    patched too.
     """
 
     def __init__(self, result: DecodeResult) -> None:
-        """Store the result the stub returns and start an empty call log.
-
-        Args:
-            result: The decoded evidence every stubbed call returns.
-        """
+        """Store the result the stub returns and start an empty call log."""
         self._result: DecodeResult = result
         self.calls: list[tuple[bytes, GenerateRequest]] = []
 
@@ -835,19 +595,9 @@ class _DecodePatcher:
         *,
         secondary: bool | None = None,
     ) -> DecodeResult:
-        """Stand in for ``qrcheck.decode.decode_symbol``: log the call, return the result.
-
-        The signature is the real entry's, including the keyword-only ``secondary``, so a
-        caller cannot tell the stub from the implementation by how it calls it. ``secondary``
-        is accepted and ignored: the canned result already records both decoders.
-
-        Args:
-            image_bytes: The artefact the caller wanted decoded; recorded, not read.
-            request: The request the artefact was produced for; recorded.
-            secondary: Single-decoder-mode selection, ignored.
-
-        Returns:
-            The result the patcher currently holds.
+        """Stand in for ``qrcheck.decode.decode_symbol``: log the call, return the result. The
+        signature is the real entry's, including the keyword-only ``secondary``, so a
+        caller cannot tell the stub from the implementation by how it calls it.
         """
         del secondary
         self.calls.append((image_bytes, request))
@@ -855,15 +605,10 @@ class _DecodePatcher:
 
 
 def _decode_patch_targets() -> tuple[tuple[Any, str], ...]:
-    """Return the modules, and the attribute on each, that :func:`patch_decode` replaces.
-
-    ``qrcheck.decode`` is always patched. Every module of the checks package that already
-    holds a ``decode_symbol`` attribute is patched as well, because a module-level
-    ``from qrcheck.decode import decode_symbol`` binds a name of its own that patching the
-    source module would leave untouched. The package is imported first so the walk sees it.
-
-    Returns:
-        One ``(module, attribute)`` pair per patch site, in a stable order.
+    """Return the modules, and the attribute on each, that :func:`patch_decode` replaces. Every
+    module of the checks package that already holds a ``decode_symbol`` attribute is patched as
+    well, because a module-level ``from qrcheck.decode import decode_symbol`` binds a name of
+    its own that patching the source module would leave untouched.
     """
     targets: list[tuple[Any, str]] = [
         (importlib.import_module("qrcheck.decode"), _DECODE_ATTRIBUTE)
@@ -883,26 +628,9 @@ def _decode_patch_targets() -> tuple[tuple[Any, str], ...]:
 
 
 def make_case_result(**overrides: Any) -> CaseResult:
-    """Return a valid :class:`~qrcheck.report.model.CaseResult`, passed by default.
-
-    The status defaults to ``passed`` with no reason and no evidence directory, which is
-    the only shape the model accepts for a pass. A non-passing status supplied without a
-    reason gets :attr:`~qrcheck.report.model.Reason.VALUE_MISMATCH`, so no override can
-    produce the pair the model refuses. Every other field is overridable, including the
-    two the model validates against each other.
-
-    Args:
-        **overrides: Any ``CaseResult`` field.
-
-    Returns:
-        The constructed result.
-
-    Raises:
-        ValueError: An override breaks one of the model's invariants -- a reason or an
-            evidence directory on a pass, a missing reason on any other status, a
-            non-mapping request, a negative or non-finite duration, an absolute
-            evidence directory.
-        TypeError: An override names a field the record does not have.
+    """Return a valid :class:`~qrcheck.report.model.CaseResult`, passed by default. The status
+    defaults to ``passed`` with no reason and no evidence directory, which is the only shape
+    the model accepts for a pass.
     """
     status = Status(overrides.get("status", Status.PASSED))
     fields: dict[str, Any] = {
@@ -924,25 +652,9 @@ def make_case_result(**overrides: Any) -> CaseResult:
 
 
 def make_run_result(results: Sequence[CaseResult] = (), **overrides: Any) -> RunResult:
-    """Return a valid :class:`~qrcheck.report.model.RunResult` over `results`.
-
-    The identity is a content hash over the run's parameters and its cases, never a UUID or
-    a timestamp, so two calls with the same arguments agree. The tallies are computed from
-    `results`, which is what the model re-derives and compares. The timestamps are the
-    module's fixed constants, so a test that wants a difference passes its own -- and the
-    pair a determinism test compares differs only in the fields :func:`mask_volatile` masks.
-
-    Args:
-        results: The case results the run holds, in any order; the model sorts them.
-        **overrides: Any other ``RunResult`` field.
-
-    Returns:
-        The constructed run result.
-
-    Raises:
-        ValueError: An override supplies a run identity, timestamp pair or tally the model
-            refuses, or two of `results` share a case identity.
-        TypeError: An override names a field the record does not have.
+    """Return a valid :class:`~qrcheck.report.model.RunResult` over `results`. The identity is a
+    content hash over the run's parameters and its cases, never a UUID or a timestamp, so two
+    calls with the same arguments agree.
     """
     ordered = tuple(results)
     adapter = str(overrides.get("adapter", "reference"))
@@ -970,24 +682,11 @@ def make_run_result(results: Sequence[CaseResult] = (), **overrides: Any) -> Run
 
 
 def mask_volatile(value: RunResult | Mapping[str, Any]) -> dict[str, Any]:
-    """Return a summary-shaped copy with exactly the volatile fields masked.
-
-    The three volatile fields are the complete inventory AAP §0.5.4 names --
-    ``started_at``, ``finished_at`` and every ``results[].duration_ms`` -- and nothing else
-    is touched: every other key keeps its value and every list keeps its order, so two runs
-    compare equal only when they agree about everything reproducible.
-
-    A :class:`~qrcheck.report.model.RunResult` is projected through ``as_dict()`` first,
-    because a masked timestamp is not a timestamp and would not satisfy the record's own
-    validation; the return value is therefore always the mapping ``summary.json`` is built
-    from, which is also what a writer test has in hand.
-
-    Args:
-        value: A run result, or the mapping a summary writer produced from one.
-
-    Returns:
-        A new mapping: the two run timestamps replaced by a non-timestamp sentinel, and each
-        result's ``duration_ms`` replaced by zero. The argument is never mutated.
+    """Return a summary-shaped copy with exactly the volatile fields masked. The three volatile
+    fields are the complete inventory AAP §0.5.4 names -- ``started_at``, ``finished_at`` and
+    every ``results[].duration_ms`` -- and nothing else is touched: every other key keeps its
+    value and every list keeps its order, so two runs compare equal only when they agree about
+    everything reproducible.
     """
     summary = copy.deepcopy(value.as_dict() if isinstance(value, RunResult) else dict(value))
     for key in _RUN_VOLATILE_FIELDS:
@@ -1014,12 +713,10 @@ def mask_volatile(value: RunResult | Mapping[str, Any]) -> dict[str, Any]:
 
 
 class OutboundNetworkBlocked(RuntimeError):
-    """A test tried to connect to a destination that is not loopback.
-
-    Raised by the autouse :func:`no_outbound_network` guard. A ``RuntimeError`` rather than
-    an ``OSError`` on purpose: a client library may translate an ``OSError`` into its own
-    connection error and report a merely-unreachable host, and the failure this guard
-    reports must stay recognisable as the product's offline contract being broken.
+    """A test tried to connect to a destination that is not loopback. A ``RuntimeError`` rather
+    than an ``OSError`` on purpose: a client library may translate an ``OSError`` into its own
+    connection error and report a merely-unreachable host, and the failure this guard reports
+    must stay recognisable as the product's offline contract being broken.
     """
 
 
@@ -1030,18 +727,10 @@ _LOOPBACK_HOSTNAMES: Final[frozenset[str]] = frozenset({"localhost"})
 
 
 def _is_loopback_destination(address: object) -> bool:
-    """Return whether a socket address names a loopback destination.
-
-    ``127.0.0.0/8`` in any spelling, ``::1`` and the ``localhost`` name are loopback; a
-    non-tuple address is an ``AF_UNIX`` path and therefore local IPC rather than a network
-    destination; anything the classifier cannot read is refused, because the safe direction
-    for a guard is to block.
-
-    Args:
-        address: The address a ``connect`` call received.
-
-    Returns:
-        ``True`` to let the call through, ``False`` to block it.
+    """Return whether a socket address names a loopback destination. ``127.0.0.0/8`` in any
+    spelling, ``::1`` and the ``localhost`` name are loopback; a non-tuple address is an
+    ``AF_UNIX`` path and therefore local IPC rather than a network destination; anything the
+    classifier cannot read is refused, because the safe direction for a guard is to block.
     """
     if not isinstance(address, tuple) or not address:
         return True
@@ -1071,22 +760,9 @@ def _is_loopback_destination(address: object) -> bool:
 
 @pytest.fixture(autouse=True)
 def no_outbound_network(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Block every socket connection to a destination outside loopback, for every test.
-
-    Enforces the product's fully-offline MUST (AAP §0.12: no host other than
-    ``127.0.0.1``/``localhost``/``::1``, no paid service, no cloud credential, no
-    telemetry). A stray outbound call fails loudly as :class:`OutboundNetworkBlocked`
-    instead of silently depending on a network that a CI runner may not have -- and instead
-    of passing locally and failing there.
-
-    Loopback is untouched, because the HTTP adapter's integration test drives a real server
-    on ``127.0.0.1`` and the connect must succeed there. ``create_connection`` needs no
-    separate patch: it funnels through ``socket.connect``, which is the call that would put
-    a packet on the wire. ``connect_ex`` is patched too, since it is the non-raising spelling
-    of the same operation and an unguarded path through it would let a call slip out.
-
-    Args:
-        monkeypatch: The fixture that unwinds the patches when the test ends.
+    """Block every socket connection to a destination outside loopback, for every test. Enforces
+    the product's fully-offline MUST (AAP §0.12: no host other than
+    ``127.0.0.1``/``localhost``/``::1``, no paid service, no cloud credential, no telemetry).
     """
     real_connect = socket.socket.connect
     real_connect_ex = socket.socket.connect_ex
@@ -1119,17 +795,10 @@ def no_outbound_network(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture
 def report_dir(tmp_path: Path) -> Path:
-    """Return a fresh, existing, writable report root unique to the test.
-
-    The directory is created but its ``evidence/`` subtree is not: the store owns that
-    layout -- ``<report_dir>/evidence/<check-id>/<failure-id>/`` -- and a fixture that
-    pre-created it would let a test assert a directory the code never made.
-
-    Args:
-        tmp_path: The per-test temporary directory.
-
-    Returns:
-        ``<tmp_path>/reports``, existing and empty.
+    """Return a fresh, existing, writable report root unique to the test. The directory is created
+    but its ``evidence/`` subtree is not: the store owns that layout --
+    ``<report_dir>/evidence/<check-id>/<failure-id>/`` -- and a fixture that pre-created it
+    would let a test assert a directory the code never made.
     """
     path = tmp_path / str(_schema_default("", "report_dir"))
     path.mkdir(parents=True, exist_ok=True)
@@ -1138,30 +807,11 @@ def report_dir(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def config_factory(tmp_path: Path, report_dir: Path) -> Callable[..., models.Config]:
-    """Return a callable building a fully populated configuration **in memory**.
-
-    Nothing here opens ``qrcheck.toml``: every value comes from
-    :data:`qrcheck.config.schema.SCHEMA`'s declared defaults, splatted into the frozen
-    records of :mod:`qrcheck.config.models`, so a test that retunes nothing agrees with the
-    committed document's fallbacks and a test that retunes one value states only that value.
-    The report directory is the test's, the corpus path is the committed corpus, and the two
-    built-in self-check targets are both declared so ``default_adapter`` can be switched
-    between them.
-
-    The returned callable takes keyword overrides that replace single top-level fields --
-    ``seed``, ``default_adapter``, ``report_dir``, ``targets``, ``performance`` -- and
-    refuses a name that is not one of them, so a mistyped override fails instead of being
-    silently ignored.
-
-    Args:
-        tmp_path: The per-test temporary directory, used for the record's own config path.
-        report_dir: The test's report root.
-
-    Returns:
-        A callable ``build(**overrides) -> Config``.
-
-    Raises:
-        TypeError: The callable is given an override naming no ``Config`` field.
+    """Return a callable building a fully populated configuration **in memory**. Nothing here
+    opens ``qrcheck.toml``: every value comes from :data:`qrcheck.config.schema.SCHEMA`'s
+    declared defaults, splatted into the frozen records of :mod:`qrcheck.config.models`, so a
+    test that retunes nothing agrees with the committed document's fallbacks and a test that
+    retunes one value states only that value.
     """
     config_path = (tmp_path / _CONFIG_FILE_NAME).resolve()
     corpus_path = (_REPO_ROOT / str(_schema_default("", "corpus_path"))).resolve()
@@ -1191,38 +841,18 @@ def config_factory(tmp_path: Path, report_dir: Path) -> Callable[..., models.Con
 
 @pytest.fixture
 def config(config_factory: Callable[..., models.Config]) -> models.Config:
-    """Return the default in-memory configuration, for a test that needs only a valid one.
-
-    Args:
-        config_factory: The factory fixture.
-
-    Returns:
-        A :class:`~qrcheck.config.models.Config` carrying every declared default.
-    """
+    """Return the default in-memory configuration, for a test that needs only a valid one."""
     return config_factory()
 
 
 @pytest.fixture
 def toml_config_file(tmp_path: Path) -> Callable[..., Path]:
-    """Return a writer that puts a configuration document under the test's ``tmp_path``.
-
-    The document is minimal and valid by default -- the five top-level keys plus
-    ``[targets.reference]``, every value taken from the schema's declared defaults -- and
-    its ``report_dir`` and ``corpus_path`` are written **relative** so that
+    """Return a writer that puts a configuration document under the test's ``tmp_path``. The
+    document is minimal and valid by default -- the five top-level keys plus
+    ``[targets.reference]``, every value taken from the schema's declared defaults -- and its
+    ``report_dir`` and ``corpus_path`` are written **relative** so that
     ``qrcheck/config/load.py``, which resolves paths against the configuration file's own
-    directory, keeps every artefact of the run inside ``tmp_path``. The committed corpus is
-    copied to the same relative location for the same reason: a CLI test must neither depend
-    on nor mutate the repository file.
-
-    Passing ``text`` writes that document verbatim instead, which is how a test builds a
-    deliberately invalid one (an unknown key, a non-loopback ``url``) without this module
-    carrying a catalogue of broken documents.
-
-    Args:
-        tmp_path: The per-test temporary directory that becomes the config file's base.
-
-    Returns:
-        A callable ``write(text=None, *, name="qrcheck.toml", **overrides) -> Path``.
+    directory, keeps every artefact of the run inside ``tmp_path``.
     """
     corpus_relative = Path(str(_schema_default("", "corpus_path")))
 
@@ -1247,14 +877,7 @@ def toml_config_file(tmp_path: Path) -> Callable[..., Path]:
 
 @pytest.fixture
 def config_file(toml_config_file: Callable[..., Path]) -> Path:
-    """Return the path of the default minimal ``qrcheck.toml`` written under ``tmp_path``.
-
-    Args:
-        toml_config_file: The writer fixture.
-
-    Returns:
-        The configuration file's path, for ``--config``.
-    """
+    """Return the path of the default minimal ``qrcheck.toml`` written under ``tmp_path``."""
     return toml_config_file()
 
 
@@ -1265,47 +888,25 @@ def config_file(toml_config_file: Callable[..., Path]) -> Path:
 
 @pytest.fixture
 def stub_adapter() -> StubAdapter:
-    """Return a protocol-conforming target stub declaring all thirteen capabilities.
-
-    Returns:
-        A fresh :class:`StubAdapter` with an empty request log.
-    """
+    """Return a protocol-conforming target stub declaring all thirteen capabilities."""
     return StubAdapter()
 
 
 @pytest.fixture
 def counting_adapter() -> CountingAdapter:
-    """Return a target stub that counts its invocations and can fail on a chosen one.
-
-    Returns:
-        A fresh :class:`CountingAdapter` with a zero count.
-    """
+    """Return a target stub that counts its invocations and can fail on a chosen one."""
     return CountingAdapter()
 
 
 @pytest.fixture
 def error_adapter() -> Callable[..., Adapter]:
-    """Return :func:`adapter_raising`, the factory of always-or-once failing adapters.
-
-    Returns:
-        The factory, so a test builds one stub per adapter error it exercises.
-    """
+    """Return :func:`adapter_raising`, the factory of always-or-once failing adapters."""
     return adapter_raising
 
 
 @pytest.fixture
 def target_errors() -> tuple[BaseException, ...]:
-    """Return one instance of each of the five adapter errors, in the documented order.
-
-    Constructed from the real classes, so this fixture is the one place the closed
-    five-error vocabulary is enumerated for tests: a renamed or removed error breaks this
-    module rather than the tests that assume it. The order is the order of the error table
-    in AAP §0.3.4.
-
-    Returns:
-        ``TargetUnavailable``, ``TargetTimeout``, ``TargetRejected``,
-        ``TargetContractError`` (carrying a body prefix) and ``TargetUnsupported``.
-    """
+    """Return one instance of each of the five adapter errors, in the documented order."""
     return (
         TargetUnavailable("cannot spawn target process"),
         TargetTimeout("no response within timeout_s"),
@@ -1317,34 +918,19 @@ def target_errors() -> tuple[BaseException, ...]:
 
 @pytest.fixture(name="make_decode_result")
 def _make_decode_result_fixture() -> Callable[..., DecodeResult]:
-    """Return :func:`make_decode_result`, requestable as a fixture.
-
-    Returns:
-        The decoded-result factory.
-    """
+    """Return :func:`make_decode_result`, requestable as a fixture."""
     return make_decode_result
 
 
 @pytest.fixture(name="make_decoder_outcome")
 def _make_decoder_outcome_fixture() -> Callable[..., DecoderOutcome]:
-    """Return the decoder-outcome factory, requestable as a fixture.
-
-    Returns:
-        A callable ``(**overrides) -> DecoderOutcome``.
-    """
+    """Return the decoder-outcome factory, requestable as a fixture."""
     return make_decoder_outcome
 
 
 @pytest.fixture
 def baseline_decode_result() -> DecodeResult:
-    """Return the unmodified valid decoded result the factories start from.
-
-    A test that wants to change several fields, or to compare a stubbed result against the
-    baseline, requests this instead of calling the factory with no arguments.
-
-    Returns:
-        The baseline :class:`~qrcheck.decode.base.DecodeResult`.
-    """
+    """Return the unmodified valid decoded result the factories start from."""
     return _baseline_decode_result()
 
 
@@ -1354,28 +940,8 @@ def patch_decode(
     baseline_decode_result: DecodeResult,
 ) -> _DecodePatcher:
     """Install a stubbed decode entry in front of the checks, without a target or an image.
-
-    This is how a check's negative case is driven: the check calls the decode entry it always
-    calls, and receives the canned :class:`~qrcheck.decode.base.DecodeResult` instead of a
-    real one. The patch covers ``qrcheck.decode.decode_symbol`` -- the binding
-    ``qrcheck/checks/support.py`` imports inside its own ``decode()``, so every family that
-    goes through the shared helper is covered -- plus, for a family that imported the entry
-    itself, the ``decode_symbol`` attribute of that checks module.
-
     ``qrcheck.decode.consensus.decode_symbol`` is not patched, which is what keeps
     :func:`real_decode` usable side by side with the stub.
-
-    The returned patcher is callable (``patch_decode(result)`` installs and returns it), its
-    ``result`` is assignable, and it logs every stubbed call, so a test can walk a whole
-    case matrix and change the result per case. ``monkeypatch`` unwinds the patch at the end
-    of the test.
-
-    Args:
-        monkeypatch: The fixture that owns the patch's lifetime.
-        baseline_decode_result: The result the stub returns until a test replaces it.
-
-    Returns:
-        The installed :class:`_DecodePatcher`.
     """
     patcher = _DecodePatcher(baseline_decode_result)
     for module, attribute in _decode_patch_targets():
@@ -1385,14 +951,10 @@ def patch_decode(
 
 @pytest.fixture
 def real_decode() -> Callable[..., DecodeResult]:
-    """Return the real decode entry, callable even while :func:`patch_decode` is installed.
-
-    The function object is captured when this module is imported, and the patch never
-    touches ``qrcheck.decode.consensus``, which the captured function delegates to -- so a
-    test can compare real and stubbed behaviour in one process.
-
-    Returns:
-        ``qrcheck.decode.decode_symbol`` as it was before any patch.
+    """Return the real decode entry, callable even while :func:`patch_decode` is installed. The
+    function object is captured when this module is imported, and the patch never touches
+    ``qrcheck.decode.consensus``, which the captured function delegates to -- so a test can
+    compare real and stubbed behaviour in one process.
     """
     return _REAL_DECODE_SYMBOL
 
@@ -1404,14 +966,10 @@ def real_decode() -> Callable[..., DecodeResult]:
 
 @pytest.fixture(scope="session")
 def committed_corpus() -> tuple[CorpusRecord, ...]:
-    """Return the committed corpus, read through its canonical reader, in ``id`` order.
-
-    The file is the repository's ``corpus/default.jsonl`` (AAP §0.9.2: a repository file,
-    not package data), parsed by ``qrcheck.corpus.io.load_corpus`` so the JSONL contract --
-    sorted keys, LF, one trailing newline -- is that module's and not a second parser's.
-
-    Returns:
-        The 240 records, sorted by ``id`` ascending.
+    """Return the committed corpus, read through its canonical reader, in ``id`` order. The file
+    is the repository's ``corpus/default.jsonl`` (AAP §0.9.2: a repository file, not package
+    data), parsed by ``qrcheck.corpus.io.load_corpus`` so the JSONL contract -- sorted keys,
+    LF, one trailing newline -- is that module's and not a second parser's.
     """
     path = _REPO_ROOT / str(_schema_default("", "corpus_path"))
     return tuple(sorted(load_corpus(path), key=lambda record: record.id))
@@ -1419,48 +977,23 @@ def committed_corpus() -> tuple[CorpusRecord, ...]:
 
 @pytest.fixture(scope="session")
 def built_corpus() -> tuple[CorpusRecord, ...]:
-    """Return the corpus the builder produces in memory from the default seed.
-
-    For a test that needs records without the committed file -- proving regeneration, or
-    driving a check on records the builder just made.
-
-    Returns:
-        The records built from ``models.DEFAULT_SEED``, sorted by ``id`` ascending.
-    """
+    """Return the corpus the builder produces in memory from the default seed."""
     seed = int(_schema_default("", "seed"))
     return tuple(sorted(build_corpus(seed), key=lambda record: record.id))
 
 
 @pytest.fixture
 def corpus_subset(committed_corpus: tuple[CorpusRecord, ...]) -> tuple[CorpusRecord, ...]:
-    """Return a small, fixed slice of the committed corpus for millisecond-cost unit tests.
-
-    A fixed rule -- the first records in ``id`` order -- never a random sample, because a
-    random one would stop the suite being deterministic (AAP §0.5).
-
-    Args:
-        committed_corpus: The corpus to slice.
-
-    Returns:
-        The first ``_SUBSET_SIZE`` records in ``id`` order.
+    """Return a small, fixed slice of the committed corpus for millisecond-cost unit tests. A
+    fixed rule -- the first records in ``id`` order -- never a random sample, because a random
+    one would stop the suite being deterministic (AAP §0.5).
     """
     return committed_corpus[:_SUBSET_SIZE]
 
 
 @pytest.fixture(scope="session")
 def boundary_corpus(committed_corpus: tuple[CorpusRecord, ...]) -> tuple[CorpusRecord, ...]:
-    """Return the boundary classes of the committed corpus: the 40-record subset.
-
-    The same view success criterion 2 runs at EC levels L, Q and H is invoked with on the
-    command line (``--class 'boundary-*'``), produced through
-    ``qrcheck.corpus.io.filter_by_class`` rather than by a second filter.
-
-    Args:
-        committed_corpus: The corpus to filter.
-
-    Returns:
-        The records whose class matches ``boundary-*``, in ``id`` order.
-    """
+    """Return the boundary classes of the committed corpus: the 40-record subset."""
     return filter_by_class(committed_corpus, ["boundary-*"])
 
 
@@ -1477,28 +1010,10 @@ def make_run_context(
     report_dir: Path,
 ) -> Callable[..., RunContext]:
     """Return a callable building the :class:`~qrcheck.registry.check.RunContext` a check sees.
-
-    Every field a check's ``cases(ctx)`` may read is supplied: the adapter (the port, never
-    a concrete adapter), the resolved configuration that owns every threshold, the filtered
-    corpus, the EC level and the seed, the three dependency-availability facts, and an
-    evidence store rooted in the report directory. The defaults are the fixtures above, so
-    ``make_run_context()`` is a complete context, and each keyword replaces one field.
-
-    Availability defaults to all three dependencies present -- primary decoder, secondary
-    decoder and SVG rasterizer -- because a missing one turns the affected checks into
-    ``skipped`` results, which would hide the assertion a test meant to exercise. A test
-    modelling a degradation passes ``availability={"secondary-decoder": False}``; an absent
-    token reads as unavailable, exactly as the context's own contract states.
-
-    Args:
-        config: The default configuration.
-        corpus_subset: The default corpus.
-        stub_adapter: The default adapter.
-        report_dir: The report root the evidence store writes under.
-
-    Returns:
-        A callable ``build(*, adapter, config, corpus, ec_level, seed, availability,
-        evidence) -> RunContext``.
+    Every field a check's ``cases(ctx)`` may read is supplied: the adapter (the port, never a
+    concrete adapter), the resolved configuration that owns every threshold, the filtered
+    corpus, the EC level and the seed, the three dependency-availability facts, and an evidence
+    store rooted in the report directory.
     """
     default_config = config
     default_corpus = corpus_subset
@@ -1540,15 +1055,7 @@ def make_run_context(
 
 @pytest.fixture
 def run_context(make_run_context: Callable[..., RunContext]) -> RunContext:
-    """Return the default run context, for a test that needs only a usable one.
-
-    Args:
-        make_run_context: The context factory fixture.
-
-    Returns:
-        A :class:`~qrcheck.registry.check.RunContext` over the stub adapter, the default
-        configuration and the corpus subset.
-    """
+    """Return the default run context, for a test that needs only a usable one."""
     return make_run_context()
 
 
@@ -1559,31 +1066,19 @@ def run_context(make_run_context: Callable[..., RunContext]) -> RunContext:
 
 @pytest.fixture(name="make_case_result")
 def _make_case_result_fixture() -> Callable[..., CaseResult]:
-    """Return :func:`make_case_result`, requestable as a fixture.
-
-    Returns:
-        The case-result factory.
-    """
+    """Return :func:`make_case_result`, requestable as a fixture."""
     return make_case_result
 
 
 @pytest.fixture(name="make_run_result")
 def _make_run_result_fixture() -> Callable[..., RunResult]:
-    """Return :func:`make_run_result`, requestable as a fixture.
-
-    Returns:
-        The run-result factory.
-    """
+    """Return :func:`make_run_result`, requestable as a fixture."""
     return make_run_result
 
 
 @pytest.fixture(name="mask_volatile")
 def _mask_volatile_fixture() -> Callable[[RunResult | Mapping[str, Any]], dict[str, Any]]:
-    """Return :func:`mask_volatile`, requestable as a fixture.
-
-    Returns:
-        The comparator that masks exactly the three volatile fields of a run.
-    """
+    """Return :func:`mask_volatile`, requestable as a fixture."""
     return mask_volatile
 
 
@@ -1593,20 +1088,10 @@ def _mask_volatile_fixture() -> Callable[[RunResult | Mapping[str, Any]], dict[s
 
 
 def _cli_group() -> Any:
-    """Return the click object the ``qrcheck`` console script is built from.
-
-    Imported on use rather than at module import, so a test session that never touches the
-    command line does not need the whole CLI chain resolved, and so the import error of an
-    incomplete installation names the module that is missing. ``cli`` is preferred over
-    ``main``: AAP §0.8.1 names the group ``cli`` and the entry point ``main``, and a group is
-    what ``CliRunner`` invokes.
-
-    Returns:
-        The click group.
-
-    Raises:
-        RuntimeError: ``qrcheck.cli.main`` defines neither name, which is a defect in the
-            CLI rather than a test problem.
+    """Return the click object the ``qrcheck`` console script is built from. Imported on use
+    rather than at module import, so a test session that never touches the command line does
+    not need the whole CLI chain resolved, and so the import error of an incomplete
+    installation names the module that is missing.
     """
     module = importlib.import_module("qrcheck.cli.main")
     for attribute in ("cli", "main"):
@@ -1621,15 +1106,11 @@ def _cli_group() -> Any:
 
 @pytest.fixture
 def cli_runner() -> CliRunner:
-    """Return a ``CliRunner`` that keeps the two streams apart.
-
-    ``mix_stderr=False`` so a test can assert on ``result.stderr`` -- several exit-code and
-    selection conditions are reported there and nowhere else (AAP §0.6.6 rows 1, 2, 10) --
-    and so ``result.stdout`` holds only what the command printed on stdout, which is what the
-    JSON-lines contract on an unwritable report directory is asserted against.
-
-    Returns:
-        A fresh runner.
+    """Return a ``CliRunner`` that keeps the two streams apart. ``mix_stderr=False`` so a test can
+    assert on ``result.stderr`` -- several exit-code and selection conditions are reported
+    there and nowhere else (AAP §0.6.6 rows 1, 2, 10) -- and so ``result.stdout`` holds only
+    what the command printed on stdout, which is what the JSON-lines contract on an unwritable
+    report directory is asserted against.
     """
     return CliRunner(mix_stderr=False)
 
@@ -1639,22 +1120,10 @@ def invoke_cli(
     cli_runner: CliRunner,
     toml_config_file: Callable[..., Path],
 ) -> Callable[..., Any]:
-    """Return a callable invoking a ``qrcheck`` subcommand through a real ``--config`` path.
-
-    The configuration is the minimal valid document written under ``tmp_path`` unless the
-    test passes its own, so a CLI test never reads, mutates or depends on the committed
-    ``qrcheck.toml``. Exceptions are **not** caught: the subcommands are supposed to return
-    exit codes, and a click exception escaping is itself a finding, so it reaches the test as
-    a failure rather than being turned into an exit code 1 the test might mistake for the
-    behaviour it was checking. No exit code is asserted here either -- each test asserts the
-    one its case requires.
-
-    Args:
-        cli_runner: The runner the invocation goes through.
-        toml_config_file: The writer that supplies the default ``--config`` path.
-
-    Returns:
-        A callable ``invoke(*args, config=None, env=None, input=None) -> Result``.
+    """Return a callable invoking a ``qrcheck`` subcommand through a real ``--config`` path. The
+    configuration is the minimal valid document written under ``tmp_path`` unless the test
+    passes its own, so a CLI test never reads, mutates or depends on the committed
+    ``qrcheck.toml``.
     """
 
     def invoke(
@@ -1683,20 +1152,7 @@ def invoke_cli(
 
 @pytest.fixture
 def unwritable_report_dir(tmp_path: Path) -> Path:
-    """Return a path a report directory can never be, whatever user the tests run as.
-
-    A **regular file** stands where the directory should be, so creating the directory fails
-    for root as well: ``chmod 0o500`` proves nothing in a container that runs as root, while
-    ``mkdir`` over an existing file raises ``FileExistsError`` (an ``OSError``) for every
-    user. That is the condition AAP §0.6.6 row 10 requires exit code 3 for, with every line
-    the command writes on stdout still parsing as a JSON object.
-
-    Args:
-        tmp_path: The per-test temporary directory.
-
-    Returns:
-        The path of the existing regular file to use as ``report_dir``.
-    """
+    """Return a path a report directory can never be, whatever user the tests run as."""
     path = tmp_path / "report-dir-is-a-regular-file"
     path.write_text("this path is a file, not a directory\n", encoding="utf-8")
     return path

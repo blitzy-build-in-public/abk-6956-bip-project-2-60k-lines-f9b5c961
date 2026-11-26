@@ -1,136 +1,58 @@
 """The render family: the five ``RN-*`` checks and the product's one SVG rasterizer.
 
-Plan items served: AAP §0.8.1's component-to-check-family row (``checks/render.py`` ->
-``RN-QUIET-ZONE``, ``RN-MODULE-SIZE``, ``RN-CONTRAST``, ``RN-SVG``, ``RN-LOGO``),
-§0.3.4's ``[render] svg_rasterizer`` contract and §0.7.2's discovery order, §0.8.1's
-``doctor`` rasterizer status, §0.4.5's evidence for the ``missing_quiet_zone`` defect,
-and §0.4.2's cascade containment for the logo overlay.
+Owns the product's only SVG-rasterizer discovery (:func:`discover_svg_rasterizer`,
+:data:`SVG_RASTERIZER_AUTO_ORDER`) and its only rasterization (:func:`rasterize_svg`), so
+the tool ``qrcheck doctor`` prints is the tool ``RN-SVG`` uses; owns the five
+self-registering ``RN-*`` checks with the capability requirements of the resolution table;
+owns the two geometry measurements that need no decoder (:func:`measure_module_px`,
+:func:`measure_quiet_zone`), which deliberately do not borrow :mod:`qrcheck.decode.matrix`
+because a quiet-zone or module-size defect must be visible even when no decoder can read
+the symbol at all; and owns :data:`EXPECTED_ENCODES`, the declared adapter-invocation
+counts that make a retry detectable as the declared count plus one.
 
-No project rules exist for this product: the review-rules source returns no user rules
-and AAP §0.12 records the same, so the binding constraints are the AAP's own MUST/MUST
-NOT list, honoured here as if they were rules.  Two of them shape this file directly:
+Fixed case matrix for one full run at the run's error level: ``RN-QUIET-ZONE`` and
+``RN-MODULE-SIZE`` take the first 12 corpus records (12 encodes, 0 decodes each),
+``RN-CONTRAST`` 6 palettes x 2 polarities (12 encodes, 12 decodes), ``RN-SVG`` the first 12
+corpus records (12 encodes, 12 decodes, counted on the rasterized PNG), ``RN-LOGO`` 3
+overlay sizes x EC H and L (6 encodes, 6 decodes) -- 54 cases in total.
 
-* every threshold is the value ``qrcheck.toml`` declares, read from the resolved
-  configuration of the run -- the contrast floor from the target's own
-  ``contrast_floor``, the overlay ceiling and the occlusion margin from
-  ``[checks.damage]``.  This module carries no threshold literal, so relaxing one would
-  have to change a declared default and the criterion that reads it; and
-* no check is weakened, skipped, retried or relaxed for the ``defective`` target.  The
-  two geometry checks fail there because the target really does draw a one-module quiet
-  zone, and the other three pass because the defects that target injects are not
-  rendering defects -- that contrast is the evidence the suite is not vacuous.
+Restates nothing another module owns: every ratio is
+:func:`qrcheck.decode.consensus.contrast_ratio` and the inverted-palette predicate
+:func:`qrcheck.decode.consensus.is_inverted_request`; the evidence layout, the recovery
+budget and seed derivation stay in :mod:`qrcheck.checks.support` and
+:mod:`qrcheck.config.seeding`; every pixel crosses the single image boundary in
+:mod:`qrcheck.evidence.mux` with no concrete adapter import and no ``PIL`` import
+(``tests/unit/test_layering.py`` holds both); and request validation is the port's
+``build_request`` through :func:`qrcheck.checks.support.build`.  No threshold is a literal
+here -- the contrast floor comes from the target's ``contrast_floor``, the overlay ceiling
+and the occlusion margin from ``[checks.damage]`` -- and no check is weakened, skipped,
+retried or relaxed for the ``defective`` target.
 
-What this module owns
----------------------
-* The **only** SVG-rasterizer discovery in the product
-  (:func:`discover_svg_rasterizer`, :data:`SVG_RASTERIZER_AUTO_ORDER`) and the only
-  place an SVG is rasterized (:func:`rasterize_svg`).  ``qrcheck doctor``, the runner's
-  availability mapping and ``RN-SVG`` all read that one implementation, so the toolname
-  ``doctor`` prints is the toolname the check uses.
-* The five render checks, each self-registering through
-  :func:`qrcheck.registry.check.check`, each with the capability requirements of the
-  AAP's resolution table.
-* Two geometry measurements that need **no decoder** (:func:`measure_module_px`,
-  :func:`measure_quiet_zone`), so ``RN-QUIET-ZONE`` and ``RN-MODULE-SIZE`` reach a
-  verdict from the image alone.  They deliberately do not borrow
-  :mod:`qrcheck.decode.matrix`, whose sampler starts from a decoder's corner
-  quadrangle: a quiet-zone or module-size defect must be visible even when no decoder
-  can read the symbol at all.
-* :data:`EXPECTED_ENCODES`, the per-check adapter-invocation counts AAP §0.4.3
-  requires, which is what makes a retry detectable as the declared count plus one.
+Reason codes emitted: ``sampling_failed`` when the module geometry cannot be established at
+all (no dark bounding box, no measurable finder run, no implied module count);
+``value_mismatch`` when a measurement contradicts the request; ``missing_dependency`` when
+no rasterizer was discovered, which skips every ``RN-SVG`` case with the attempted discovery
+order and never counts as a pass; and ``target_rejected``, ``contract_error`` and
+``unsupported_capability`` as :func:`qrcheck.checks.support.case_status_for_error`
+translates them.  ``TargetUnavailable`` and ``TargetTimeout`` are never converted here: they
+propagate so the runner can apply its one-error-result-per-check target-loss policy.
 
-The fixed case matrix (AAP §0.8.1), for one full run at the run's error level:
+Determinism: nothing reads a wall clock for an assertion (``time.perf_counter`` only fills
+``duration_ms``), nothing reads ``hash()`` or ``id()``, every iteration is over a sorted
+sequence or a declared tuple, and the overlay bitmap's only random source is
+:func:`qrcheck.config.seeding.derive_seed` into ``numpy``'s ``PCG64``, so any case is
+re-derivable from ``(run seed, check id, case id)``.
 
-======================  ==========================  =======  =======  =======
-check                   case source                 cases    encodes  decodes
-======================  ==========================  =======  =======  =======
-``RN-QUIET-ZONE``       first 12 corpus records     12       12       0
-``RN-MODULE-SIZE``      first 12 corpus records     12       12       0
-``RN-CONTRAST``         6 palettes x 2 polarities   12       12       12
-``RN-SVG``              first 12 corpus records     12       12       12
-``RN-LOGO``             3 overlay sizes x EC H and L  6       6        6
-======================  ==========================  =======  =======  =======
-
-Fifty-four cases in total, and the decodes are counted on the rasterized PNG for
-``RN-SVG`` because a vector artefact has to be rasterized before anything can read it.
-
-What it must never own, and therefore never restates
-----------------------------------------------------
-* No second WCAG implementation: every ratio here comes from
-  :func:`qrcheck.decode.consensus.contrast_ratio`, and the inverted-palette predicate
-  from :func:`qrcheck.decode.consensus.is_inverted_request`.  A second luminance
-  function would let the number a report records and the number a target is refused for
-  drift apart.
-* No second rasterizer discovery, no second gradient/geometry sampler, no second
-  evidence layout (that is :func:`qrcheck.checks.support.record_evidence`), no second
-  recovery budget (:func:`qrcheck.checks.support.recovery_fraction`), and no second
-  seed derivation (:func:`qrcheck.config.seeding.derive_seed`).
-* No concrete adapter import and no ``PIL`` import: every pixel crosses the single image
-  boundary in :mod:`qrcheck.evidence.mux`, and the target is only ever the port's
-  :class:`~qrcheck.targets.base.Adapter`.  ``tests/unit/test_layering.py`` holds both
-  rules mechanically.
-* No request validation: the port's ``build_request`` (through
-  :func:`qrcheck.checks.support.build`) is the only gate, so an ordinary case cannot
-  send something a conforming target would refuse.
-
-Reason codes this module emits
-------------------------------
-``sampling_failed``
-    the image's module geometry could not be established at all (no dark bounding box,
-    no measurable finder run, no implied module count), so the case reports that instead
-    of a verdict built on a guess;
-``value_mismatch``
-    a measurement contradicts the request -- a short quiet zone, a module edge outside
-    the tolerance, a palette the target did not render, a contrast ratio below the
-    declared floor, a payload the symbol does not carry, or an SVG canvas whose module
-    pitch cannot carry the module count the symbol implies;
-``missing_dependency``
-    no SVG rasterizer was discovered, so ``RN-SVG`` could not rasterize anything and
-    every one of its cases is skipped with the discovery order that was attempted --
-    counted separately and never a pass;
-``target_rejected``, ``contract_error``, ``unsupported_capability``
-    translated by :func:`qrcheck.checks.support.case_status_for_error`, which owns that
-    table.  ``TargetUnavailable`` and ``TargetTimeout`` are never converted here: they
-    propagate so the runner can apply its one-error-result-per-check target-loss policy.
-
-Determinism
------------
-Nothing here reads a wall clock for an assertion (``time.perf_counter`` only fills the
-recorded ``duration_ms``), nothing reads ``hash()`` or ``id()``, and every iteration is
-over a sorted sequence or a declared tuple.  The logo bitmap's only random source is
-:func:`qrcheck.config.seeding.derive_seed` feeding ``numpy``'s ``PCG64``, and the
-damaged-by-design overlay's area and the measured quiet zone are recorded in the
-evidence so any case can be re-derived from ``(run seed, check id, case id)``.
-
-The single temporary file this module writes is the logo bitmap, created with the
-product-wide ``qrcheck-`` prefix that ``CL-ARTIFACTS`` scans for and removed in a
-``finally`` block, so the run leaves nothing behind even when the target refuses the
-request.
-
-Decisions this file had to take, and why
-----------------------------------------
-Each is a place where the plan's prose and the plan's rejection of false failures meet,
-so it is stated here rather than left to be re-derived from the code.
-
-* ``RN-SVG`` requests a **zero-module** quiet zone.  The assertion the plan fixes is that
-  the canvas carries the module count at one pitch, which is decidable only when the
-  canvas is the symbol and not the symbol plus a margin; and a vector artefact that
-  renders a short margin is ``RN-QUIET-ZONE``'s finding, not this check's, so the
-  ``defective`` target must not be able to fail both.
-* ``RN-SVG`` **records** the payload the rasterized symbol decodes to instead of asserting
-  it.  A vector artefact that rasterizes to a decodable symbol has honoured the rendering
-  contract; payload fidelity is ``RT-ROUNDTRIP``'s assertion, and the ``defective``
-  target's injected truncation already fails there.
-* ``RN-MODULE-SIZE`` asserts the dimension contract as a **legal-module-count** test: the
-  canvas, counted in module pitches, must be a Model 2 module count plus the requested
-  quiet zone on both sides.  It needs no decoder and no version pin, and it is the second
-  arithmetic route by which a short quiet zone breaks ``(modules + 2 * quiet_zone) *
-  module_size``.
-* ``RN-LOGO`` sizes its overlay from the **smallest legal** symbol and measures the covered
-  fraction against the symbol's own module area.  Sizing from an estimate of the symbol the
-  target will choose could push a case past the error-correction budget and fail a
-  conforming target; measuring against the whole image would let a target that renders a
-  short margin inflate the damage the case believes it is testing.
+Decisions this file had to take: ``RN-SVG`` requests a zero-module quiet zone, because its
+assertion is the canvas module count at one pitch and a short margin is ``RN-QUIET-ZONE``'s
+finding, so the ``defective`` target cannot fail both; ``RN-SVG`` records the payload the
+rasterized symbol decodes to instead of asserting it, since payload fidelity is
+``RT-ROUNDTRIP``'s assertion; ``RN-MODULE-SIZE`` asserts a legal-module-count dimension
+contract needing no decoder and no version pin; and ``RN-LOGO`` sizes its overlay from the
+smallest legal symbol and measures the covered fraction against the symbol's own module
+area.  The one temporary file this module writes is the logo bitmap, named with the
+product-wide ``qrcheck-`` prefix that ``CL-ARTIFACTS`` scans for and removed in a ``finally``
+block, so a run leaves nothing behind even when the target refuses the request.
 """
 
 from __future__ import annotations
@@ -393,27 +315,22 @@ EXPECTED_ENCODES: Final[Mapping[str, int]] = MappingProxyType(
 )
 
 
-# ---------------------------------------------------------------------------
 # The single SVG-rasterizer discovery
-# ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True, slots=True)
 class RasterizerStatus:
     """What the ``[render] svg_rasterizer`` setting resolved to on this host.
 
-    One record is built per run and read by ``qrcheck doctor`` (which prints it), by the
-    runner (which maps :attr:`available` onto the
-    :data:`~qrcheck.registry.check.DEPENDENCY_SVG_RASTERIZER` token
-    ``qrcheck.registry.resolve`` consumes) and by ``RN-SVG`` (which uses :attr:`name` to
-    rasterize, or skips with :attr:`attempted` when there is nothing to use).
-
-    ``configured`` echoes the configured value verbatim, so a report distinguishes "the
-    run asked for ``cairosvg`` and it was absent" from "the run asked for ``auto`` and
-    found ``rsvg-convert``" without a second field for the same fact.
-    ``attempted`` is the discovery order actually probed, in order: for an explicit
-    name it holds that one entry, for ``auto`` every name tried up to and including the
-    one that answered, and for ``none`` it is empty because nothing was probed.
+    One record is built per run and read by ``qrcheck doctor`` (which prints it), by the runner
+    (which maps :attr:`available` onto the
+    :data:`~qrcheck.registry.check.DEPENDENCY_SVG_RASTERIZER` token ``qrcheck.registry.resolve``
+    consumes) and by ``RN-SVG`` (which rasterizes with :attr:`name`, or skips with
+    :attr:`attempted` when there is nothing to use).  ``configured`` echoes the configured value
+    verbatim, so a report distinguishes "the run asked for ``cairosvg`` and it was absent" from
+    "the run asked for ``auto`` and found ``rsvg-convert``"; ``attempted`` is the discovery order
+    actually probed -- one entry for an explicit name, every name tried up to and including the
+    one that answered for ``auto``, and empty for ``none``, which probes nothing.
     """
 
     configured: str
@@ -438,22 +355,15 @@ class RasterizerStatus:
 def _configured_rasterizer(value: RenderConfig | str) -> str:
     """Return the configured rasterizer name from what a caller handed us.
 
-    The ``[render]`` record is the documented argument, and the string form is accepted
-    because a caller that already holds the name (a test, a CLI override) has no reason
-    to build a record for it.  Both spellings resolve to the same value, so the two call
-    sites that need discovery cannot disagree about which object to pass -- and neither
-    of them needs a second discovery implementation to accept the other's argument.
-
-    Args:
-        value: The resolved ``[render]`` record, or the configured name itself.
-
-    Returns:
-        The configured value, one of :data:`qrcheck.config.models.SVG_RASTERIZERS`.
+    The ``[render]`` record is the documented argument, and the string form is accepted because a
+    caller that already holds the name (a test, a CLI override) has no reason to build a record
+    for it; both spellings resolve to the same value, so the two discovery call sites cannot
+    disagree about which object to pass.
 
     Raises:
-        ValueError: The value is not one of the declared rasterizers.  The configuration
-            schema already rejects that at load time, so a value reaching here has been
-            past the gate and can only mean a caller constructed one by hand.
+        ValueError: The value is not one of the declared rasterizers.  The configuration schema
+            already rejects that at load time, so a value reaching here can only have been
+            constructed by hand.
     """
     name = value if isinstance(value, str) else value.svg_rasterizer
     if name not in SVG_RASTERIZERS:
@@ -466,17 +376,10 @@ def _configured_rasterizer(value: RenderConfig | str) -> str:
 def _probe_rasterizer(name: str) -> bool:
     """Report whether the rasterizer `name` can actually be used on this host.
 
-    ``cairosvg`` is probed as an importable module and every other name as an executable
-    on ``PATH``.  Neither probe imports or runs anything: ``find_spec`` locates a
-    module's loader without executing the module, and ``shutil.which`` stats the
-    directories on ``PATH``, so discovery never pays the cost of a native binding and
-    never runs a third-party binary merely to find out whether it exists.
-
-    Args:
-        name: One of :data:`SVG_RASTERIZER_AUTO_ORDER`.
-
-    Returns:
-        ``True`` only when the rasterizer was found.
+    ``cairosvg`` is probed as an importable module and every other name as an executable on
+    ``PATH``.  Neither probe imports or runs anything: ``find_spec`` locates a module's loader
+    without executing the module and ``shutil.which`` stats the ``PATH`` directories, so
+    discovery never runs a third-party binary merely to find out whether it exists.
     """
     if name == "cairosvg":
         try:
@@ -492,23 +395,15 @@ def _probe_rasterizer(name: str) -> bool:
 def discover_svg_rasterizer(value: RenderConfig | str) -> RasterizerStatus:
     """Resolve the configured SVG rasterizer against what this host provides.
 
-    The product's only discovery implementation (AAP §0.3.4, §0.7.2).  ``doctor`` and
-    ``RN-SVG`` both call it, so the tool the run reports and the tool the check uses are
-    one value, and a host with no rasterizer degrades ``RN-SVG`` to
-    ``skipped``/``missing_dependency`` instead of failing it.
-
-    An explicit value is honoured exactly -- no fallback follows a name the run asked
-    for, because a silent substitution would make ``doctor`` report a tool the
+    The product's only discovery implementation (AAP §0.3.4, §0.7.2), read by both ``doctor``
+    and ``RN-SVG``, so the tool the run reports and the tool the check uses are one value, and a
+    host with no rasterizer degrades ``RN-SVG`` to ``skipped``/``missing_dependency`` instead of
+    failing it.  An explicit value is honoured exactly -- no fallback follows a name the run
+    asked for, because a silent substitution would make ``doctor`` report a tool the
     configuration never named -- with ``none`` reporting ``available=False`` and probing
-    nothing.  ``auto`` probes :data:`SVG_RASTERIZER_AUTO_ORDER` in order and stops at the
-    first hit.
-
-    Args:
-        value: The resolved ``[render]`` record, or the configured name itself.
-
-    Returns:
-        The status, carrying the configured value, the resolved name (``None`` when
-        nothing was found), whether it is usable, and the order that was probed.
+    nothing; ``auto`` probes :data:`SVG_RASTERIZER_AUTO_ORDER` in order and stops at the first
+    hit.  The status carries the configured value, the resolved name (``None`` when nothing was
+    found), whether it is usable, and the order that was probed.
 
     Raises:
         ValueError: The configured value is not one of
@@ -546,15 +441,9 @@ def discover_svg_rasterizer(value: RenderConfig | str) -> RasterizerStatus:
 def svg_rasterizer_available(value: RenderConfig | str) -> bool:
     """Report whether an SVG rasterizer is usable for this run.
 
-    The predicate form of :func:`discover_svg_rasterizer`, for a caller that fills the
-    runner's availability mapping and needs nothing else from the status.  It is a
-    projection of the same discovery, never a second one.
-
-    Args:
-        value: The resolved ``[render]`` record, or the configured name itself.
-
-    Returns:
-        ``True`` only when a rasterizer was discovered.
+    The predicate form of :func:`discover_svg_rasterizer`, for a caller that fills the runner's
+    availability mapping and needs nothing else from the status: a projection of the same
+    discovery, never a second one.
     """
     return discover_svg_rasterizer(value).available
 
@@ -570,20 +459,15 @@ svg_rasterizer_status = discover_svg_rasterizer
 def _rasterizer_command(name: str) -> tuple[str, ...]:
     """Return the argv that rasterizes SVG on stdin to PNG on stdout for `name`.
 
-    Every entry is an argument list, never a shell string: the adapter boundary of this
-    product is argv-only with ``shell=False`` (AAP §0.3.2's security architecture), and a
-    rasterizer is third-party code reading an untrusted artefact, so the rule holds here
-    too.  ``-`` is each tool's own spelling for stdin, and none of these writes a file.
-
-    Args:
-        name: A discovered command-line rasterizer.
-
-    Returns:
-        The argv, with no shell metacharacters and no user-controlled text in it.
+    Every entry is an argument list, never a shell string: this product's subprocesses are
+    argv-only with ``shell=False`` (AAP §0.3.2), and a rasterizer is third-party code reading an
+    untrusted artefact, so the rule holds here too.  ``-`` is each tool's own spelling for stdin
+    and none of these writes a file, so the argv carries no shell metacharacter and no
+    user-controlled text.
 
     Raises:
-        ValueError: `name` is not one of the declared command-line rasterizers, which
-            means the status was built without this module's discovery.
+        ValueError: `name` is not one of the declared command-line rasterizers, which means the
+            status was built without this module's discovery.
     """
     if name == "rsvg-convert":
         return (name, "--format=png", "-")
@@ -602,30 +486,18 @@ def _rasterizer_command(name: str) -> tuple[str, ...]:
 def rasterize_svg(svg_bytes: bytes, status: RasterizerStatus) -> bytes:
     """Rasterize an SVG artefact to PNG bytes with the discovered rasterizer.
 
-    A vector artefact has to become pixels before anything can decode it, and this is the
-    only place in the product that does it.  ``cairosvg`` is driven through its module
-    when the discovery found one; every other rasterizer is an argv-only subprocess
-    reading the SVG on stdin and writing the PNG to stdout, with
-    :data:`RASTERIZER_TIMEOUT_S` as the backstop.
-
-    Nothing is written to disk, nothing is imported at module scope, and no configuration
-    threshold applies: a rasterizer failure is not a verdict about the target, so it is
-    raised as a plain :class:`RuntimeError` naming the command, its exit status and its
-    captured stderr, and the runner records it as an ``error`` result with the traceback
-    rather than letting a reader guess what went wrong.
-
-    Args:
-        svg_bytes: The artefact exactly as the target returned it.
-        status: The discovery result the check resolved for this run.
-
-    Returns:
-        The PNG bytes the rasterizer produced, non-empty.
+    The product's only rasterization: ``cairosvg`` is driven through its module when discovery
+    found one, and every other rasterizer is an argv-only subprocess reading the SVG on stdin
+    and writing the PNG to stdout, with :data:`RASTERIZER_TIMEOUT_S` as the backstop.  Nothing
+    is written to disk and nothing is imported at module scope.
 
     Raises:
-        RuntimeError: No rasterizer is available, the configured one emitted nothing, or
-            it exited non-zero, timed out, or could not be executed.
-        ValueError: ``svg_bytes`` is not bytes-like, or `status` names a rasterizer this
-            module cannot drive.
+        RuntimeError: No rasterizer is available, the configured one emitted nothing, exited
+            non-zero, timed out or could not be executed; the message names the command, its
+            exit status and its captured stderr, and the runner records it as an ``error``
+            result with the traceback rather than a verdict about the target.
+        ValueError: ``svg_bytes`` is not bytes-like, or `status` names a rasterizer this module
+            cannot drive.
     """
     if not isinstance(svg_bytes, (bytes, bytearray, memoryview)):
         raise ValueError(f"svg_bytes must be bytes; got {type(svg_bytes).__name__}")
@@ -683,20 +555,12 @@ def rasterize_svg(svg_bytes: bytes, status: RasterizerStatus) -> bytes:
 def _rasterize_with_cairosvg(svg_bytes: bytes) -> bytes:
     """Rasterize `svg_bytes` through an importable ``cairosvg`` module.
 
-    ``cairosvg`` is never a dependency of this product: it is discovered at run time from
-    the host's own environment, so the import happens here, on the one path that needs
-    it, and a module that cannot deliver is reported in the same
-    :class:`RuntimeError` vocabulary as a failing binary.
-
-    Args:
-        svg_bytes: The artefact to rasterize.
-
-    Returns:
-        The PNG bytes.
+    ``cairosvg`` is never a dependency of this product: it is discovered at run time from the
+    host's own environment, so the import happens here, on the one path that needs it.
 
     Raises:
-        RuntimeError: The module cannot be imported, refused the artefact, or produced
-            nothing.
+        RuntimeError: The module cannot be imported, refused the artefact, or produced nothing --
+            the same vocabulary a failing binary is reported in.
     """
     try:
         module = importlib.import_module("cairosvg")
@@ -718,34 +582,22 @@ def _rasterize_with_cairosvg(svg_bytes: bytes) -> bytes:
     return bytes(rasterized)
 
 
-# ---------------------------------------------------------------------------
 # Pixels, through the one image boundary
-# ---------------------------------------------------------------------------
 
 
 def _grey_levels(image_bytes: bytes) -> numpy.ndarray:
     """Return the artefact as an ``H x W`` ``uint8`` grey array.
 
-    The reduction is Pillow's own ``convert("L")`` -- the ITU-R BT.601 weighting the
-    decoder path also reads -- so this module states no luminance formula of its own;
-    :func:`qrcheck.decode.consensus.contrast_ratio` remains the product's only WCAG
-    implementation, and it is used for the ratio, not for thresholding pixels.
-
-    A fully transparent pixel is replaced by the light level, because a transparent
-    background shows the page rather than the black its colour bands happen to store.
-    Only fully transparent pixels are replaced: a half-transparent edge pixel is a real
+    The reduction is Pillow's own ``convert("L")`` -- the ITU-R BT.601 weighting the decoder path
+    also reads -- so this module states no luminance formula of its own.  A fully transparent
+    pixel is replaced by the light level, because a transparent background shows the page rather
+    than the black its colour bands happen to store; a half-transparent edge pixel is a real
     blend of module and background and is left as measured.
 
-    Args:
-        image_bytes: The artefact exactly as the target returned it.
-
-    Returns:
-        The pixel array, a private copy the caller may read freely.
-
     Raises:
-        UnidentifiedImageError: Pillow cannot recognise the bytes.  The adapters convert
-            that into ``TargetContractError`` before a check sees them, so a raise here
-            means a framework artefact rather than a target's.
+        UnidentifiedImageError: Pillow cannot recognise the bytes.  The adapters convert that
+            into ``TargetContractError`` before a check sees them, so a raise here means a
+            framework artefact rather than a target's.
     """
     image = decode_image(image_bytes)
     try:
@@ -759,16 +611,10 @@ def _grey_levels(image_bytes: bytes) -> numpy.ndarray:
 
 
 def _rgb_pixels(image_bytes: bytes) -> numpy.ndarray:
-    """Return the artefact as an ``H x W x 3`` ``uint8`` array, transparency as page.
+    """Return the artefact as an ``H x W x 3`` ``uint8`` array, transparency read as the page.
 
-    The colour counterpart of :func:`_grey_levels`, with the same transparency rule, and
-    the array the palette measurement and the overlay-visibility measurement read.
-
-    Args:
-        image_bytes: The artefact exactly as the target returned it.
-
-    Returns:
-        The pixel array, a private copy.
+    The colour counterpart of :func:`_grey_levels`, with the same transparency rule, and the
+    array the palette measurement and the overlay-visibility measurement read.
 
     Raises:
         UnidentifiedImageError: Pillow cannot recognise the bytes.
@@ -787,18 +633,11 @@ def _rgb_pixels(image_bytes: bytes) -> numpy.ndarray:
 def _dark_mask(levels: numpy.ndarray) -> numpy.ndarray | None:
     """Return the boolean dark-module mask of `levels`, or ``None`` when there is none.
 
-    The threshold is the midpoint of the artefact's own darkest and lightest grey level,
-    which needs no contrast assumption and is stable for any palette: a black-on-white
-    symbol and a navy-on-cream one are separated at their own midpoint.  An artefact
-    whose darkest and lightest pixels differ by less than
-    :data:`_MIN_GEOMETRY_SPREAD` grey levels has no such threshold, so the geometry is
-    reported as unestablished rather than measured from noise.
-
-    Args:
-        levels: The grey array :func:`_grey_levels` returned.
-
-    Returns:
-        The mask, ``True`` for a dark pixel, or ``None``.
+    The threshold is the midpoint of the artefact's own darkest and lightest grey level, which
+    needs no contrast assumption and is stable for any palette: a black-on-white symbol and a
+    navy-on-cream one are separated at their own midpoint.  An artefact whose darkest and
+    lightest pixels differ by less than :data:`_MIN_GEOMETRY_SPREAD` grey levels has no such
+    threshold, so the geometry is reported as unestablished rather than measured from noise.
     """
     darkest = float(levels.min())
     lightest = float(levels.max())
@@ -831,18 +670,10 @@ def _leading_dark_run(line: numpy.ndarray, start: int) -> int:
 def _finder_runs(line: numpy.ndarray, start: int, count: int) -> tuple[int, ...]:
     """Return up to `count` run lengths of alternating values, beginning at `start`.
 
-    A "run" is a maximal span of equal values, and the alternation is implied by the QR
-    finder pattern itself: its middle row and middle column read dark, light, dark, light,
-    dark.  A line whose first value at `start` is light yields no runs, because a finder
-    pattern begins at its outer ring.
-
-    Args:
-        line: One row or column of the dark mask.
-        start: The index to begin reading at.
-        count: How many runs to collect.
-
-    Returns:
-        The run lengths in order, fewer than `count` when the line ends first.
+    A "run" is a maximal span of equal values, and the alternation is implied by the QR finder
+    pattern itself: its middle row and middle column read dark, light, dark, light, dark.  A line
+    whose first value at `start` is light yields no runs, because a finder pattern begins at its
+    outer ring, and fewer than `count` runs come back when the line ends first.
     """
     if start < 0 or start >= line.shape[0] or not line[start]:
         return ()
@@ -864,20 +695,12 @@ def _finder_runs(line: numpy.ndarray, start: int, count: int) -> tuple[int, ...]
 def _finder_pitch(line: numpy.ndarray, start: int) -> float | None:
     """Return the module pitch measured across one finder pattern, or ``None``.
 
-    ISO/IEC 18004 §7.3.3 again, and this time the whole signature: across a finder
-    pattern's middle row (or column) the five runs are 1, 1, 3, 1 and 1 modules wide, so
-    their total is exactly seven modules and each run confirms the pitch it implies.  That
-    confirmation is what stops a measurement being taken from something that merely looks
-    dark -- noise, a text block, a partially rendered symbol -- because a run half a module
-    away from its expected width means this is not a finder pattern at all, and the honest
-    answer is then ``None`` rather than a plausible-looking number.
-
-    Args:
-        line: One row or column of the dark mask, entering the finder at `start`.
-        start: The index of the finder's outer ring on that line.
-
-    Returns:
-        The module edge in pixels, or ``None`` when the signature does not hold.
+    ISO/IEC 18004 §7.3.3: across a finder pattern's middle row or column the five runs are 1, 1,
+    3, 1 and 1 modules wide, so their total is exactly seven modules and each run confirms the
+    pitch it implies.  That confirmation is what stops a measurement being taken from something
+    that merely looks dark -- noise, a text block, a partially rendered symbol -- because a run
+    half a module away from its expected width means this is not a finder pattern at all, and the
+    honest answer is then ``None`` rather than a plausible-looking number.
     """
     runs = _finder_runs(line, start, len(_FINDER_SIGNATURE))
     if len(runs) != len(_FINDER_SIGNATURE):
@@ -894,24 +717,15 @@ def _finder_pitch(line: numpy.ndarray, start: int) -> float | None:
 def _module_pitch(dark: numpy.ndarray) -> float | None:
     """Return the module edge in pixels measured from the top-left finder pattern.
 
-    ISO/IEC 18004 §7.3.3: a finder pattern is a 7x7 module square -- a dark outer ring, a
-    light ring and a 3x3 dark core -- so the dark run along its top edge and down its
-    left edge is exactly seven modules wide.  The top-left finder sits at the corner of
-    the dark bounding box, which is why the search starts at the first dark row and
-    column: no decoder, no corner quadrangle and no version assumption is needed, and the
-    measurement therefore still works on a symbol nothing can decode.
-
-    The top edge gives a rough pitch, which locates the finder's middle row and middle
-    column; the pitch that is returned is measured across those, where the full 1:1:3:1:1
-    signature can be confirmed (:func:`_finder_pitch`).  Both axes are measured and
-    averaged, because a render that is off by a pixel in one axis should not shift the
-    other.
-
-    Args:
-        dark: The dark mask of the artefact.
-
-    Returns:
-        The module edge in pixels, or ``None`` when no finder run could be measured.
+    ISO/IEC 18004 §7.3.3: a finder pattern is a 7x7 module square -- a dark outer ring, a light
+    ring and a 3x3 dark core -- so the dark run along its top edge and down its left edge is
+    exactly seven modules wide.  The top-left finder sits at the corner of the dark bounding box,
+    which is why the search starts at the first dark row and column: no decoder, no corner
+    quadrangle and no version assumption is needed, so the measurement still works on a symbol
+    nothing can decode.  The top edge gives a rough pitch that locates the finder's middle row
+    and middle column, and the returned pitch is measured across those, where the full 1:1:3:1:1
+    signature can be confirmed (:func:`_finder_pitch`); both axes are measured and averaged, so a
+    render that is off by a pixel in one axis does not shift the other.
     """
     rows = numpy.flatnonzero(dark.any(axis=1))
     columns = numpy.flatnonzero(dark.any(axis=0))
@@ -944,22 +758,15 @@ def _module_pitch(dark: numpy.ndarray) -> float | None:
 def _quiet_zone_from(dark: numpy.ndarray, module_px: float) -> dict[str, float]:
     """Return the all-light margin on each side of the dark bounding box, in modules.
 
-    The dark bounding box is the rectangle the modules occupy, so the rows above its
-    first dark row, the rows below its last one and the columns beside its left and right
-    edges are the quiet zone as rendered.  A bottom or right margin is a lower bound on
-    the zone the target drew -- the last module row may itself end in light modules --
-    which is the safe direction for an assertion of *at least* the requested zone.
-
-    Args:
-        dark: The dark mask of the artefact.
-        module_px: The module edge in pixels, from :func:`_module_pitch`.
-
-    Returns:
-        ``{"top", "right", "bottom", "left"}`` in modules.
+    The dark bounding box is the rectangle the modules occupy, so the rows above its first dark
+    row, the rows below its last one and the columns beside its left and right edges are the
+    quiet zone as rendered.  A bottom or right margin is a lower bound on the zone the target
+    drew -- the last module row may itself end in light modules -- which is the safe direction
+    for an assertion of *at least* the requested zone.
 
     Raises:
-        ValueError: `module_px` is not positive, or the artefact holds no dark pixel at
-            all so there is no bounding box to measure against.
+        ValueError: `module_px` is not positive, or the artefact holds no dark pixel at all so
+            there is no bounding box to measure against.
     """
     if not module_px > 0:
         raise ValueError(f"module_px must be positive; got {module_px!r}")
@@ -979,17 +786,10 @@ def _quiet_zone_from(dark: numpy.ndarray, module_px: float) -> dict[str, float]:
 def measure_module_px(image_bytes: bytes) -> float | None:
     """Return the artefact's module edge in pixels, or ``None`` if it cannot be measured.
 
-    The public form of :func:`_module_pitch` for one measurement, so a caller that only
-    needs the pitch -- or a test asserting the measurement itself -- does not reach into
-    a private helper.  ``None`` is the honest answer when the geometry cannot be
-    established, and the checks report ``sampling_failed`` for it rather than a verdict
-    built on a guess.
-
-    Args:
-        image_bytes: The artefact exactly as the target returned it.
-
-    Returns:
-        The module edge in pixels, or ``None``.
+    The public form of :func:`_module_pitch`, so a caller that only needs the pitch -- or a test
+    asserting the measurement itself -- reaches no private helper.  ``None`` is the honest answer
+    when the geometry cannot be established, and the checks report ``sampling_failed`` for it
+    rather than a verdict built on a guess.
     """
     dark = _dark_mask(_grey_levels(image_bytes))
     return None if dark is None else _module_pitch(dark)
@@ -1000,16 +800,9 @@ def measure_quiet_zone(image_bytes: bytes, module_px: float) -> dict[str, float]
 
     The public form of :func:`_quiet_zone_from` for one measurement.
 
-    Args:
-        image_bytes: The artefact exactly as the target returned it.
-        module_px: The module edge in pixels to divide the margins by.
-
-    Returns:
-        ``{"top", "right", "bottom", "left"}`` in modules.
-
     Raises:
-        ValueError: `module_px` is not positive, the artefact has no measurable geometry,
-            or it holds no dark pixel at all.
+        ValueError: `module_px` is not positive, the artefact has no measurable geometry, or it
+            holds no dark pixel at all.
     """
     dark = _dark_mask(_grey_levels(image_bytes))
     if dark is None:
@@ -1020,17 +813,12 @@ def measure_quiet_zone(image_bytes: bytes, module_px: float) -> dict[str, float]
 def _measure_colours(image_bytes: bytes) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
     """Return the artefact's darkest and lightest rendered colours.
 
-    The two module colours as the image actually carries them: every pixel sharing the
-    minimum channel sum is averaged for the dark reading and every pixel sharing the
-    maximum for the light one, so a single antialiased outlier cannot move either value.
-    The channel sum orders the pixels; it is a clustering key, never a luminance, and the
-    ratio itself is :func:`qrcheck.decode.consensus.contrast_ratio`'s.
-
-    Args:
-        image_bytes: The artefact exactly as the target returned it.
-
-    Returns:
-        ``(dark, light)`` as ``0-255`` triples, equal when the image is one flat colour.
+    The two module colours as the image actually carries them: every pixel sharing the minimum
+    channel sum is averaged for the dark reading and every pixel sharing the maximum for the light
+    one, so a single antialiased outlier cannot move either value.  The channel sum only orders
+    the pixels -- it is a clustering key, never a luminance, and the ratio itself is
+    :func:`qrcheck.decode.consensus.contrast_ratio`'s -- and both readings are equal when the
+    image is one flat colour.
     """
     pixels = _rgb_pixels(image_bytes).reshape(-1, 3).astype(numpy.int32)
     key = pixels.sum(axis=1)
@@ -1060,16 +848,10 @@ def _mean_colour(group: numpy.ndarray) -> tuple[int, int, int]:
 def _distinct_colours(image_bytes: bytes) -> int:
     """Return how many distinct colours the artefact holds.
 
-    A two-colour symbol renders exactly its foreground and background; a symbol carrying
-    a composited overlay carries the overlay's own colours as well.  That difference is
-    how ``RN-LOGO`` observes that the ``logo_overlay`` capability has behaviour behind
-    it, rather than trusting a target that declares the capability and ignores it.
-
-    Args:
-        image_bytes: The artefact exactly as the target returned it.
-
-    Returns:
-        The number of distinct ``(r, g, b)`` triples, at least one.
+    A two-colour symbol renders exactly its foreground and background; a symbol carrying a
+    composited overlay carries the overlay's own colours as well.  That difference is how
+    ``RN-LOGO`` observes that the ``logo_overlay`` capability has behaviour behind it, rather than
+    trusting a target that declares the capability and ignores it.
     """
     pixels = _rgb_pixels(image_bytes).reshape(-1, 3)
     return int(numpy.unique(pixels, axis=0).shape[0])
@@ -1092,9 +874,7 @@ def _image_size(image_bytes: bytes) -> tuple[int, int]:
     return int(width), int(height)
 
 
-# ---------------------------------------------------------------------------
 # The vector canvas
-# ---------------------------------------------------------------------------
 
 # A length as SVG writes it: a number with an optional CSS unit suffix, which is how
 # ``width="148"`` and ``width="37mm"`` are both expressed.
@@ -1109,17 +889,12 @@ _SVG_SEPARATORS: Final[re.Pattern[str]] = re.compile(r"[,\s]+")
 def _svg_length(value: str | None, field_name: str) -> tuple[float, str]:
     """Return one SVG length attribute as ``(number, unit)``.
 
-    Args:
-        value: The attribute text, or ``None`` when the attribute is absent.
-        field_name: The attribute's name, quoted in the diagnostic.
-
-    Returns:
-        The number and the unit suffix (``""`` for a unitless length).
+    The unit is ``""`` for a unitless length.
 
     Raises:
         ValueError: The attribute is absent or is not a length.  SVG authoring is
-            encoder-defined, so an unreadable canvas is reported as a mismatch rather
-            than assumed.
+            encoder-defined, so an unreadable canvas is reported as a mismatch rather than
+            assumed.
     """
     if value is None:
         raise ValueError(f"the SVG carries no {field_name!r} attribute")
@@ -1132,22 +907,16 @@ def _svg_length(value: str | None, field_name: str) -> tuple[float, str]:
 def _svg_canvas(svg_bytes: bytes) -> tuple[float, float, str]:
     """Return the vector canvas as ``(width, height, unit)``.
 
-    ``viewBox`` is preferred when the document has one, because its third and fourth
-    numbers are the canvas in the user units the geometry is drawn in; ``width`` and
-    ``height`` are the fallback, and they may carry a physical unit.  Nothing else about
-    the document is inspected: element names, attribute sets and byte layout are
-    encoder-defined and AAP §0.3.5 forbids asserting them.
-
-    Args:
-        svg_bytes: The artefact exactly as the target returned it.
-
-    Returns:
-        The canvas side lengths and the unit of the reading (``""`` for user units).
+    ``viewBox`` is preferred when the document has one, because its third and fourth numbers are
+    the canvas in the user units the geometry is drawn in; ``width`` and ``height`` are the
+    fallback and may carry a physical unit.  Nothing else about the document is inspected:
+    element names, attribute sets and byte layout are encoder-defined and AAP §0.3.5 forbids
+    asserting them.  The unit is ``""`` for user units.
 
     Raises:
         ElementTree.ParseError: The bytes are not well-formed XML.
-        ValueError: The canvas cannot be read, is not square, or its two sides disagree
-            about their unit.
+        ValueError: The canvas cannot be read, is not square, or its two sides disagree about
+            their unit.
     """
     root = ElementTree.fromstring(svg_bytes)
     view_box = root.get("viewBox")
@@ -1179,18 +948,11 @@ def _svg_canvas(svg_bytes: bytes) -> tuple[float, float, str]:
 def _oversized_canvas(svg_bytes: bytes) -> float | None:
     """Return the declared canvas side in pixels when it exceeds the raster ceiling.
 
-    A vector artefact is untrusted input, and a rasterizer allocates the canvas it is told
-    to draw, so the declared side is turned into the pixel count it will cost before any
-    rasterizer runs.  A document whose canvas cannot be read, or whose length unit has no
-    absolute extent, is left to the rasterizer: this function is a resource guard, not a
-    geometry assertion, and the geometry belongs to ``RN-SVG``.
-
-    Args:
-        svg_bytes: The artefact about to be rasterized.
-
-    Returns:
-        The offending side in pixels, or ``None`` when the canvas is within the ceiling or
-        cannot be measured.
+    A vector artefact is untrusted input and a rasterizer allocates the canvas it is told to
+    draw, so the declared side is turned into the pixel count it will cost before any rasterizer
+    runs.  A document whose canvas cannot be read, or whose length unit has no absolute extent,
+    is left to the rasterizer: this is a resource guard, not a geometry assertion, and the
+    geometry belongs to ``RN-SVG``.
     """
     try:
         width, height, unit = _svg_canvas(svg_bytes)
@@ -1203,24 +965,15 @@ def _oversized_canvas(svg_bytes: bytes) -> float | None:
     return side if side > _MAX_RASTER_SIDE_PX else None
 
 
-# ---------------------------------------------------------------------------
 # The one temporary artefact: the logo overlay bitmap
-# ---------------------------------------------------------------------------
 
 
 def _logo_area_fraction(ctx: RunContext, step: int) -> float:
     """Return the symbol-area fraction `step` asks the overlay to cover.
 
-    ``[checks.damage] logo_area_fraction`` is the ceiling, and the three steps divide it
-    into thirds, so the largest overlay spends exactly the configured value and no number
-    is written twice in this module.
-
-    Args:
-        ctx: The run's context, read for the resolved damage limits.
-        step: The numerator, one of :data:`_LOGO_FRACTION_STEPS`.
-
-    Returns:
-        The area fraction, in ``(0, 1)``.
+    ``[checks.damage] logo_area_fraction`` is the ceiling and the three steps divide it into
+    thirds, so the largest overlay spends exactly the configured value and no number is written
+    twice in this module.
     """
     return ctx.config.damage.logo_area_fraction * step / _LOGO_FRACTION_DENOMINATOR
 
@@ -1228,21 +981,13 @@ def _logo_area_fraction(ctx: RunContext, step: int) -> float:
 def _logo_side_px(fraction: float) -> int:
     """Return the overlay's pixel side for `fraction` of the symbol's area.
 
-    The symbol's own pixel side is ``(modules + 2 * quiet_zone) * module_size``, and the
-    module count is only known once the target has rendered -- so the overlay is sized
-    from the **smallest** legal Model 2 symbol (Version 1, 21 modules).  Every real symbol
-    is at least that large, so the fraction the overlay actually covers can never exceed
-    the configured ceiling, whatever version the target chose; the covered fraction is
-    measured from the produced image and recorded, and it is that measurement the
-    assertion reads.  Sizing from an estimate instead would let a version smaller than
-    the estimate push a case past the error-correction budget and fail a conforming
-    target.
-
-    Args:
-        fraction: The requested area fraction.
-
-    Returns:
-        The overlay side in pixels, at least one.
+    The symbol's own pixel side is ``(modules + 2 * quiet_zone) * module_size`` and the module
+    count is only known once the target has rendered, so the overlay is sized from the
+    **smallest** legal Model 2 symbol (Version 1, 21 modules).  Every real symbol is at least that
+    large, so the fraction the overlay actually covers can never exceed the configured ceiling,
+    whatever version the target chose; the covered fraction is measured from the produced image
+    and it is that measurement the assertion reads.  Sizing from an estimate instead could push a
+    case past the error-correction budget and fail a conforming target.
     """
     smallest_symbol_px = (
         module_count_for_version(1) + 2 * _PINNED_QUIET_ZONE_MODULES
@@ -1253,23 +998,12 @@ def _logo_side_px(fraction: float) -> int:
 def _logo_bitmap(seed: int, side_px: int) -> bytes:
     """Return an opaque `side_px` square of seeded noise, encoded as PNG bytes.
 
-    Seeded through :func:`qrcheck.config.seeding.derive_seed` into ``numpy``'s ``PCG64``,
-    so the same case always produces the same bitmap and the covered area is re-derivable
-    from the recorded seed.  The pattern is deliberately destructive: a uniformly random
-    opaque bitmap corrupts roughly half of every module it covers, which is what makes
-    the overlay a genuine error-correction test rather than a cosmetic one.
-
-    The array becomes a PNG through the product's single image boundary: the pixels are
-    written as a P6 Netpbm body, which Pillow opens natively, and re-encoded by
-    :func:`qrcheck.evidence.mux.encode_png`.  Nothing here imports Pillow, so the
-    framework keeps one module that knows about image files.
-
-    Args:
-        seed: The derived seed for this case's overlay.
-        side_px: The side length in pixels.
-
-    Returns:
-        The PNG bytes, non-empty.
+    Seeded through :func:`qrcheck.config.seeding.derive_seed` into ``numpy``'s ``PCG64``, so the
+    same case always produces the same bitmap and the covered area is re-derivable from the
+    recorded seed.  A uniformly random opaque bitmap corrupts roughly half of every module it
+    covers, which makes the overlay a genuine error-correction test rather than a cosmetic one.
+    The pixels are written as a P6 Netpbm body, which Pillow opens natively, and re-encoded by
+    :func:`qrcheck.evidence.mux.encode_png`, so nothing here imports Pillow.
 
     Raises:
         ValueError: `side_px` is not positive, or the encoded bitmap is empty.
@@ -1293,17 +1027,10 @@ def _logo_bitmap(seed: int, side_px: int) -> bytes:
 def _logo_bitmap_file(bitmap_png: bytes) -> Iterator[Path]:
     """Write `bitmap_png` to a temporary file and remove it when the block ends.
 
-    A request names its overlay by path, so the bitmap has to exist on disk for the
-    duration of one ``generate`` call.  The name carries the product-wide ``qrcheck-``
-    prefix that ``CL-ARTIFACTS`` scans ``tempfile.gettempdir()`` for, and the file is
-    removed in a ``finally`` block, so a target that refuses the request cannot leave an
-    artefact for that check to find.
-
-    Args:
-        bitmap_png: The PNG bytes of the overlay.
-
-    Yields:
-        The path of the temporary file.
+    A request names its overlay by path, so the bitmap has to exist on disk for the duration of
+    one ``generate`` call.  The name carries the product-wide ``qrcheck-`` prefix that
+    ``CL-ARTIFACTS`` scans ``tempfile.gettempdir()`` for, and the file is removed in a ``finally``
+    block, so a target that refuses the request cannot leave an artefact for that check to find.
 
     Raises:
         OSError: The temporary file cannot be created or written.
@@ -1319,25 +1046,16 @@ def _logo_bitmap_file(bitmap_png: bytes) -> Iterator[Path]:
             os.unlink(path)
 
 
-# ---------------------------------------------------------------------------
 # Shared per-case plumbing
-# ---------------------------------------------------------------------------
 
 
 def _target_config(ctx: RunContext) -> TargetConfig:
     """Return the resolved ``[targets.<name>]`` record for the run's adapter.
 
-    The record owns ``contrast_floor``, the declared floor ``RN-CONTRAST`` asserts at or
-    above.  A target the configuration does not declare -- a stub an ad-hoc test drives
-    directly -- is held to the documented default floor rather than to no floor at all,
-    which is the same fallback the configuration model declares for a target that states
-    nothing.
-
-    Args:
-        ctx: The run's context.
-
-    Returns:
-        The target's record, or one carrying the default floor.
+    The record owns ``contrast_floor``, the floor ``RN-CONTRAST`` asserts at or above.  A target
+    the configuration does not declare -- a stub an ad-hoc test drives directly -- is held to the
+    documented default floor rather than to no floor at all, which is the same fallback the
+    configuration model declares for a target that states nothing.
     """
     declared = ctx.config.targets.get(ctx.adapter.name)
     if declared is not None:
@@ -1369,26 +1087,13 @@ def _translate(
 ) -> CaseResult:
     """Translate one adapter error through the framework's single translation table.
 
-    :func:`qrcheck.checks.support.case_status_for_error` owns that table: a declared
-    rejection fails a rendering check with ``target_rejected``, a contract error fails it
-    with ``contract_error``, and an unsupported capability skips it.  ``TargetUnavailable``
-    and ``TargetTimeout`` are re-raised by that function so the runner can apply its
-    one-error-result-per-check policy, and this wrapper deliberately does not interfere
-    with that.
-
-    Args:
-        check_id: The check's identifier.
-        case_id: The case's identifier.
-        error: The error the adapter raised.
-        request: The request that produced it.
-        started: The ``time.perf_counter`` reading taken before the case ran.
-
-    Returns:
-        The translated result.
+    :func:`qrcheck.checks.support.case_status_for_error` owns that table: a declared rejection
+    fails a rendering check with ``target_rejected``, a contract error with ``contract_error``,
+    and an unsupported capability skips it.
 
     Raises:
-        TargetUnavailable: Propagated unchanged, as the support layer requires.
-        TargetTimeout: Propagated unchanged, as the support layer requires.
+        TargetUnavailable: Re-raised unchanged, so the runner can apply its target-loss policy.
+        TargetTimeout: Re-raised unchanged, so the runner can apply its target-loss policy.
     """
     return support.case_status_for_error(
         check_id,
@@ -1399,9 +1104,7 @@ def _translate(
     )
 
 
-# ---------------------------------------------------------------------------
 # RN-QUIET-ZONE
-# ---------------------------------------------------------------------------
 
 
 @check(
@@ -1453,19 +1156,10 @@ def _run_quiet_zone(
     """Generate one symbol and assert the quiet zone it actually rendered.
 
     Emits ``sampling_failed`` when the image's module geometry cannot be established,
-    ``value_mismatch`` when any side renders less than the requested zone, and the
-    translated adapter reasons through :func:`_translate`.  ``decoded`` carries
-    ``quiet_zone_measured`` beside ``quiet_zone_requested`` and the measured module pitch,
-    which is the evidence AAP §0.4.5 requires for the ``missing_quiet_zone`` defect.
-
-    Args:
-        ctx: The run's context.
-        case_id: The case's stable identifier.
-        record: The corpus record supplying the payload.
-        requested: The quiet zone in modules this case asks for.
-
-    Returns:
-        The case's result, with evidence recorded when it did not pass.
+    ``value_mismatch`` when any side renders less than the requested zone, and the translated
+    adapter reasons through :func:`_translate`.  ``decoded`` carries ``quiet_zone_measured``
+    beside ``quiet_zone_requested`` and the measured module pitch, which is the evidence AAP
+    §0.4.5 requires for the ``missing_quiet_zone`` defect.
     """
     started = time.perf_counter()
     request = support.build(
@@ -1548,9 +1242,7 @@ def _run_quiet_zone(
     )
 
 
-# ---------------------------------------------------------------------------
 # RN-MODULE-SIZE
-# ---------------------------------------------------------------------------
 
 
 @check(
@@ -1603,27 +1295,17 @@ def _run_module_size(
 ) -> CaseResult:
     """Generate one symbol and assert the module geometry it actually rendered.
 
-    Two arithmetic assertions, both from the image and neither from a decoder.  The
-    measured module edge must be within :data:`MODULE_SIZE_TOLERANCE_PX` of the requested
-    one, and the dimension contract ``(modules + 2 * quiet_zone) * module_size`` must
-    hold: the canvas, counted in module pitches, must equal a legal Model 2 module count
-    plus the requested quiet zone on both sides.  The second is why a target that renders
-    a short quiet zone fails here as well as in ``RN-QUIET-ZONE`` (AAP §0.4.2), and the
-    check is a legal-count test rather than a comparison against a decoder's version, so
-    a symbol that cannot be decoded is still measured.
+    Two arithmetic assertions, both from the image and neither from a decoder: the measured
+    module edge is within :data:`MODULE_SIZE_TOLERANCE_PX` of the requested one, and the
+    dimension contract ``(modules + 2 * quiet_zone) * module_size`` holds, the canvas counted in
+    module pitches being a legal Model 2 module count plus the requested quiet zone on both
+    sides.  The second is why a target that renders a short quiet zone fails here as well as in
+    ``RN-QUIET-ZONE`` (AAP §0.4.2), and being a legal-count test rather than a comparison against
+    a decoder's version it still measures a symbol that cannot be decoded.
 
-    Emits ``sampling_failed`` when the geometry cannot be established and
-    ``value_mismatch`` when either arithmetic assertion fails.  The measured and
-    requested values travel together in ``decoded`` so a reader can see the deviation.
-
-    Args:
-        ctx: The run's context.
-        case_id: The case's stable identifier.
-        record: The corpus record supplying the payload.
-        requested: The module edge in pixels this case asks for.
-
-    Returns:
-        The case's result, with evidence recorded when it did not pass.
+    Emits ``sampling_failed`` when the geometry cannot be established and ``value_mismatch``
+    when either assertion fails; the measured and requested values travel together in
+    ``decoded`` so a reader can see the deviation.
     """
     started = time.perf_counter()
     request = support.build(
@@ -1720,9 +1402,7 @@ def _run_module_size(
     )
 
 
-# ---------------------------------------------------------------------------
 # RN-CONTRAST
-# ---------------------------------------------------------------------------
 
 
 @check(
@@ -1753,15 +1433,9 @@ def contrast_cases(ctx: RunContext) -> Iterator[Case]:
 def _contrast_payload(index: int) -> bytes:
     """Return the payload the `index`-th contrast case requests.
 
-    Lower-case text, so the encoder spends byte mode and the symbol stays the size the
-    palette case expects, and a fixed string rather than a random one, so a failing case
-    can be reproduced from its identifier alone.
-
-    Args:
-        index: The one-based palette number.
-
-    Returns:
-        The payload bytes.
+    Lower-case text, so the encoder spends byte mode and the symbol stays the size the palette
+    case expects, and a fixed string rather than a random one, so a failing case can be
+    reproduced from its identifier alone.
     """
     return f"qrcheck contrast case {index}".encode("utf-8")
 
@@ -1795,22 +1469,12 @@ def _run_contrast(
 ) -> CaseResult:
     """Generate one coloured symbol and assert what the image actually rendered.
 
-    Three assertions, all measured from the produced image rather than from the request:
-    the palette the target drew is the palette that was asked for, the ratio between the
-    two measured colours is at or above the target's declared ``contrast_floor``, and the
-    symbol decodes to the requested payload -- which for an inverted request means the
-    polarity-normalised second pass worked.  Emits ``value_mismatch`` for any of the
-    three and the translated adapter reasons through :func:`_translate`.
-
-    Args:
-        ctx: The run's context.
-        case_id: The case's stable identifier.
-        index: The one-based palette number.
-        palette: The ``(foreground, background)`` pair for the normal polarity.
-        polarity: ``normal`` or ``inverted``.
-
-    Returns:
-        The case's result, with evidence recorded when it did not pass.
+    Three assertions, all measured from the produced image rather than from the request: the
+    palette the target drew is the palette that was asked for, the ratio between the two measured
+    colours is at or above the target's declared ``contrast_floor``, and the symbol decodes to the
+    requested payload -- which for an inverted request means the polarity-normalised second pass
+    worked.  Emits ``value_mismatch`` for any of the three and the translated adapter reasons
+    through :func:`_translate`.
     """
     started = time.perf_counter()
     if polarity not in _CONTRAST_POLARITIES:
@@ -1893,9 +1557,7 @@ def _run_contrast(
     )
 
 
-# ---------------------------------------------------------------------------
 # RN-SVG
-# ---------------------------------------------------------------------------
 
 
 @check(
@@ -1945,27 +1607,16 @@ def _run_svg(
 ) -> CaseResult:
     """Rasterize one vector artefact and assert the geometry and the symbol it carries.
 
-    Emits ``missing_dependency`` when no rasterizer was discovered, ``value_mismatch``
-    when the document does not parse, its canvas is not a positive square that carries the
-    module count at one integral pitch, or the rasterized artefact carries no decodable
-    symbol, and ``sampling_failed`` when no module count could be implied.  A rasterizer
-    that fails outright raises, so the runner records an ``error`` result with the
-    traceback instead of a verdict about the target.
+    Emits ``missing_dependency`` when no rasterizer was discovered, ``value_mismatch`` when the
+    document does not parse, its canvas is not a positive square that carries the module count
+    at one integral pitch, or the rasterized artefact carries no decodable symbol, and
+    ``sampling_failed`` when no module count could be implied.  A rasterizer that fails outright
+    raises, so the runner records an ``error`` result with the traceback instead of a verdict
+    about the target.
 
-    The payload the rasterized symbol decodes to is *recorded* rather than asserted: a
-    vector artefact that rasterizes to a decodable symbol has honoured the rendering
-    contract this check owns, while payload fidelity is ``RT-ROUNDTRIP``'s assertion.  A
-    target that mangles a payload -- the ``defective`` target truncates some -- must not
-    turn a defect that another check already reports into a second failure here.
-
-    Args:
-        ctx: The run's context.
-        case_id: The case's stable identifier.
-        record: The corpus record supplying the payload.
-        status: The run's rasterizer discovery result.
-
-    Returns:
-        The case's result, with evidence recorded when it did not pass.
+    The payload the rasterized symbol decodes to is recorded rather than asserted: payload
+    fidelity is ``RT-ROUNDTRIP``'s assertion, so a defect another check already reports must not
+    become a second failure here.
     """
     expected: dict[str, object] = {
         "output_format": "svg",
@@ -2088,9 +1739,7 @@ def _run_svg(
     )
 
 
-# ---------------------------------------------------------------------------
 # RN-LOGO
-# ---------------------------------------------------------------------------
 
 
 @check(
@@ -2121,17 +1770,10 @@ def logo_cases(ctx: RunContext) -> Iterator[Case]:
 def _logo_payload(level: str, step: int) -> bytes:
     """Return the payload one logo case requests.
 
-    Lower-case text padded to :data:`_LOGO_PAYLOAD_BYTES`, so the encoder spends byte mode
-    and the symbol lands on the same version at a given level for every run and every
-    machine -- the covered fraction is measured, but its reproducibility is what makes the
-    recorded evidence comparable.
-
-    Args:
-        level: The requested error-correction level.
-        step: The overlay size step.
-
-    Returns:
-        The payload bytes, exactly :data:`_LOGO_PAYLOAD_BYTES` long.
+    Lower-case text padded to :data:`_LOGO_PAYLOAD_BYTES`, so the encoder spends byte mode and
+    the symbol lands on the same version at a given level for every run and every machine: the
+    covered fraction is measured, but its reproducibility is what makes the recorded evidence
+    comparable.
     """
     label = f"qrcheck logo overlay case {level.lower()}{step} "
     return label.ljust(_LOGO_PAYLOAD_BYTES, "x").encode("utf-8")
@@ -2154,29 +1796,18 @@ def _logo_case(case_id: str, level: str, step: int) -> Callable[[RunContext], Ca
 def _run_logo(ctx: RunContext, case_id: str, level: str, step: int) -> CaseResult:
     """Composite one seeded overlay onto a symbol and assert it survives its budget.
 
-    Two things are asserted and two recorded.  Asserted: the overlay was really applied
-    (the rendered image carries colours the two-colour symbol did not have, so a declared
-    ``logo_overlay`` capability has behaviour behind it) and, when the covered fraction is
-    at or below ``recovery_fraction(decoded level) - occlusion_margin``, that the symbol
-    still decodes to the requested payload.  Recorded without assertion: the covered
-    fraction itself and the outcome of a case that exceeds that budget -- the EC-L overlay
-    is deliberately there to observe what happens, exactly as AAP §0.3.5 requires.
-
-    The budget reads the error level **decoded from the symbol**, never the requested one,
-    which is what keeps the ``defective`` target's EC downshift from turning six logo
+    Asserts that the overlay was really applied -- the rendered image carries colours the
+    two-colour symbol did not have, so a declared ``logo_overlay`` capability has behaviour
+    behind it -- and, when the covered fraction is at or below
+    ``recovery_fraction(decoded level) - occlusion_margin``, that the symbol still decodes to
+    the requested payload.  The covered fraction and the outcome of a case that exceeds the
+    budget are recorded without assertion: the EC-L overlay is deliberately there to observe,
+    as AAP §0.3.5 requires.  The budget reads the error level decoded from the symbol, never the
+    requested one, which keeps the ``defective`` target's EC downshift from turning six logo
     cases into six failures of a check that is not about error levels (AAP §0.4.2).
 
-    Emits ``value_mismatch`` for either assertion and the translated adapter reasons
-    through :func:`_translate`.
-
-    Args:
-        ctx: The run's context.
-        case_id: The case's stable identifier.
-        level: The requested error-correction level.
-        step: The overlay size step.
-
-    Returns:
-        The case's result, with evidence recorded when it did not pass.
+    Emits ``value_mismatch`` for either assertion and the translated adapter reasons through
+    :func:`_translate`; evidence is recorded when the case did not pass.
     """
     started = time.perf_counter()
     fraction = _logo_area_fraction(ctx, step)

@@ -1,64 +1,39 @@
 """The consensus contract: two decoders, one authority, and silence that is not a defect.
 
-``qrcheck.decode.consensus`` is the only place that decides what a symbol decoded to, so its
-rules are the product's rather than its own (AAP §0.3.2 -- "consensus rules (these are
-contract, not implementation detail)"). This module pins each one with stubbed decoders: no
-real decoder runs, no network is touched, and the only image involved is a three-pixel PNG
-built here so the pipeline has genuine bytes to open.
+``qrcheck.decode.consensus`` is the only place that decides what a symbol decoded to, so its rules
+are the product's rather than its own (AAP §0.3.2, "consensus rules (these are contract, not
+implementation detail)"). Each rule is pinned here with stubbed decoders -- no real decoder runs,
+no network is touched, and the only image is a three-pixel PNG built here so the pipeline has
+genuine bytes to open:
 
-The rules asserted here
------------------------
-1. **A disagreement requires two payloads that differ.** ``disagree`` is reported only when
-   the primary decoder returned a payload and the secondary returned a different one, and
-   both payloads and both metadata blocks stay in ``per_decoder`` so evidence can show them
-   side by side. A check that receives ``disagree`` fails with
-   ``Reason.DECODER_DISAGREEMENT`` before it compares any payload at all.
-2. **The primary decoder is the authority for all twenty-one checks.** ``payload_bytes`` is
-   the primary's payload, a differing secondary payload never replaces it, and a symbol only
-   the secondary could read is ``secondary_only`` with ``payload_bytes`` left ``None`` -- so
-   ``RT-ROUNDTRIP`` fails even though the secondary produced exactly the right bytes.
-3. **Silence is never a disagreement.** A decoder that returns no payload is ``undetected``.
-   Conflating the two (IM-3) would fail a conforming target on every inverted and damaged
-   symbol, so each silence case asserts ``!= "disagree"`` explicitly instead of inferring it.
-4. **The two EC-level readings are never reconciled.** ``ec_level_decoder`` is the decoder's
-   metadata and ``ec_level_format`` is the symbol's own format information; a disagreement
-   between them is ``format_info_disagreement``, and collapsing one into the other here would
-   delete that finding.
-5. **Inversion is the framework's job** (IM-4). ``zxing-cpp`` 2.2.0 exposes no inversion
-   switch and OpenCV 4.10 cannot detect a light-on-dark symbol at all, so an inverted request
-   is decoded twice with both decoders and the normalised copy is what the grid is sampled
-   from. The call counters below are what make "no second pass for an ordinary request"
-   testable: an implementation that always inverted would satisfy every payload assertion
-   while doubling the decode cost of a whole run.
-6. **Decoder order is lexicographic**, in ``per_decoder`` and in its ``as_dict()`` projection
-   alike, so the evidence bytes never depend on the order the decoders happened to be called.
-7. **The documented binary refinement, and only it.** A payload that does not round-trip
-   through UTF-8 is not one the text-only secondary decoder can contradict, so it is recorded
-   as ``primary_only`` -- the rule that keeps the forty ``random-bytes`` records from failing
-   the conforming reference gate. A plain ASCII disagreement is still a disagreement, and both
-   halves are asserted here so the refinement cannot quietly widen into "text never disagrees".
+* ``disagree`` requires two payloads that differ, and both payloads and both metadata blocks stay
+  in ``per_decoder`` so evidence can show them side by side;
+* ``payload_bytes`` is the primary decoder's payload and a differing secondary payload never
+  replaces it, so a symbol only the secondary could read is ``secondary_only`` with
+  ``payload_bytes`` left ``None`` and ``RT-ROUNDTRIP`` still fails;
+* silence is never a disagreement (IM-3): a decoder that returns no payload is ``undetected``, and
+  each silence case asserts ``!= "disagree"`` explicitly rather than inferring it;
+* the decoder's EC level and the symbol's own format information are never reconciled -- a
+  disagreement between them is ``format_info_disagreement``, and collapsing one into the other here
+  would delete that finding;
+* inversion is the framework's job (IM-4): an inverted request is decoded twice with both decoders,
+  and the call counters below are what make "no second pass for an ordinary request" testable,
+  because an implementation that always inverted would satisfy every payload assertion while
+  doubling the decode cost of a whole run;
+* ``per_decoder`` order is lexicographic, in ``as_dict()`` too, so the evidence bytes never depend
+  on the order the decoders happened to be called;
+* a payload that does not round-trip through UTF-8 is ``primary_only``, which is what keeps the
+  forty ``random-bytes`` records from failing the conforming reference gate, while a plain ASCII
+  disagreement stays a disagreement.
 
-How the decoders are replaced
------------------------------
-:func:`_install_decoders` monkeypatches ``read_primary`` and ``read_secondary`` in the
-consensus module's namespace with :class:`_DecoderStub` instances. A stub answers from a
-polarity-keyed table -- an absent entry means it found no symbol there -- records the polarity
-and a private copy of the pixels of every call, and builds its outcome through the
-``make_decoder_outcome`` fixture so every field name comes from
-:mod:`qrcheck.decode.base` rather than being re-typed here. The reading wrappers are the
-decode layer's own ``PrimaryReading``/``SecondaryReading`` records, reached through the
-consensus module because that is how the pipeline itself resolves them.
-
-The check-level cases drive the two real checks, ``RT-ROUNDTRIP`` and ``SY-EC-MATCH``, through
-the shared ``run_context`` fixture with the ``patch_decode`` fixture standing in for the decode
-entry: every other part of those checks -- the request builder, the adapter, the judge, the
-evidence store -- is the production code.
-
-What this module deliberately does not do: it does not decode a real symbol (that is
-``tests/unit/test_matrix_sampling.py`` and ``tests/unit/test_format_info.py``), it does not
-touch the network, it reads no configuration value, and it restates no threshold from
-``qrcheck.toml`` -- the only numbers here are the WCAG constants of the colour helpers and the
-polarity complement of an image.
+:func:`_install_decoders` monkeypatches the consensus module's ``read_primary`` and
+``read_secondary`` with stubs that answer from a polarity-keyed table and build their outcomes
+through the ``make_decoder_outcome`` fixture, so every field name comes from
+:mod:`qrcheck.decode.base` rather than being re-typed here. The check-level cases drive the two
+real checks, ``RT-ROUNDTRIP`` and ``SY-EC-MATCH``, through the shared ``run_context`` fixture with
+only the decode entry stubbed. Real-symbol decoding belongs to
+``tests/unit/test_matrix_sampling.py`` and ``tests/unit/test_format_info.py``; nothing here reads a
+configuration value.
 """
 
 from __future__ import annotations
@@ -171,19 +146,11 @@ _GRID_EC_LEVEL: Final[str] = "Q"
 
 
 def _png_bytes(side: int = 3) -> bytes:
-    """Build a valid, deterministic grayscale PNG of `side` by `side` white pixels.
-
-    Written with :mod:`struct` and :mod:`zlib` rather than with Pillow, because the whole
-    point of the image here is to prove the framework's own byte path works: the bytes are a
-    real PNG (``IHDR``/``IDAT``/``IEND`` with correct CRCs) that :func:`decode_image` can open
-    and :func:`encode_png` can re-encode, and no third-party image API is imported directly.
-
-    Args:
-        side: The image's width and height in pixels. Small on purpose: the stub decoders
-            ignore pixel content, and a large image would only cost time.
-
-    Returns:
-        The PNG file's bytes.
+    """Build a valid, deterministic grayscale PNG of `side` by `side` white pixels. Written with
+    :mod:`struct` and :mod:`zlib` rather than with Pillow, because the whole point of the image
+    here is to prove the framework's own byte path works: the bytes are a real PNG
+    (``IHDR``/``IDAT``/``IEND`` with correct CRCs) that :func:`decode_image` can open and
+    :func:`encode_png` can re-encode, and no third-party image API is imported directly.
     """
 
     def chunk(kind: bytes, data: bytes) -> bytes:
@@ -203,13 +170,7 @@ def _png_bytes(side: int = 3) -> bytes:
 
 
 def _symbol_png() -> bytes:
-    """Return the module's one artefact: a tiny valid PNG, canonicalised through the mux.
-
-    The bytes are opened and re-encoded through :mod:`qrcheck.evidence.mux`, which is the
-    framework's single image boundary: the image the tests decode is therefore the same kind of
-    object a target's artefact becomes, and the round trip proves the fixture is a real image
-    rather than a byte string the pipeline merely tolerates.
-    """
+    """Return the module's one artefact: a tiny valid PNG, canonicalised through the mux."""
     return encode_png(decode_image(_png_bytes()))
 
 
@@ -219,18 +180,10 @@ _SYMBOL_PNG: Final[bytes] = _symbol_png()
 
 
 def _request(payload: bytes, **overrides: Any) -> GenerateRequest:
-    """Return the legal request the pipeline is decoded for.
-
-    Built through :func:`qrcheck.targets.base.build_request` -- the product's single request
-    constructor -- so the colours the polarity decision reads are the validated ones, and so a
-    case cannot describe a request the framework would refuse to send.
-
-    Args:
-        payload: The payload the artefact was requested for.
-        **overrides: Any further ``build_request`` keyword, such as a colour pair.
-
-    Returns:
-        The request.
+    """Return the legal request the pipeline is decoded for. Built through
+    :func:`qrcheck.targets.base.build_request` -- the product's single request constructor --
+    so the colours the polarity decision reads are the validated ones, and so a case cannot
+    describe a request the framework would refuse to send.
     """
     return build_request(payload, _EC_LEVEL, **overrides)
 
@@ -245,20 +198,9 @@ def _inverted_request(payload: bytes) -> GenerateRequest:
 
 
 class _DecoderStub:
-    """One decoder entry replaced by a recording stub with a polarity-keyed answer table.
-
-    ``answers`` maps a polarity to the payload the decoder returns there. An absent key -- and
-    a key mapped to ``None`` -- means it found no symbol at that polarity, which is the
-    ``undetected`` status and never a disagreement.
-
-    Every call appends the polarity and a private copy of the pixels it was handed, so a test
-    can assert how many passes a decoder received, in which order, and whether the second pass
-    really was the 255-inverted copy rather than the original again.
-
-    The EC metadata each decoder reports follows the pinned bindings' documented surface: the
-    primary decoder reports an ``ec_level``, the secondary reports none at all, and the stub
-    reproduces that asymmetry so a case cannot assert a metadata block the real pipeline never
-    produces.
+    """One decoder entry replaced by a recording stub with a polarity-keyed answer table. An
+    absent key -- and a key mapped to ``None`` -- means it found no symbol at that polarity,
+    which is the ``undetected`` status and never a disagreement.
     """
 
     def __init__(
@@ -268,15 +210,7 @@ class _DecoderStub:
         make_outcome: Callable[..., DecoderOutcome],
         reading_factory: Callable[[DecoderOutcome, bytes | None], object],
     ) -> None:
-        """Configure the stub's identity, its answers and how it wraps an outcome as a reading.
-
-        Args:
-            decoder: The decoder name every outcome it builds reports.
-            answers: The payload per polarity, absent meaning "found nothing".
-            make_outcome: The ``make_decoder_outcome`` builder, so the stub's fields come from
-                :mod:`qrcheck.decode.base` rather than being re-typed.
-            reading_factory: Builds this decoder's reading record from the outcome.
-        """
+        """Configure the stub's identity, its answers and how it wraps an outcome as a reading."""
         self.decoder: str = decoder
         self.calls: list[tuple[str, numpy.ndarray]] = []
         self._answers: dict[str, bytes | None] = dict(answers)
@@ -295,17 +229,7 @@ class _DecoderStub:
         return len(self.calls)
 
     def __call__(self, image: numpy.ndarray, *, polarity: str = _ORIGINAL) -> object:
-        """Record one call and answer it from the table.
-
-        Args:
-            image: The pixels the pipeline handed over; copied, because the pipeline may hand
-                the same array to both decoders and a later consumer must not be able to
-                change what a call is asserted to have received.
-            polarity: Which copy of the artefact this is -- ``original`` or ``inverted``.
-
-        Returns:
-            The decoder's reading record for this polarity.
-        """
+        """Record one call and answer it from the table."""
         self.calls.append((polarity, numpy.array(image, copy=True)))
         payload = self._answers.get(polarity)
         decoded = payload is not None
@@ -321,12 +245,11 @@ class _DecoderStub:
 
 
 def _primary_reading(outcome: DecoderOutcome, payload: bytes | None) -> object:
-    """Wrap the primary decoder's outcome in the reading record the pipeline expects.
-
-    The rendered text is the payload decoded with replacement characters, which is what a
-    decoder that reports text produces for bytes it cannot render -- so the pipeline's
-    "does this payload round-trip through UTF-8?" question is answered by the payload itself
-    rather than by a flag this stub invented.
+    """Wrap the primary decoder's outcome in the reading record the pipeline expects. The rendered
+    text is the payload decoded with replacement characters, which is what a decoder that
+    reports text produces for bytes it cannot render -- so the pipeline's "does this payload
+    round-trip through UTF-8?" question is answered by the payload itself rather than by a flag
+    this stub invented.
     """
     decoded = payload is not None
     return consensus.zxing.PrimaryReading(
@@ -339,7 +262,6 @@ def _primary_reading(outcome: DecoderOutcome, payload: bytes | None) -> object:
 
 def _secondary_reading(outcome: DecoderOutcome, payload: bytes | None) -> object:
     """Wrap the secondary decoder's outcome in its reading record, with no rectified grid.
-
     ``straight_qrcode`` stays ``None``: the rectified image is the module-count fallback, which
     is grid sampling's business (``tests/unit/test_matrix_sampling.py``), and handing one over
     here would let a case accidentally assert against a sampled grid it never intended.
@@ -355,21 +277,10 @@ def _install_decoders(
     primary: Mapping[str, bytes | None],
     secondary: Mapping[str, bytes | None] | None = None,
 ) -> tuple[_DecoderStub, _DecoderStub | None]:
-    """Replace both decode entries in the consensus module's namespace with recording stubs.
-
-    The patch target is the name the pipeline itself resolves -- ``consensus.zxing.read_primary``
+    """Replace both decode entries in the consensus module's namespace with recording stubs. The
+    patch target is the name the pipeline itself resolves -- ``consensus.zxing.read_primary``
     and ``consensus.opencv.read_secondary`` -- so the stub stands exactly where the real call
     would, and ``monkeypatch`` restores the real entry when the test ends.
-
-    Args:
-        monkeypatch: The fixture that owns the patch's lifetime.
-        make_outcome: The ``make_decoder_outcome`` builder every stub outcome is built through.
-        primary: The primary decoder's polarity-keyed answers.
-        secondary: The secondary decoder's answers, or ``None`` to leave that entry untouched
-            (a case that runs in single-decoder mode).
-
-    Returns:
-        The primary stub, and the secondary stub when one was installed.
     """
     primary_stub = _DecoderStub(
         PRIMARY_DECODER, primary, make_outcome, _primary_reading
@@ -385,19 +296,9 @@ def _install_decoders(
 
 
 def _execute_first_case(contract: Any, ctx: Any) -> CaseResult:
-    """Execute the first case a registered check yields for `ctx` and return its result.
-
-    One case, not the whole corpus: the corpus-driven checks yield 240 cases each and only the
-    verdict of one is under test. The contract is reached through the module attribute the
-    ``@check`` decorator leaves behind (it replaces the function with the contract), so the
-    registry is not a dependency of this module.
-
-    Args:
-        contract: The check's registered contract.
-        ctx: The run context to execute under.
-
-    Returns:
-        The case's result.
+    """Execute the first case a registered check yields for `ctx` and return its result. One case,
+    not the whole corpus: the corpus-driven checks yield 240 cases each and only the verdict of
+    one is under test.
     """
     case = next(iter(contract.cases(ctx)))
     return case.execute(ctx)
@@ -411,13 +312,7 @@ class _GridCase(NamedTuple):
 
 
 def _grid_fixture() -> _GridCase:
-    """Return a synthetic sampled grid and the format-information reading that goes with it.
-
-    The grid is a real ``Matrix`` of the dimension a Version-2 symbol has, so ``DecodeResult``
-    computes its digest exactly as it does for a sampled symbol; the reading claims EC level
-    ``Q`` while the stubbed primary decoder reports ``M``, which is the pair the EC-level
-    disagreement is about.
-    """
+    """Return a synthetic sampled grid and the format-information reading that goes with it."""
     grid = numpy.zeros((_GRID_MODULE_COUNT, _GRID_MODULE_COUNT), dtype=numpy.bool_)
     grid[0, :] = True
     grid[:, 0] = True
@@ -438,11 +333,10 @@ def test_payload_disagreement_keeps_the_primary_payload_authoritative(
     monkeypatch: pytest.MonkeyPatch,
     make_decoder_outcome: Callable[..., DecoderOutcome],
 ) -> None:
-    """Two differing payloads are ``disagree``, and the primary's bytes stay authoritative.
-
-    The evidence contract is asserted as well as the classification: both payload digests and
-    both metadata blocks must be in ``per_decoder``, because a reader of ``decoded.json`` has to
-    be able to see the two answers side by side to judge the finding.
+    """Two differing payloads are ``disagree``, and the primary's bytes stay authoritative. The
+    evidence contract is asserted as well as the classification: both payload digests and both
+    metadata blocks must be in ``per_decoder``, because a reader of ``decoded.json`` has to be
+    able to see the two answers side by side to judge the finding.
     """
     primary, secondary = _install_decoders(
         monkeypatch,
@@ -493,11 +387,10 @@ def test_payload_disagreement_fails_roundtrip_with_decoder_disagreement(
     make_decoder_outcome: Callable[..., DecoderOutcome],
     run_context: Any,
 ) -> None:
-    """``RT-ROUNDTRIP`` reports ``decoder_disagreement`` before it compares any payload.
-
-    The primary's payload here *equals* the requested payload, so the case can only fail for the
-    disagreement itself -- which is what makes this the assertion that the disagreement outranks
-    a matching payload rather than being folded into a value mismatch.
+    """``RT-ROUNDTRIP`` reports ``decoder_disagreement`` before it compares any payload. The
+    primary's payload here *equals* the requested payload, so the case can only fail for the
+    disagreement itself -- which is what makes this the assertion that the disagreement
+    outranks a matching payload rather than being folded into a value mismatch.
     """
     requested = run_context.corpus[0].payload_bytes
     patch_decode.result = make_decode_result(
@@ -558,11 +451,10 @@ def test_consensus_records_both_ec_readings_without_reconciling_them(
     monkeypatch: pytest.MonkeyPatch,
     make_decoder_outcome: Callable[..., DecoderOutcome],
 ) -> None:
-    """The decoder's EC level and the format information's are both kept, side by side.
-
-    A layer that reconciled them -- adopting one reading as "the" level -- would delete the
-    ``format_info_disagreement`` finding before any check could report it, so the two values are
-    asserted to survive into the result and into its evidence projection unchanged.
+    """The decoder's EC level and the format information's are both kept, side by side. A layer
+    that reconciled them -- adopting one reading as "the" level -- would delete the
+    ``format_info_disagreement`` finding before any check could report it, so the two values
+    are asserted to survive into the result and into its evidence projection unchanged.
     """
     _install_decoders(monkeypatch, make_decoder_outcome, primary={_ORIGINAL: _PAYLOAD_A})
     monkeypatch.setattr(consensus.matrix, "sample_matrix", _sampled_grid, raising=True)
@@ -613,11 +505,10 @@ def test_sym_ec_match_fails_with_format_info_disagreement_and_keeps_both_values(
     make_decode_result: Callable[..., DecodeResult],
     run_context: Any,
 ) -> None:
-    """``SY-EC-MATCH`` reports the disagreement between its two sources, with both values.
-
-    The two readings disagree with *each other* here while both are present, which is the one
-    cause ``format_info_disagreement`` names: the check must not report it as a mismatch against
-    the request, and the evidence must carry the pair.
+    """``SY-EC-MATCH`` reports the disagreement between its two sources, with both values. The two
+    readings disagree with *each other* here while both are present, which is the one cause
+    ``format_info_disagreement`` names: the check must not report it as a mismatch against the
+    request, and the evidence must carry the pair.
     """
     patch_decode.result = make_decode_result(ec_level_decoder="M", ec_level_format="Q")
     result = _execute_first_case(symbol.SY_EC_MATCH, run_context)
@@ -641,10 +532,9 @@ def test_agreeing_ec_readings_produce_no_format_info_disagreement(
     make_decode_result: Callable[..., DecodeResult],
     run_context: Any,
 ) -> None:
-    """Two readings that agree, and match the request, produce no reason at all.
-
-    The contrast case for the test above: without it, a check that reported
-    ``format_info_disagreement`` unconditionally would pass the failing case.
+    """Two readings that agree, and match the request, produce no reason at all. The contrast case
+    for the test above: without it, a check that reported ``format_info_disagreement``
+    unconditionally would pass the failing case.
     """
     patch_decode.result = make_decode_result(ec_level_decoder="M", ec_level_format="M")
     result = _execute_first_case(symbol.SY_EC_MATCH, run_context)
@@ -698,10 +588,9 @@ def test_secondary_silence_is_primary_only_and_leaves_the_primary_authoritative(
     monkeypatch: pytest.MonkeyPatch,
     make_decoder_outcome: Callable[..., DecoderOutcome],
 ) -> None:
-    """A secondary decoder that finds nothing is ``primary_only``, not a disagreement.
-
-    This is the state a conforming symbol produces under damage, and for a one-module quiet zone
-    the secondary decoder cannot detect at all -- the ``primary_only`` case consensus exists to
+    """A secondary decoder that finds nothing is ``primary_only``, not a disagreement. This is the
+    state a conforming symbol produces under damage, and for a one-module quiet zone the
+    secondary decoder cannot detect at all -- the ``primary_only`` case consensus exists to
     record rather than to judge.
     """
     _install_decoders(
@@ -732,11 +621,9 @@ def test_secondary_cannot_rescue_a_symbol_the_primary_could_not_read(
     make_decode_result: Callable[..., DecodeResult],
     run_context: Any,
 ) -> None:
-    """``secondary_only`` leaves the payload empty, and the check fails anyway.
-
-    The secondary decoder returns exactly the requested bytes, so nothing but the authority rule
-    can make this case fail -- which is precisely the property being pinned. The secondary's
-    payload must still be recorded, as corroboration and never as a verdict.
+    """``secondary_only`` leaves the payload empty, and the check fails anyway. The secondary
+    decoder returns exactly the requested bytes, so nothing but the authority rule can make
+    this case fail -- which is precisely the property being pinned.
     """
     _install_decoders(
         monkeypatch,
@@ -787,10 +674,9 @@ def test_secondary_disabled_degrades_the_run_to_primary_only(
     monkeypatch: pytest.MonkeyPatch,
     make_decoder_outcome: Callable[..., DecoderOutcome],
 ) -> None:
-    """Single-decoder mode records the primary alone and reports ``primary_only``.
-
-    The degradation a report shows a banner for (AAP §0.6.6 row 4): the secondary decoder is
-    absent, so it is not called at all and its silence is never evidence about the symbol.
+    """Single-decoder mode records the primary alone and reports ``primary_only``. The degradation
+    a report shows a banner for (AAP §0.6.6 row 4): the secondary decoder is absent, so it is
+    not called at all and its silence is never evidence about the symbol.
     """
     primary, secondary = _install_decoders(
         monkeypatch, make_decoder_outcome, primary={_ORIGINAL: _PAYLOAD_A}
@@ -879,7 +765,6 @@ def test_decoder_ordering_is_lexicographic_for_every_classification(
     expected: str,
 ) -> None:
     """Every classification keeps the lexicographic decoder order, in the record and in evidence.
-
     Sorted keys are what make two runs' evidence byte-identical: an insertion-ordered map would
     put the decoders in whatever order the pipeline happened to call them.
     """
@@ -908,13 +793,9 @@ def test_binary_payload_is_recorded_as_primary_only_not_a_disagreement(
     monkeypatch: pytest.MonkeyPatch,
     make_decoder_outcome: Callable[..., DecoderOutcome],
 ) -> None:
-    """A payload the secondary decoder cannot speak about is ``primary_only``, as documented.
-
-    The secondary decoder answers in text, so for bytes that are not losslessly text its
-    re-encoded view differs from a binary primary payload even for a conforming symbol. The
-    documented refinement declines to let that contradicted bytes: the case is recorded as
-    ``primary_only``, the primary payload stays authoritative, and the secondary's view is still
-    kept as corroboration.
+    """A payload the secondary decoder cannot speak about is ``primary_only``, as documented. The
+    secondary decoder answers in text, so for bytes that are not losslessly text its re-encoded
+    view differs from a binary primary payload even for a conforming symbol.
     """
     assert _SECONDARY_TEXT_VIEW != _BINARY_PAYLOAD, (
         "binary refinement: the stub's text view must differ from the payload, or this case "
@@ -979,7 +860,6 @@ def test_inverted_request_is_decoded_twice_by_both_decoders(
     make_decoder_outcome: Callable[..., DecoderOutcome],
 ) -> None:
     """A light-on-dark request is decoded twice by each decoder, and the normalised copy wins.
-
     Neither pinned decoder can be relied on to read an inverted palette -- ``zxing-cpp`` 2.2.0
     has no inversion switch and OpenCV 4.10 cannot detect such a symbol at all -- so the
     framework builds the 255-inverted copy itself, hands it to both decoders, and records the
@@ -1031,11 +911,10 @@ def test_inverted_request_whose_original_copy_reads_reports_original_polarity(
     monkeypatch: pytest.MonkeyPatch,
     make_decoder_outcome: Callable[..., DecoderOutcome],
 ) -> None:
-    """When the original copy reads, ``polarity_applied`` is ``original`` and the outcome ``both``.
-
-    A decoder that reads either palette answers at both polarities; the recorded outcome merges
-    the two into ``both``, and the first polarity at which the primary produced a payload stays
-    authoritative, so nothing claims the inversion was needed when it was not.
+    """When the original copy reads, ``polarity_applied`` is ``original`` and the outcome
+    ``both``. A decoder that reads either palette answers at both polarities; the recorded
+    outcome merges the two into ``both``, and the first polarity at which the primary produced
+    a payload stays authoritative, so nothing claims the inversion was needed when it was not.
     """
     _install_decoders(
         monkeypatch,
@@ -1065,10 +944,9 @@ def test_secondary_decoder_answering_at_both_polarities_records_both(
     monkeypatch: pytest.MonkeyPatch,
     make_decoder_outcome: Callable[..., DecoderOutcome],
 ) -> None:
-    """Each decoder's recorded polarity is its own, not the pipeline's global answer.
-
-    The primary decoder reads only the original copy while the secondary reads both: the applied
-    polarity is ``original``, the primary records ``original`` and the secondary records ``both``.
+    """Each decoder's recorded polarity is its own, not the pipeline's global answer. The primary
+    decoder reads only the original copy while the secondary reads both: the applied polarity
+    is ``original``, the primary records ``original`` and the secondary records ``both``.
     """
     _install_decoders(
         monkeypatch,
@@ -1095,11 +973,10 @@ def test_non_inverted_request_is_decoded_exactly_once_by_each_decoder(
     monkeypatch: pytest.MonkeyPatch,
     make_decoder_outcome: Callable[..., DecoderOutcome],
 ) -> None:
-    """An ordinary symbol is decoded once per decoder: no second pass, no doubled cost.
-
-    Without this case an implementation that inverted unconditionally would satisfy every payload
-    assertion in this module while doubling the decode cost of a whole run, so the pass count is
-    the assertion, not a side note.
+    """An ordinary symbol is decoded once per decoder: no second pass, no doubled cost. Without
+    this case an implementation that inverted unconditionally would satisfy every payload
+    assertion in this module while doubling the decode cost of a whole run, so the pass count
+    is the assertion, not a side note.
     """
     primary, secondary = _install_decoders(
         monkeypatch,
@@ -1130,12 +1007,7 @@ def test_non_inverted_request_is_decoded_exactly_once_by_each_decoder(
 
 
 def test_inverting_twice_restores_the_image() -> None:
-    """``invert_image`` is the per-pixel complement, and it is its own inverse.
-
-    Polarity normalisation depends on both halves: the complement is what turns a light-on-dark
-    array into a dark-on-light one, and being an involution is why the corner quadrangle a
-    decoder reported for one polarity is valid for the other.
-    """
+    """``invert_image`` is the per-pixel complement, and it is its own inverse."""
     image = numpy.array([[0, 1, 127], [128, 254, 255]], dtype=numpy.uint8)
     inverted = consensus.invert_image(image)
     assert inverted.dtype == numpy.uint8, (
@@ -1158,10 +1030,8 @@ def test_inverting_twice_restores_the_image() -> None:
 
 
 def test_relative_luminance_matches_the_wcag_reference_values() -> None:
-    """The luminance helper reproduces WCAG 2.x's own reference values.
-
-    Black is 0.0, white is 1.0, and mid-grey (``#808080``) is its published 0.2159. The helper is
-    the definition behind ``contrast_floor``, so a drift here would silently change which requests
+    """The luminance helper reproduces WCAG 2.x's own reference values. The helper is the
+    definition behind ``contrast_floor``, so a drift here would silently change which requests
     a target is expected to refuse.
     """
     assert consensus.relative_luminance((0, 0, 0)) == 0.0, (
@@ -1183,10 +1053,6 @@ def test_relative_luminance_matches_the_wcag_reference_values() -> None:
 def test_contrast_ratio_matches_the_wcag_reference_values() -> None:
     """The contrast ratio is WCAG's ``(lighter + 0.05) / (darker + 0.05)``, symmetric in its
     arguments.
-
-    The ratio is what ``RN-CONTRAST`` asserts at or above a target's declared floor and what the
-    built-in targets refuse a request below, so its two reference points -- the maximum 21:1 and
-    the mid-grey reading -- are pinned here rather than left to the formulas' good intentions.
     """
     black, white, grey = (0, 0, 0), (255, 255, 255), (128, 128, 128)
     assert consensus.contrast_ratio(black, white) == pytest.approx(21.0), (

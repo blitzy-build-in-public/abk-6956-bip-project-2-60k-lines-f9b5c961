@@ -1,106 +1,43 @@
 """Every one of the twenty-one checks must fail on the defect it asserts against.
 
-Plan item served: AAP §0.4.4 -- "``tests/unit/test_checks_negative.py`` is the mechanism that
-catches [a check that cannot fail]" -- together with §0.4.3 and §0.5.6 (the declared
-adapter-invocation counts, because a retry registers as the declared count plus one) and
-§0.8.1's case matrix.  No project rules exist for this product (AAP §0.12), so the binding
-constraints here are the AAP's own MUST/MUST NOT list: no check is weakened, skipped,
-``xfail``-ed, retried or threshold-relaxed to make a target pass, and this module is the
-enforcement of that rule at the check level.
+For each registered check this module drives the check's own ``cases`` generator with a
+protocol-conforming stub adapter and a stubbed decode result carrying the **one** defect that check
+exists to detect. The assertion is the check's exact :class:`~qrcheck.report.model.Reason`, never
+merely "it failed": a case that failed for an unrelated reason -- a stub returning bad bytes, a
+missing fixture -- would satisfy ``status is failed`` and say nothing about the assertion under
+test (AAP §0.4.4). Every check also carries a **control** round with no defect injected, which must
+pass; the conforming stubs below are what a conforming target looks like to a check, so a control
+round is what makes a negative round attributable to the injected defect rather than to the
+harness.
 
-What a negative case is
------------------------
-For each of the twenty-one registered checks this module drives the check's own ``cases``
-generator with a protocol-conforming stub adapter and a stubbed decode result carrying the
-**one** defect that check exists to detect: a payload differing in one byte, a version one
-above the oracle minimum, an error level that disagrees with the format information, a mask
-of nine, a grid that is not the oracle's, a quiet zone of one module, a module edge two
-pixels wide of the request, a symbol that does not decode under damage, an over-capacity
-request the target accepted, a mask that changes between two identical calls, an unreachable
-performance floor, a temporary file left behind.  The assertion is the check's exact
-:class:`~qrcheck.report.model.Reason`, never merely "it failed": a case that fails for an
-unrelated reason -- a stub returning bad bytes, a missing fixture -- would satisfy
-``status is failed`` and say nothing about the assertion under test (AAP §0.4.4).
+Why the decoders are stubs: :func:`_render` is a small segno-backed target that honours module
+size, quiet zone, colours, version and mask pins, the ``png``/``svg`` format and the logo overlay,
+which is what the five ``RN-*`` checks measure, while :func:`_echo` is a conforming decoder -- a
+negative case needs to *put* a specific defect in front of a check, and a real decoder cannot be
+asked for one.
 
-Every check also carries a **control** round, driven through exactly the same harness with
-no defect injected, which must pass.  The control is what makes the negative round
-attributable: the conforming renderer and the conforming echo decoder below are what a
-conforming target looks like to a check, so a negative round that fails proves the failure
-came from the injected defect and not from the harness.  A check whose control fails is
-reported as a defect of this module's harness, never as a pass.
+:data:`EXPECTED_INVOCATIONS` declares the ``generate`` calls each check makes for ``n`` cases
+(``0`` for the three target-independent checks, ``2 * n`` for ``DT-DETERMINISTIC``, ``n // 7`` for
+``DM-RESILIENCE``, ``warmup + encode_samples`` for ``PF-ENCODE`` read from the resolved
+configuration, ``n`` for the other fifteen) and the observed count is asserted **equal** to it, so
+the one thing a recorded artefact cannot show -- a retry -- registers as the declared count plus
+one. Each check executes a documented prefix of its own ascending case order
+(:attr:`NegativeSpec.case_limit`), taken from the check's own order so it stays reproducible from
+the check's source alone.
 
-The conforming stubs, and why they are stubs rather than the real decoders
---------------------------------------------------------------------------
-* :func:`_render` is a small segno-backed target: it honours the requested module size,
-  quiet zone, colours, version and mask pins, the ``png``/``svg`` format and the logo
-  overlay, which is exactly what the five ``RN-*`` checks measure.  ``segno`` is used here
-  for the same reason AAP §0.5 sanctions it in the render, damage, symbol and matrix cases:
-  those checks genuinely read an image.
-* :func:`_echo` is a conforming decoder: it returns the requested payload, the version the
-  oracle picks for that payload at the requested level, the pinned mask and the symbol's own
-  matrix.  The real decoder pair is stubbed because a negative case needs to *put* a specific
-  defect in front of a check, and a real decoder cannot be asked for one; ``patch_decode``
-  itself states the same purpose.  Nothing here decodes, encodes over the network, spawns a
-  process or touches a host outside ``tmp_path``.
+Three reasons are asserted as the owning module documents them rather than as the plan's prose
+reads them: ``SY-MASK``, ``IV-BAD-OPTION`` and ``CL-ARTIFACTS`` all report ``value_mismatch`` for
+their defect (``CL-ARTIFACTS``'s skip is ``unsupported_platform``). ``RN-SVG``'s round carries a
+version and no payload, so it asserts ``value_mismatch`` rather than ``sampling_failed``; and
+``DM-RESILIENCE``'s declared eight invocations are expressed as "one invocation per seven cases",
+which :func:`test_declared_invocations_match_the_family_tables` holds against each family module's
+own ``EXPECTED_ENCODES`` so the two cannot drift.
 
-Three names differ from AAP §0.4.4's prose, and the owning module wins
----------------------------------------------------------------------
-The plan's suggested table left three reasons to be read off the implementation; each was,
-and each is asserted as the implementation documents it:
-
-* ``SY-MASK`` -- an illegal mask is a ``value_mismatch``, not a separate code
-  (``qrcheck/checks/symbol.py``: "``value_mismatch`` when the mask is outside ``0..7`` or
-  contradicts a pin").
-* ``IV-BAD-OPTION`` -- a target that accepts an out-of-contract option is a
-  ``value_mismatch``; ``contract_error`` belongs to ``IV-EMPTY``'s unusable artefact
-  (``qrcheck/checks/invalid.py``).
-* ``CL-ARTIFACTS`` -- a leak is a ``value_mismatch``; its skip is ``unsupported_platform``
-  (``qrcheck/checks/cleanup.py``).
-
-Two further refinements the implementation forces, recorded here so a reader does not read
-them as weakened assertions:
-
-* ``RN-SVG`` reports ``sampling_failed`` when no module count can be implied from the raster
-  and ``value_mismatch`` when the module count is known and the payload is not there.  The
-  negative round asserts the latter, so the round carries a version and no payload rather
-  than neither.
-* ``DM-RESILIENCE`` declares eight adapter invocations in one full run -- one encode per
-  sampled record, shared across the seven damage kinds -- so this module expresses its
-  expectation as "one invocation per seven cases" rather than as the constant eight.  At full
-  scale the expression evaluates to the declared eight, which
-  :func:`test_declared_invocations_match_the_family_tables` proves against each family
-  module's own ``EXPECTED_ENCODES`` so the two cannot drift.
-
-Declared adapter-invocation counts (AAP §0.4.3, §0.5.6)
------------------------------------------------------
-:data:`EXPECTED_INVOCATIONS` maps every check to the number of ``generate`` calls it makes
-for ``n`` executed cases: ``0`` for the three target-independent checks (``DM-SEEDED``,
-``PF-DECODE``, ``CL-ARTIFACTS``), ``2 * n`` for ``DT-DETERMINISTIC`` (its defect is only
-observable across two calls of the identical request), ``n // 7`` for ``DM-RESILIENCE``,
-``warmup + encode_samples`` for ``PF-ENCODE`` (read from the resolved configuration, never a
-literal), and ``n`` for the remaining fifteen.  The observed count is asserted **equal** to
-the declared one, so a retry -- the one thing the recorded artifact cannot show -- shows up
-as the declared count plus one.
-
-Bounded case selection
-----------------------
-A full run is 1,283 cases (§0.8.1's matrix) and this module is a unit test, so each check
-executes a documented prefix of its own cases (:attr:`NegativeSpec.case_limit`): one to four
-cases for the synthetic checks, two for the corpus-driven ones, all seven for
-``DM-RESILIENCE`` (one record's seven kinds, which is the unit its memo makes cheap) and one
-for ``DM-SEEDED``.  The prefix is always taken from the check's own ascending case order, so
-it is reproducible from the check's source alone.  The counts are asserted as an exact
-equality against :data:`EXPECTED_INVOCATIONS` evaluated at the number of cases that actually
-executed, which is why a bounded prefix cannot hide a retry.
-
-Isolation
----------
 ``DM-SEEDED`` reads the symbol, the pristine reading and the damaged variants that
-``DM-RESILIENCE`` memoises on the damage module, so each damage run clears that memo first
-and re-derives it through its own prerequisite.  Every artefact is written under the test's
-own report directory, every image the harness opens is closed before ``CL-ARTIFACTS``
-executes, and the one temporary entry the ``CL-ARTIFACTS`` round injects is removed in a
-``finally``.
+``DM-RESILIENCE`` memoises on the damage module, so each damage run clears that memo first and
+re-derives it through its own prerequisite. Every artefact is written under the test's own report
+directory, every image the harness opens is closed before ``CL-ARTIFACTS`` executes, and the one
+temporary entry its round injects is removed in a ``finally``.
 """
 
 from __future__ import annotations
@@ -183,33 +120,12 @@ _LEAK_NAME: Final[str] = f"{cleanup_family.TEMP_PREFIX}negative-case-leak"
 
 @dataclass(frozen=True, slots=True)
 class NegativeRound:
-    """One driven variant of a check: what is injected, and what must happen.
-
-    A round names its defects rather than carrying them, so the table below is data a reader
-    can audit without following a callable: each name is resolved per run through
-    :data:`DECODE_DEFECTS`, :data:`SYMBOL_DEFECTS` or :data:`PREPARATIONS`, which is also what
-    lets a stateful defect (a mask that changes between two calls) keep its state inside the
-    run instead of inside the module.
-
-    Args:
-        label: What the round is about, quoted in every assertion message.
-        status: The status the check must report.  ``failed`` for every negative round;
-            ``skipped`` for the one documented skip; ``passed`` for a control.
-        reason: The exact :class:`~qrcheck.report.model.Reason` the check must carry, or
-            ``None`` for a passing round.
-        case_limit: How many of the check's cases to execute, counted from the first in the
-            check's own ascending case order.
-        decode_defect: A key of :data:`DECODE_DEFECTS`, applied to the conforming echo result.
-        symbol_defect: A key of :data:`SYMBOL_DEFECTS`, applied to the conforming artefact.
-        adapter_error: A key of :data:`ADAPTER_ERRORS`: the error the stub raises on every
-            invocation, in place of returning a symbol.
-        adapter_symbol: A key of :data:`ADAPTER_SYMBOLS`: fixed bytes the stub returns instead
-            of rendering, for a probe whose request cannot be rendered at all.
-        config: ``Config`` field overrides the round needs, splatted into ``config_factory``.
-        prepare: A key of :data:`PREPARATIONS`, run after the cases are enumerated and before
-            they execute -- the only window in which a leaked temporary entry can be created.
-        prerequisite: A check identifier whose control round runs first, for a check that
-            reads what another check memoised.
+    """One driven variant of a check: what is injected, and what must happen. A round names its
+    defects rather than carrying them, so the table below is data a reader can audit without
+    following a callable: each name is resolved per run through :data:`DECODE_DEFECTS`,
+    :data:`SYMBOL_DEFECTS` or :data:`PREPARATIONS`, which is also what lets a stateful defect
+    (a mask that changes between two calls) keep its state inside the run instead of inside the
+    module.
     """
 
     label: str
@@ -247,19 +163,7 @@ def _control(
     prerequisite: str | None = None,
     adapter_error: str | None = None,
 ) -> NegativeRound:
-    """Return the passing round every check is driven through before its defects.
-
-    Args:
-        label: What the control covers, quoted in the assertion message.
-        case_limit: How many of the check's cases the control executes.
-        prerequisite: A check identifier whose control must run first.
-        adapter_error: The adapter behaviour the control needs to pass, for the three
-            invalid-input checks: a declared rejection is the *expected* outcome of those
-            probes (AAP §0.3.4), so their control is a target that declares one.
-
-    Returns:
-        The control round: no artefact or decode defect, ``passed``, no reason.
-    """
+    """Return the passing round every check is driven through before its defects."""
     return NegativeRound(
         label=label,
         status=Status.PASSED,
@@ -638,21 +542,7 @@ NEGATIVE_CASES: Final[dict[str, NegativeSpec]] = {
 
 
 def _oracle(payload: bytes, request: GenerateRequest) -> segno.QRCode:
-    """Return the golden symbol `request` asks for, as the oracle would draw it.
-
-    The two defaults that corrupt every expectation are both off, at every call site: the
-    ``boost_error`` default spends spare capacity on a higher level than was asked for, and
-    ``segno.make`` returns a Micro QR symbol for a short payload -- which has no ``4V + 17``
-    dimension and no Version 1-40 number (AAP §0.3.5).  ``make_qr`` is Model 2 by
-    construction and the pinned release gives it no ``micro`` argument.
-
-    Args:
-        payload: The bytes to encode.
-        request: The request whose level and pins the stub honours.
-
-    Returns:
-        The oracle's symbol.
-    """
+    """Return the golden symbol `request` asks for, as the oracle would draw it."""
     return segno.make_qr(
         payload,
         error=request.ec_level,
@@ -676,17 +566,7 @@ def _render_with(
     scale: int | None = None,
     mask: int | None = None,
 ) -> GeneratedSymbol:
-    """Render `request` as a conforming target would, with optional overrides.
-
-    Args:
-        request: The request to answer.
-        border: The quiet zone to draw, overriding the request's own when given.
-        scale: The module edge in pixels, overriding the request's pin when given.
-        mask: The mask pattern to draw, overriding the request's pin when given.
-
-    Returns:
-        The artefact, its format matching the request's.
-    """
+    """Render `request` as a conforming target would, with optional overrides."""
     pinned_mask = request.mask if mask is None else mask
     symbol = segno.make_qr(
         request.payload,
@@ -734,19 +614,9 @@ def _render(request: GenerateRequest) -> GeneratedSymbol:
 
 
 def _composite_logo(artefact: bytes, overlay_path: Path) -> bytes:
-    """Composite the request's logo bitmap onto the centre of the rendered symbol.
-
-    A target that declares ``logo_overlay`` is expected to have behaviour behind it, and
-    ``RN-LOGO`` asserts exactly that: the rendered image carries colours the two-colour symbol
-    did not have.  Both handles are closed before the artefact is returned, because
-    ``CL-ARTIFACTS`` fails a run that leaves an image open.
-
-    Args:
-        artefact: The rendered PNG.
-        overlay_path: The bitmap the request points at.
-
-    Returns:
-        The composited PNG.
+    """Composite the request's logo bitmap onto the centre of the rendered symbol. A target that
+    declares ``logo_overlay`` is expected to have behaviour behind it, and ``RN-LOGO`` asserts
+    exactly that: the rendered image carries colours the two-colour symbol did not have.
     """
     with Image.open(io.BytesIO(artefact)) as base_image:
         canvas = base_image.convert("RGB")
@@ -761,12 +631,9 @@ def _composite_logo(artefact: bytes, overlay_path: Path) -> bytes:
 
 
 def _request_key(request: GenerateRequest) -> tuple[Any, ...]:
-    """Return the identity of a request: every field a conforming target reads.
-
-    Used as a memo key, so the stub answers an identical request with the identical artefact and
-    the identical evidence.  A conforming encoder is deterministic -- ``DT-DETERMINISTIC`` exists
-    to assert exactly that -- so memoising cannot change a verdict; it only stops a probe that
-    repeats one request two hundred times from paying for two hundred symbol encodes.
+    """Return the identity of a request: every field a conforming target reads. Used as a memo
+    key, so the stub answers an identical request with the identical artefact and the identical
+    evidence.
     """
     return (
         request.payload,
@@ -783,12 +650,10 @@ def _request_key(request: GenerateRequest) -> tuple[Any, ...]:
 
 
 def _memoised(answer: Callable[[GenerateRequest], Any]) -> Callable[[GenerateRequest], Any]:
-    """Return `answer` behind a per-run memo keyed on the request's identity.
-
-    The memo lives in the closure, so it dies with the round: nothing carried between rounds,
-    checks or tests.  A defect that depends on call order (the mask that changes between two
-    calls) wraps *this* function rather than living inside it, so the re-render it forces still
-    differs from the memoised answer.
+    """Return `answer` behind a per-run memo keyed on the request's identity. A defect that
+    depends on call order (the mask that changes between two calls) wraps *this* function
+    rather than living inside it, so the re-render it forces still differs from the memoised
+    answer.
     """
     cache: dict[tuple[Any, ...], Any] = {}
 
@@ -805,19 +670,8 @@ def _memoised(answer: Callable[[GenerateRequest], Any]) -> Callable[[GenerateReq
 def _echo_factory(
     make_decode_result: Callable[..., DecodeResult],
 ) -> Callable[[GenerateRequest], DecodeResult]:
-    """Return the conforming decoder: the evidence a perfect decoder would report.
-
-    The payload is the requested payload byte for byte, the version is the oracle's for that
-    payload at the requested level, the mask and the grid are the artefact's own, and both
-    independent readings of the error-correction level are the level that was asked for.  A
-    check driven with it must pass, which is what makes the control round meaningful.
-
-    Args:
-        make_decode_result: The shared decoded-evidence factory from ``tests/conftest.py``,
-            which keeps the per-decoder digests consistent with the payload and the grid.
-
-    Returns:
-        A callable producing the conforming result for one request.
+    """Return the conforming decoder: the evidence a perfect decoder would report. A check driven
+    with it must pass, which is what makes the control round meaningful.
     """
 
     def echo(request: GenerateRequest) -> DecodeResult:
@@ -872,16 +726,9 @@ SymbolDefect = Callable[[GenerateRequest, GeneratedSymbol], GeneratedSymbol]
 
 def _replace(result: DecodeResult, **overrides: Any) -> DecodeResult:
     """Return `result` with `overrides` applied through the record's own constructor.
-
-    ``dataclasses.replace`` re-runs ``DecodeResult.__post_init__``, so a defect that changes the
-    grid and forgets the digest is refused rather than quietly recorded beside a stale digest.
-
-    Args:
-        result: The conforming decoded evidence.
-        **overrides: The fields the defect changes.
-
-    Returns:
-        The defective result.
+    ``dataclasses.replace`` re-runs ``DecodeResult.__post_init__``, so a defect that changes
+    the grid and forgets the digest is refused rather than quietly recorded beside a stale
+    digest.
     """
     return dataclasses.replace(result, **overrides)
 
@@ -902,21 +749,10 @@ def _other_level(ec_level: str) -> str:
 
 
 def _decode_defect(name: str) -> DecodeDefect:
-    """Return the decode defect registered under `name`, built fresh for one run.
-
-    Fresh per run because two of them are stateful -- the damaged-variant defect echoes the
-    first decode and reports nothing afterwards, which is what models a symbol that reads
-    before it is damaged -- and a module-level closure would carry a counter from one run into
-    the next.
-
-    Args:
-        name: One of the keys this function handles, as a round names it.
-
-    Returns:
-        The defect, applied to the conforming result and the request it was built for.
-
-    Raises:
-        KeyError: `name` is not a decode defect this module declares.
+    """Return the decode defect registered under `name`, built fresh for one run. Fresh per run
+    because two of them are stateful -- the damaged-variant defect echoes the first decode and
+    reports nothing afterwards, which is what models a symbol that reads before it is damaged
+    -- and a module-level closure would carry a counter from one run into the next.
     """
     if name == "payload-last-byte-changed":
         return lambda request, result: _replace(
@@ -970,17 +806,7 @@ def _decode_defect(name: str) -> DecodeDefect:
 
 
 def _symbol_defect(name: str) -> SymbolDefect:
-    """Return the artefact defect registered under `name`, built fresh for one run.
-
-    Args:
-        name: One of the keys this function handles, as a round names it.
-
-    Returns:
-        The defect, applied to the conforming artefact and the request it answers.
-
-    Raises:
-        KeyError: `name` is not an artefact defect this module declares.
-    """
+    """Return the artefact defect registered under `name`, built fresh for one run."""
 
     def short_quiet_zone(request: GenerateRequest, symbol: GeneratedSymbol) -> GeneratedSymbol:
         """Draw one module of margin, whatever zone the request asked for."""
@@ -1047,19 +873,7 @@ ADAPTER_SYMBOLS: Final[dict[str, Callable[[], GeneratedSymbol]]] = {
 
 
 def _responder(round_spec: NegativeRound) -> Callable[[GenerateRequest], GeneratedSymbol]:
-    """Return the stub target's behaviour for one round.
-
-    Args:
-        round_spec: The round being driven: it may name an error to raise, canned bytes to
-            return, or an artefact defect to apply to the conforming rendering.
-
-    Returns:
-        A callable answering one request the way that round's target does.
-
-    Raises:
-        BaseException: The configured adapter error, on every invocation, when the round names
-            one -- exactly as a target that refuses or breaks would.
-    """
+    """Return the stub target's behaviour for one round."""
     error_factory = ADAPTER_ERRORS.get(round_spec.adapter_error or "")
     symbol_factory = ADAPTER_SYMBOLS.get(round_spec.adapter_symbol or "")
     defect = None if round_spec.symbol_defect is None else _symbol_defect(round_spec.symbol_defect)
@@ -1097,11 +911,10 @@ _TAMPERED_VARIANT: Final[bytes] = b"qrcheck negative tampered variant"
 
 @contextlib.contextmanager
 def _leak_temp_entry(preparation: _Preparation) -> Iterator[None]:
-    """Leave one framework-prefixed entry in the temporary directory, then remove it.
-
-    The entry is created after ``CL-ARTIFACTS`` snapshotted the directory at enumeration and
-    before its case executes, which is the only window in which the check's own observation is
-    the thing under test rather than a sibling process's debris.
+    """Leave one framework-prefixed entry in the temporary directory, then remove it. The entry is
+    created after ``CL-ARTIFACTS`` snapshotted the directory at enumeration and before its case
+    executes, which is the only window in which the check's own observation is the thing under
+    test rather than a sibling process's debris.
     """
     del preparation
     leaked = Path(tempfile.gettempdir()) / _LEAK_NAME
@@ -1117,10 +930,9 @@ def _leak_temp_entry(preparation: _Preparation) -> Iterator[None]:
 
 @contextlib.contextmanager
 def _tamper_recorded_variant(preparation: _Preparation) -> Iterator[None]:
-    """Replace every variant the prerequisite round recorded with bytes no seed can derive.
-
-    The case identifiers of the prerequisite are ``corpus:<record-id>@<kind>`` (AAP §0.3.4), so
-    the record and the damage kind are read off the cases themselves: no damage-kind name is
+    """Replace every variant the prerequisite round recorded with bytes no seed can derive. The
+    case identifiers of the prerequisite are ``corpus:<record-id>@<kind>`` (AAP §0.3.4), so the
+    record and the damage kind are read off the cases themselves: no damage-kind name is
     transcribed here, and a kind added to the check is covered without a second list.
     """
     for case in preparation.prerequisite_cases:
@@ -1142,16 +954,7 @@ PREPARATIONS: Final[dict[str, Callable[[_Preparation], Iterator[None]]]] = {
 
 @dataclass(frozen=True, slots=True)
 class _Outcome:
-    """What one driven round produced.
-
-    Args:
-        round: The round that was driven.
-        results: One result per executed case, in the check's ascending case order.
-        case_objects: The cases themselves, for a preparation or a prerequisite to read.
-        invocations: How many times the stub target's ``generate`` was called.
-        config: The resolved configuration the round ran with, so a threshold assertion can
-            compare against what was actually configured rather than against a literal.
-    """
+    """What one driven round produced."""
 
     round: NegativeRound
     results: tuple[CaseResult, ...]
@@ -1181,21 +984,7 @@ class _CheckRun:
 
 @dataclass(frozen=True, slots=True)
 class _Harness:
-    """The fixtures one driven round needs, bundled so no helper takes six arguments.
-
-    Args:
-        config_factory: Builds a fully populated configuration in memory.
-        make_run_context: Builds the :class:`~qrcheck.registry.check.RunContext` a check sees.
-        patcher: The installed ``patch_decode`` patcher, which holds the constant result the
-            invalid-input probes are given and which has already replaced the decode entry in
-            every module that binds it.
-        monkeypatch: The fixture that owns this module's own decode stub, installed on top of
-            the patcher's so the result can depend on the request.
-        make_decode_result: The shared decoded-evidence factory.
-        counting_adapter: The counting stub's own class, taken from the fixture so this module
-            keeps no second copy of it.
-        corpus: The records every corpus-driven check is driven over.
-    """
+    """The fixtures one driven round needs, bundled so no helper takes six arguments."""
 
     config_factory: Callable[..., models.Config]
     make_run_context: Callable[..., RunContext]
@@ -1209,21 +998,11 @@ class _Harness:
 def _decode_stub(
     harness: _Harness, round_spec: NegativeRound
 ) -> Callable[..., DecodeResult]:
-    """Return the decode entry one round runs against.
-
-    The echo is the conforming answer -- the requested payload, the oracle's version, the
-    artefact's mask and grid, the requested level twice -- and a round's decode defect rewrites
-    exactly one of those facts.  The two invalid-input probes that return a symbol instead of a
-    rejection are given the constant *undetected* result the ``patch_decode`` patcher holds,
-    because an over-capacity payload has no symbol to describe: the probe's evidence records
-    that the primary decoder read nothing, which is the truth about that artefact.
-
-    Args:
-        harness: The fixtures the stub needs.
-        round_spec: The round being driven.
-
-    Returns:
-        A callable with the real entry's signature.
+    """Return the decode entry one round runs against. The two invalid-input probes that return a
+    symbol instead of a rejection are given the constant *undetected* result the
+    ``patch_decode`` patcher holds, because an over-capacity payload has no symbol to describe:
+    the probe's evidence records that the primary decoder read nothing, which is the truth
+    about that artefact.
     """
     echo = _echo_factory(harness.make_decode_result)
     defect = None if round_spec.decode_defect is None else _decode_defect(round_spec.decode_defect)
@@ -1260,20 +1039,7 @@ def _drive_round(
     *,
     prerequisite_cases: tuple[Case, ...] = (),
 ) -> _Outcome:
-    """Enumerate, prepare and execute one round of one check, then report what happened.
-
-    Args:
-        check_id: The check whose cases the round drives.
-        round_spec: What to inject and how many cases to execute.
-        harness: The fixtures the round needs.
-        prerequisite_cases: The cases a prerequisite round enumerated, empty when there is
-            none.  A non-empty value also means the damage memo must be left standing, which
-            is how ``DM-SEEDED`` sees the symbols ``DM-RESILIENCE`` encoded.
-
-    Returns:
-        The round's results, its case objects, the observed invocation count and the
-        configuration it ran with.
-    """
+    """Enumerate, prepare and execute one round of one check, then report what happened."""
     config = harness.config_factory(**dict(round_spec.config))
     adapter = harness.counting_adapter(responder=_responder(round_spec))
     ctx = harness.make_run_context(adapter=adapter, config=config, corpus=harness.corpus)
@@ -1309,19 +1075,9 @@ def _drive_round(
 
 
 def _execute_round(check_id: str, round_spec: NegativeRound, harness: _Harness) -> _Outcome:
-    """Drive one round, running the prerequisite round it names before it.
-
-    A prerequisite is another check's control, driven through the same harness so both rounds
-    see the same target and the same configuration.  No prerequisite names a prerequisite, so
-    the recursion is one level deep by construction rather than by a depth limit.
-
-    Args:
-        check_id: The check whose cases the round drives.
-        round_spec: The round to drive.
-        harness: The fixtures the round needs.
-
-    Returns:
-        The round's outcome.
+    """Drive one round, running the prerequisite round it names before it. No prerequisite names a
+    prerequisite, so the recursion is one level deep by construction rather than by a depth
+    limit.
     """
     prerequisite_cases: tuple[Case, ...] = ()
     if round_spec.prerequisite is not None:
@@ -1335,15 +1091,7 @@ def _execute_round(check_id: str, round_spec: NegativeRound, harness: _Harness) 
 
 
 def _drive(check_id: str, harness: _Harness) -> _CheckRun:
-    """Drive one check through its control and then through every one of its rounds.
-
-    Args:
-        check_id: The check to drive.
-        harness: The fixtures the rounds need.
-
-    Returns:
-        The control's outcome and every negative round's, in table order.
-    """
+    """Drive one check through its control and then through every one of its rounds."""
     spec = NEGATIVE_CASES[check_id]
     return _CheckRun(
         check_id=check_id,
@@ -1368,28 +1116,9 @@ def harness(
     counting_adapter: Any,
     committed_corpus: Sequence[Any],
 ) -> _Harness:
-    """Return the fixtures one driven round needs, over a two-record corpus.
-
-    The corpus is the first two committed records in ``id`` order, which one rule satisfies for
-    every corpus-driven check: both are ``boundary-alphanumeric`` records, so they are inside
-    ``MD-MODE-OPTIMAL``'s discriminating classes and inside ``MD-CHARSET``'s ``ascii``
-    coverage, and their 25- and 47-byte payloads are inside the 8-64-byte window
-    ``DM-RESILIENCE`` samples from.  Two records rather than one so a check that cycles a
-    request parameter over its sample is driven through more than the first choice.
-
-    Args:
-        config_factory: The in-memory configuration builder.
-        make_run_context: The run-context builder.
-        patch_decode: The installed decode patcher, whose constant result the invalid-input
-            probes are given and whose installation this module's own stub replaces.
-        monkeypatch: The patch owner for this module's request-aware decode stub.
-        make_decode_result: The shared decoded-evidence factory.
-        counting_adapter: The counting stub, from which this module takes the class it builds
-            one adapter per round with.
-        committed_corpus: The 240 committed records.
-
-    Returns:
-        The bundle every driver below takes.
+    """Return the fixtures one driven round needs, over a two-record corpus. Two records rather
+    than one so a check that cycles a request parameter over its sample is driven through more
+    than the first choice.
     """
     return _Harness(
         config_factory=config_factory,
@@ -1409,12 +1138,11 @@ def harness(
 
 
 def test_the_tables_cover_every_registered_check() -> None:
-    """Both tables name every registered check, and every round names something real.
-
-    This is the gate AAP §0.4.4 needs at the table level: a newly registered check cannot slip
-    in without a negative round, an identifier cannot be dropped from the registry without the
-    tables failing, and a round that misspells a defect is caught here rather than as a
-    ``KeyError`` in the middle of a drive.
+    """Both tables name every registered check, and every round names something real. This is the
+    gate AAP §0.4.4 needs at the table level: a newly registered check cannot slip in without a
+    negative round, an identifier cannot be dropped from the registry without the tables
+    failing, and a round that misspells a defect is caught here rather than as a ``KeyError``
+    in the middle of a drive.
     """
     assert REGISTERED == registered_ids(), (
         "loading the families must not change the registered set: "
@@ -1444,12 +1172,7 @@ def test_the_tables_cover_every_registered_check() -> None:
 
 
 def _assert_round_resolves(check_id: str, round_spec: NegativeRound) -> None:
-    """Assert one round is well formed and that every defect it names exists.
-
-    Args:
-        check_id: The check the round belongs to, quoted in every diagnostic.
-        round_spec: The round to check.
-    """
+    """Assert one round is well formed and that every defect it names exists."""
     where = f"{check_id} / {round_spec.label!r}"
     assert round_spec.label, f"{check_id}: a round needs a label"
     assert round_spec.case_limit >= 1, f"{where}: a round must execute at least one case"
@@ -1497,12 +1220,9 @@ def _assert_round_resolves(check_id: str, round_spec: NegativeRound) -> None:
 def test_every_negative_round_fails_with_the_reason_it_documents(
     check_id: str, harness: _Harness
 ) -> None:
-    """The check passes its control and fails each injected defect for that defect's reason.
-
-    The control is asserted first, because a negative round that fails proves nothing unless the
-    same harness, unchanged, makes the same check pass.  Then every round's every case is
-    asserted to carry the round's exact status and exact :class:`~qrcheck.report.model.Reason`,
-    so "it failed" is never enough and a check that fails for an unrelated reason is caught.
+    """The check passes its control and fails each injected defect for that defect's reason. The
+    control is asserted first, because a negative round that fails proves nothing unless the
+    same harness, unchanged, makes the same check pass.
     """
     run = _drive(check_id, harness)
     control = run.control
@@ -1537,12 +1257,11 @@ def test_every_negative_round_fails_with_the_reason_it_documents(
 
 @pytest.mark.parametrize("check_id", sorted(NEGATIVE_CASES), ids=lambda value: value)
 def test_adapter_invocations_match_the_declared_count(check_id: str, harness: _Harness) -> None:
-    """Every round invokes the target exactly as often as the contract declares.
-
-    Asserted as an equality rather than an upper bound: a retry -- the one thing a recorded
-    artefact cannot show, and the reason AAP §0.4.3 forbids one -- registers as the declared
-    count plus one and fails here, and a case that quietly skipped its encode registers as the
-    declared count minus one and fails here too.
+    """Every round invokes the target exactly as often as the contract declares. Asserted as an
+    equality rather than an upper bound: a retry -- the one thing a recorded artefact cannot
+    show, and the reason AAP §0.4.3 forbids one -- registers as the declared count plus one and
+    fails here, and a case that quietly skipped its encode registers as the declared count
+    minus one and fails here too.
     """
     run = _drive(check_id, harness)
     expected = EXPECTED_INVOCATIONS[check_id]
@@ -1560,15 +1279,12 @@ def test_adapter_invocations_match_the_declared_count(check_id: str, harness: _H
 def test_declared_invocations_match_the_family_tables(
     harness: _Harness, committed_corpus: Sequence[Any]
 ) -> None:
-    """At full scale every declared count equals the family module's own ``EXPECTED_ENCODES``.
-
-    The unit above is driven over a bounded prefix, so this is the other end of the same
-    contract: enumerate every check's cases over the whole committed corpus -- which executes
-    nothing, because a case is a closure until the runner calls it -- and check that
+    """At full scale every declared count equals the family module's own ``EXPECTED_ENCODES``. The
+    unit above is driven over a bounded prefix, so this is the other end of the same contract:
+    enumerate every check's cases over the whole committed corpus -- which executes nothing,
+    because a case is a closure until the runner calls it -- and check that
     :data:`EXPECTED_INVOCATIONS` evaluated at that full case count reproduces the number the
-    owning family module declares.  The two tables therefore cannot drift apart: a kind added to
-    the damage matrix, a sample size changed in a family, or a retry baked into one would each
-    break this test rather than silently rescale the counts.
+    owning family module declares.
     """
     family_counts: dict[str, int] = {}
     for family, module in FAMILY_MODULE_OBJECTS.items():
@@ -1601,15 +1317,12 @@ def test_declared_invocations_match_the_family_tables(
 
 
 def test_performance_results_copy_the_configured_thresholds(harness: _Harness) -> None:
-    """Both performance checks report the thresholds the configuration declares, and their samples.
-
-    The measured durations are recorded and never asserted -- a wall-clock reading in an
-    assertion would break AAP §0.5.5 -- so what is asserted is that the result carries the
+    """Both performance checks report the thresholds the configuration declares, and their
+    samples. The measured durations are recorded and never asserted -- a wall-clock reading in
+    an assertion would break AAP §0.5.5 -- so what is asserted is that the result carries the
     *configured* floor it was compared against, read from the configuration the round ran with
     rather than from any number written in this module, together with the sample count the
-    probe actually took.  The negative rounds use an unreachable floor, and their results must
-    still carry that same configured value, which is what makes the failure arithmetic rather
-    than a timing.
+    probe actually took.
     """
     expectations: dict[str, tuple[str, ...]] = {
         "PF-ENCODE": ("encode_p95_ms", "encode_samples", "min_symbols_per_minute", "warmup"),
@@ -1637,12 +1350,11 @@ def test_performance_results_copy_the_configured_thresholds(harness: _Harness) -
 
 
 def test_a_skipped_round_is_never_counted_as_a_pass(harness: _Harness) -> None:
-    """The one documented skip is tallied in ``skipped`` alone, leaving ``passed`` at zero.
-
-    AAP §0.3.4 makes a skipped result a real outcome rather than a flavoured pass, and the
-    four-integer :class:`~qrcheck.report.model.Counts` is what holds that: the missing-rasterizer
-    round contributes to ``skipped`` and to nothing else, so a run that skipped a check can
-    never look green because of it.
+    """The one documented skip is tallied in ``skipped`` alone, leaving ``passed`` at zero. AAP
+    §0.3.4 makes a skipped result a real outcome rather than a flavoured pass, and the
+    four-integer :class:`~qrcheck.report.model.Counts` is what holds that: the
+    missing-rasterizer round contributes to ``skipped`` and to nothing else, so a run that
+    skipped a check can never look green because of it.
     """
     run = _drive("RN-SVG", harness)
     skipped = [outcome for outcome in run.rounds if outcome.round.status is Status.SKIPPED]

@@ -1,38 +1,21 @@
 """Determinism proofs for ``qrcheck/config/seeding.py``, the only seed-derivation point.
 
-``derive_seed`` turns a run seed into the seed of one draw -- a corpus payload, an
-occluder placement, an additive-noise pattern, a logo bitmap. Two properties make a
-run reproducible from the ``seed`` its report records, and this module pins both:
+``derive_seed`` turns a run seed into the seed of one draw -- a corpus payload, an occluder
+placement, an additive-noise pattern, a logo bitmap -- and two properties make a run reproducible
+from the ``seed`` its report records: the derivation is a stated formula, recomputed here from
+:func:`hashlib.sha256` over the same ``"|"``-joined, UTF-8-encoded parts, so a change to it fails
+here instead of silently re-seeding every derived draw; and it reads no ambient process state,
+returning the same values under two different ``PYTHONHASHSEED`` values, while no module under
+``qrcheck/`` reaches for ``random``, ``hash()``, ``id()``, ``os.urandom`` or the wall clock.
 
-* **the derivation is a stated formula, not a magic number.** It is recomputed here
-  from :func:`hashlib.sha256` over the same ``"|"``-joined, UTF-8-encoded parts, so a
-  change to the formula fails here instead of silently re-seeding every derived draw
-  of the product;
-* **the derivation reads no ambient process state.** It returns the same values
-  under two different ``PYTHONHASHSEED`` values, and no module under ``qrcheck/``
-  reaches for ``random``, ``hash()``, ``id()``, ``os.urandom`` or the wall clock.
-
-The definition pinned here, quoted from ``qrcheck/config/seeding.py``::
-
-    joined = "|".join(str(part) for part in (run_seed, *parts))
-    seed = int.from_bytes(hashlib.sha256(joined.encode("utf-8")).digest()[:8], "big")
-
-Two properties of that definition are asserted rather than assumed:
-
-* an integer part and its decimal string derive the same seed, because every part is
-  stringified with ``str()`` inside the function;
-* the parts are joined without escaping, so ``("a", "b")`` and ``("a|b")`` collide.
-  That is a documented limitation, not a defect: the product's call sites pass
-  identifiers (check IDs, ``corpus:<record-id>`` case IDs, class names, damage-kind
-  tokens, ``"logo"``) that cannot contain ``"|"``, and escaping would change every
-  derived seed and therefore every committed ``damage-<kind>-<seed>.png`` name.
-
-Every value lies in ``0 <= seed < 2**64``, the range ``numpy.random.PCG64`` accepts
-directly and the only entropy path the product allows.
-
-Nothing here reads a threshold from ``qrcheck.toml``, nothing is skipped, retried or
-marked, and every collection is iterated in sorted order so two runs of this module
-report identically.
+Two properties of the definition are asserted rather than assumed: an integer part and its decimal
+string derive the same seed, because every part is stringified with ``str()`` inside the function;
+and the parts are joined without escaping, so ``("a", "b")`` and ``("a|b")`` collide -- a
+documented limitation rather than a defect, because the product's call sites pass identifiers
+(check IDs, ``corpus:<record-id>`` case IDs, class names, damage-kind tokens, ``"logo"``) that
+cannot contain ``"|"``, and escaping would change every derived seed and therefore every committed
+``damage-<kind>-<seed>.png`` name. Every value lies in ``0 <= seed < 2**64``, the range
+``numpy.random.PCG64`` accepts directly.
 """
 
 import ast
@@ -116,11 +99,9 @@ _HASH_SEEDS: tuple[str, ...] = ("0", "12345")
 
 
 def reference_seed(run_seed: int, *parts: str | int) -> int:
-    """Recompute the documented derivation independently of the module under test.
-
-    The expectation is the definition written out again, never a value copied from a
-    run: a formula change has to be a deliberate change in two places, which is the
-    whole point of pinning it.
+    """Recompute the documented derivation independently of the module under test. The expectation
+    is the definition written out again, never a value copied from a run: a formula change has
+    to be a deliberate change in two places, which is the whole point of pinning it.
     """
     joined = "|".join(str(part) for part in (run_seed, *parts))
     return int.from_bytes(hashlib.sha256(joined.encode("utf-8")).digest()[:8], "big")
@@ -152,12 +133,9 @@ def _expected_value() -> list[int]:
 
 
 def _subprocess_source() -> str:
-    """Build the probe payload: the definition table in, derived seeds out.
-
-    The table is embedded with ``!a`` -- an ASCII-only ``repr`` -- so the payload
-    survives an ``argv`` entry whatever characters a part holds. The payload imports
-    ``json`` and ``qrcheck.config.seeding`` and nothing else, so the assertion cannot
-    be satisfied by an accident of import order in a larger program.
+    """Build the probe payload: the definition table in, derived seeds out. The table is embedded
+    with ``!a`` -- an ASCII-only ``repr`` -- so the payload survives an ``argv`` entry whatever
+    characters a part holds.
     """
     return (
         "import json\n"
@@ -233,11 +211,8 @@ def test_one_perturbation_changes_the_derived_seed(
 
 
 def test_appending_an_empty_part_is_a_distinct_namespace() -> None:
-    """An empty trailing part is a part: the join keeps its separator.
-
-    ``(1,)`` joins to ``"1"`` while ``(1, "")`` joins to ``"1|"``, so the two
-    namespaces differ and so do their seeds. Stated against the recomputed
-    definition rather than guessed from behaviour.
+    """An empty trailing part is a part: the join keeps its separator. ``(1,)`` joins to ``"1"``
+    while ``(1, "")`` joins to ``"1|"``, so the two namespaces differ and so do their seeds.
     """
     assert derive_seed(1) == reference_seed(1)
     assert derive_seed(1, "") == reference_seed(1, "")
@@ -246,13 +221,10 @@ def test_appending_an_empty_part_is_a_distinct_namespace() -> None:
 
 
 def test_the_documented_join_collision_is_preserved() -> None:
-    """Parts are joined unescaped, so an embedded separator collides with a boundary.
-
-    This is the limitation ``qrcheck/config/seeding.py`` documents: ``("a", "b")``
-    and ``("a|b")`` produce the same joined text and therefore the same seed. The
-    product promises nothing stronger, and escaping would change every derived seed
-    and every committed ``damage-<kind>-<seed>.png`` name, so the behaviour is
-    pinned as documented instead of being asserted away.
+    """Parts are joined unescaped, so an embedded separator collides with a boundary. The product
+    promises nothing stronger, and escaping would change every derived seed and every committed
+    ``damage-<kind>-<seed>.png`` name, so the behaviour is pinned as documented instead of
+    being asserted away.
     """
     assert derive_seed(1, "a", "b") == derive_seed(1, "a|b")
     assert derive_seed(1, "a|b") == reference_seed(1, "a|b")
@@ -263,9 +235,8 @@ def test_an_integer_part_and_its_decimal_string_derive_the_same_seed(
     case: tuple[int, str, int],
 ) -> None:
     """``str()`` inside the derivation makes an int part and its text equivalent.
-
-    ``qrcheck/corpus/payloads.py`` passes a corpus record index as an ``int`` while
-    the other call sites pass tokens, so the two shapes must not diverge.
+    ``qrcheck/corpus/payloads.py`` passes a corpus record index as an ``int`` while the other
+    call sites pass tokens, so the two shapes must not diverge.
     """
     run_seed, word, index = case
     assert derive_seed(run_seed, word, index) == derive_seed(run_seed, word, str(index))
@@ -282,10 +253,9 @@ def test_a_derived_seed_is_usable_as_a_part() -> None:
 
 def test_every_derived_seed_is_a_legal_pcg64_seed() -> None:
     """Every value lies in ``0 <= seed < 2**64``, the range ``PCG64`` accepts.
-
     ``numpy.random.PCG64`` rejects a negative or oversized seed, and
-    ``Generator(PCG64(derive_seed(...)))`` is the only entropy path the product
-    allows, so an out-of-range value would break every seeded draw downstream.
+    ``Generator(PCG64(derive_seed(...)))`` is the only entropy path the product allows, so an
+    out-of-range value would break every seeded draw downstream.
     """
     values = sorted(_expected_value())
     assert values, "the definition table is empty"
@@ -479,12 +449,10 @@ def _root_and_chain(node: ast.AST) -> tuple[str | None, tuple[str, ...]]:
 
 
 def _alias_maps(tree: ast.AST) -> tuple[dict[str, str], dict[str, str]]:
-    """Map bound names to the inspected module, or to a direct import's canonical name.
-
-    Aliasing is honoured because ``import time as clock`` followed by
-    ``clock.time()`` is the same wall-clock read as ``time.time()``, and a scan that
-    knew only the canonical module names would miss it. The module map also carries
-    each canonical name, so an unaliased reference resolves without an import.
+    """Map bound names to the inspected module, or to a direct import's canonical name. Aliasing
+    is honoured because ``import time as clock`` followed by ``clock.time()`` is the same
+    wall-clock read as ``time.time()``, and a scan that knew only the canonical module names
+    would miss it.
     """
     modules: dict[str, str] = {module: module for module in sorted(_INSPECTED_MODULES)}
     attributes: dict[str, str] = {}

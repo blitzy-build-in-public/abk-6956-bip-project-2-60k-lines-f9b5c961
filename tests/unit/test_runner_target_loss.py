@@ -1,62 +1,34 @@
 """The run-level target-loss policy: one error result per affected check, never per case.
 
-AAP §0.3.4 fixes what a consumer reports when a target is unreachable or times out --
-"``error`` result, ``case_id`` ``synthetic:target``, message naming the transport
-failure; one such result per affected check, not per corpus record" -- and §0.6.6 row 6
-names this module as the gate that holds it.  The defect it exists to prevent is
-quadratic noise: ``RT-ROUNDTRIP`` alone has one case per corpus record, so a policy
-applied per case would turn one dead target into two hundred and forty identical errors
-that bury the real signal and inflate ``counts.error`` to a number no reader can
-attribute.
+AAP §0.3.4 fixes what a consumer reports when a target is unreachable or times out -- "``error``
+result, ``case_id`` ``synthetic:target``, message naming the transport failure; one such result per
+affected check, not per corpus record" -- and §0.6.6 row 6 names this module as that gate. The
+defect it exists to prevent is quadratic noise: ``RT-ROUNDTRIP`` alone has one case per corpus
+record, so a policy applied per case would turn one dead target into two hundred and forty
+identical errors that inflate ``counts.error`` to a number no reader can attribute.
 
-Five properties are pinned, and each one is load-bearing:
+Five properties are pinned: **exactly one error per affected check**, asserted as a count computed
+from the selection's own capability requirements rather than typed; **the diagnostic names the
+cause** -- the transport failure the adapter raised, or the ``timeout_s`` the resolved
+configuration declares, read from :class:`~qrcheck.config.models.Config` rather than from a
+literal; **the run continues**, with the set of check identifiers present equal to the selected
+set, ``CL-ARTIFACTS`` and ``PF-DECODE`` still passing because they need no target, and
+``--fail-fast`` asserted as the one policy that stops launching further checks while still
+returning a complete model; **the exit code becomes 3** through
+:func:`qrcheck.cli.exit.exit_code_for`, the single owner of that vocabulary, whose precedence truth
+table is asserted beside it; and **``TargetRejected`` keeps per-case granularity**, because a
+declared rejection is a legitimate answer to one request rather than a lost target -- every corpus
+case becomes its own ``target_rejected`` failure, ``counts.error`` stays at zero and the exit code
+is 1. Asserting both policies in one module is what keeps a future refactor from merging them.
 
-* **exactly one error per affected check.**  Asserted as a count computed from the
-  selection's own capability requirements, never typed: every selected check that
-  declares a capability gets one ``synthetic:target`` error, and no other check gets any.
-  A run that produced one error per case fails here with the 240-style count;
-* **the diagnostic names the cause.**  ``TargetUnavailable`` records the transport
-  failure the adapter raised; ``TargetTimeout`` records the ``timeout_s`` the resolved
-  configuration declares for that target, read from :class:`~qrcheck.config.models.Config`
-  rather than from a literal;
-* **the run continues.**  The set of check identifiers present equals the selected set,
-  ``CL-ARTIFACTS`` and ``PF-DECODE`` still pass, and neither needs the target (their
-  frozen encode counts are zero), so the report describes what was measurable rather than
-  only what broke.  ``--fail-fast`` is asserted as the one policy that *does* stop
-  launching further checks, and even then the model it returns is complete and
-  self-consistent;
-* **the exit code becomes 3.**  Through :func:`qrcheck.cli.exit.exit_code_for`, the single
-  owner of the exit-code vocabulary: an ``error`` result outranks a ``failed`` one after
-  execution, so a run where nothing "failed" still reports an internal condition.  The
-  precedence truth table over the four tallies is asserted beside it;
-* **``TargetRejected`` keeps per-case granularity.**  A declared rejection is a
-  legitimate answer to one request, not a lost target, so every corpus case becomes its
-  own ``target_rejected`` failure, ``counts.error`` stays at zero and the exit code is 1.
-  Asserting both policies in one module is what keeps a future refactor from merging
-  them.
-
-Determinism, and why no threshold appears here
-----------------------------------------------
-Every run is driven by a protocol-conforming stub adapter and a stubbed decode seam, so
-no decoder version, no PNG bytes and no clock influence an assertion.  The only clock
-readings that reach the results are the ``duration_ms`` values the model requires, and
-none of them is compared.  The performance sample counts are lowered to their schema
-minimum and the warm-up to the schema minimum (zero) so that ``PF-DECODE``'s case costs
-milliseconds instead of running two hundred decodes of a five-hundred-pixel image; the
-minima are read out of :data:`qrcheck.config.schema.SCHEMA`'s own rule rather than
-restated, and no performance floor, timeout or sample count is written as a literal
-anywhere in this file (AAP §0.4.3, §0.12).
-
-What this module deliberately does not do
------------------------------------------
-It re-implements neither policy.  ``qrcheck.runner`` owns them and
-``qrcheck.checks.support`` propagates ``TargetUnavailable`` and ``TargetTimeout`` upward
-on purpose, so a check that swallowed either would surface here as a missing error rather
-than as a passing case.  It decides no exit code itself, reads no file from
-``qrcheck.toml``, starts no process, opens no socket (the autouse ``no_outbound_network``
-guard in ``tests/conftest.py`` makes that a loud failure) and marks nothing skipped,
-``xfail``ed or retried: a retry would surface as one more recorded invocation than the
-policy allows, which is asserted directly.
+Every run is driven by a protocol-conforming stub adapter and a stubbed decode seam, so no decoder
+version, no PNG bytes and no clock influence an assertion, and the performance sample counts and
+warm-up are lowered to their schema minima -- read from :data:`qrcheck.config.schema.SCHEMA`, never
+restated -- so ``PF-DECODE`` costs milliseconds instead of two hundred decodes of a
+five-hundred-pixel image. The module re-implements neither policy: ``qrcheck.runner`` owns them and
+``qrcheck.checks.support`` propagates ``TargetUnavailable`` and ``TargetTimeout`` upward on
+purpose, so a check that swallowed either would surface here as a missing error rather than as a
+passing case.
 """
 
 from __future__ import annotations
@@ -167,25 +139,11 @@ MINIMUM_SCAN_LIMIT: Final[int] = 1_000
 
 
 def schema_minimum(group: str, key: str) -> int:
-    """Return the smallest integer value the configuration schema accepts for a key.
-
-    The schema declares its lower bounds inside the validator closures
-    :func:`qrcheck.config.schema._check_minimum` builds and exposes no accessor for them,
-    so the minimum is *read* by offering the rule its own candidates in ascending order
-    and taking the first one it accepts.  That keeps the sample counts this module runs
-    with anchored to the schema instead of to a copy of the number (AAP §0.4.3: a threshold
-    lives in exactly one place).
-
-    Args:
-        group: The schema group path, ``checks.performance`` for the keys read here.
-        key: The key within that group.
-
-    Returns:
-        The smallest accepted non-negative integer.
-
-    Raises:
-        AssertionError: No candidate below :data:`MINIMUM_SCAN_LIMIT` is accepted, which
-            would mean the key's rule is not a lower bound this helper can read.
+    """Return the smallest integer value the configuration schema accepts for a key. The schema
+    declares its lower bounds inside the validator closures
+    :func:`qrcheck.config.schema._check_minimum` builds and exposes no accessor for them, so
+    the minimum is *read* by offering the rule its own candidates in ascending order and taking
+    the first one it accepts.
     """
     spec = schema.SCHEMA[group][key]
     for candidate in range(MINIMUM_SCAN_LIMIT):
@@ -198,19 +156,8 @@ def schema_minimum(group: str, key: str) -> int:
 
 
 def fast_performance_limits(limits: models.PerformanceLimits) -> models.PerformanceLimits:
-    """Return the performance table with every count at its schema minimum.
-
-    Only the three *sizes* move: the warm-up, the decode sample count and the probe image
-    side.  The latency and throughput floors are untouched, because they are what
-    ``PF-DECODE`` copies into ``expected`` and asserts, and a test that retuned them would
-    stop proving the check reads the configured value.
-
-    Args:
-        limits: The resolved performance table to derive from.
-
-    Returns:
-        A copy whose sample counts and probe size are the smallest the schema permits, so
-        a ``PF-DECODE`` case costs a few milliseconds with the decode seam stubbed.
+    """Return the performance table with every count at its schema minimum. Only the three *sizes*
+    move: the warm-up, the decode sample count and the probe image side.
     """
     return dataclasses.replace(
         limits,
@@ -222,17 +169,10 @@ def fast_performance_limits(limits: models.PerformanceLimits) -> models.Performa
 
 @pytest.fixture
 def fast_config(config_factory: Callable[..., models.Config]) -> models.Config:
-    """Return a resolved configuration whose performance counts are at their minimum.
-
-    Built through the shared ``config_factory`` fixture, so ``report_dir``, the corpus
-    path, the seed and every other table are the suite's normal records; only the
-    ``[checks.performance]`` counts are lowered.
-
-    Args:
-        config_factory: The suite's in-memory configuration factory.
-
-    Returns:
-        The configuration every run in this module uses.
+    """Return a resolved configuration whose performance counts are at their minimum. Built
+    through the shared ``config_factory`` fixture, so ``report_dir``, the corpus path, the seed
+    and every other table are the suite's normal records; only the ``[checks.performance]``
+    counts are lowered.
     """
     return config_factory(performance=fast_performance_limits(config_factory().performance))
 
@@ -244,15 +184,10 @@ def fast_config(config_factory: Callable[..., models.Config]) -> models.Config:
 
 @pytest.fixture
 def registry() -> Mapping[str, CheckContract]:
-    """Return the populated check registry, loading the family modules first.
-
-    The runner calls :func:`qrcheck.checks.load_families` itself, but this module reads the
-    registry *before* a run to derive how many checks the target's loss can affect, so the
-    families have to be imported here.  The loader is idempotent by contract: it re-binds
-    the modules Python already holds rather than registering a second set.
-
-    Returns:
-        The read-only registry, keyed by check identifier.
+    """Return the populated check registry, loading the family modules first. The runner calls
+    :func:`qrcheck.checks.load_families` itself, but this module reads the registry *before* a
+    run to derive how many checks the target's loss can affect, so the families have to be
+    imported here.
     """
     load_families()
     return REGISTRY
@@ -261,42 +196,20 @@ def registry() -> Mapping[str, CheckContract]:
 def selected_contracts(
     registry: Mapping[str, CheckContract], selection: Selection
 ) -> tuple[CheckContract, ...]:
-    """Return the contracts a selection resolves to, in identifier order.
-
-    Args:
-        registry: The populated registry.
-        selection: The selection the run will receive.
-
-    Returns:
-        The selected contracts, ascending by identifier -- the order the runner walks.
-    """
+    """Return the contracts a selection resolves to, in identifier order."""
     return tuple(select(registry, selection.checks))
 
 
 def target_dependent_ids(contracts: Sequence[CheckContract]) -> tuple[str, ...]:
-    """Return the identifiers of the contracts that require a capability of the target.
-
-    A contract with a non-empty ``requires`` set cannot run against a target that is gone,
-    which is exactly the set AAP §0.6.6 row 6 says receives one error result each.
-
-    Args:
-        contracts: The selected contracts.
-
-    Returns:
-        The identifiers, ascending.
+    """Return the identifiers of the contracts that require a capability of the target. A contract
+    with a non-empty ``requires`` set cannot run against a target that is gone, which is
+    exactly the set AAP §0.6.6 row 6 says receives one error result each.
     """
     return tuple(sorted(contract.id for contract in contracts if contract.requires))
 
 
 def target_independent_ids(contracts: Sequence[CheckContract]) -> tuple[str, ...]:
-    """Return the identifiers of the contracts that need nothing from the target.
-
-    Args:
-        contracts: The selected contracts.
-
-    Returns:
-        The identifiers, ascending.
-    """
+    """Return the identifiers of the contracts that need nothing from the target."""
     return tuple(sorted(contract.id for contract in contracts if not contract.requires))
 
 
@@ -306,27 +219,12 @@ def target_independent_ids(contracts: Sequence[CheckContract]) -> tuple[str, ...
 
 
 def results_for(run_result: RunResult, check_id: str) -> tuple[CaseResult, ...]:
-    """Return every result the run filed under `check_id`, in case-identifier order.
-
-    Args:
-        run_result: The finished run.
-        check_id: The check whose results are wanted.
-
-    Returns:
-        The matching results; empty when the check contributed none.
-    """
+    """Return every result the run filed under `check_id`, in case-identifier order."""
     return tuple(result for result in run_result.results if result.check_id == check_id)
 
 
 def error_results(run_result: RunResult) -> tuple[CaseResult, ...]:
-    """Return every ``error`` result of a run, in ``(check_id, case_id)`` order.
-
-    Args:
-        run_result: The finished run.
-
-    Returns:
-        The ``error`` results; empty when the run contained none.
-    """
+    """Return every ``error`` result of a run, in ``(check_id, case_id)`` order."""
     return tuple(result for result in run_result.results if result.status is Status.ERROR)
 
 
@@ -334,16 +232,10 @@ def assert_one_target_loss_result_per_affected_check(
     run_result: RunResult,
     contracts: Sequence[CheckContract],
 ) -> None:
-    """Assert the run's target-loss results are one per affected check and nothing else.
-
-    The count is derived from the selection's own capability requirements, so it can never
-    drift from what the registry says: a policy that filed one error per case would report
-    hundreds here, and a policy that dropped the affected checks entirely would report
-    none.
-
-    Args:
-        run_result: The finished run.
-        contracts: The selected contracts, as the registry resolved them.
+    """Assert the run's target-loss results are one per affected check and nothing else. The count
+    is derived from the selection's own capability requirements, so it can never drift from
+    what the registry says: a policy that filed one error per case would report hundreds here,
+    and a policy that dropped the affected checks entirely would report none.
     """
     affected = target_dependent_ids(contracts)
     losses = error_results(run_result)
@@ -368,33 +260,16 @@ def assert_counts(
     skipped: int,
     error: int,
 ) -> None:
-    """Assert the run's four tallies exactly, and that they agree with its results.
-
-    Args:
-        run_result: The finished run.
-        passed: Expected number of ``passed`` results.
-        failed: Expected number of ``failed`` results.
-        skipped: Expected number of ``skipped`` results.
-        error: Expected number of ``error`` results.
-    """
+    """Assert the run's four tallies exactly, and that they agree with its results."""
     expected = Counts(passed=passed, failed=failed, skipped=skipped, error=error)
     assert run_result.counts == expected
     assert Counts.from_results(run_result.results) == expected
 
 
 def assert_summary_schema_complete(run_result: RunResult) -> dict[str, Any]:
-    """Assert the run projects to a complete ``summary.json`` body and return it.
-
-    AAP §0.3.4 fixes the shape a consumer may rely on: nine top-level keys, four integer
-    tallies, and one entry per produced result carrying its ten fields.  A target-loss run
-    must still satisfy it -- the whole point of returning a model instead of raising is that
-    CI receives a consumable report.
-
-    Args:
-        run_result: The finished run.
-
-    Returns:
-        The projection, so a caller can assert on individual values without re-deriving it.
+    """Assert the run projects to a complete ``summary.json`` body and return it. A target-loss
+    run must still satisfy it -- the whole point of returning a model instead of raising is
+    that CI receives a consumable report.
     """
     summary = run_result.as_dict()
     assert sorted(summary) == sorted(SUMMARY_FIELDS)
@@ -422,21 +297,9 @@ def echo_decode(
     make_decode_result: Callable[..., Any],
 ) -> None:
     """Stub the decode entry so that each decode reports the payload it was asked for.
-
     ``PF-DECODE`` draws its own probe image and then asserts that the first decode of it
-    returns the payload the image was drawn from (AAP §0.8.1), so a fixed canned result
-    would fail that case for a reason that has nothing to do with this module.  The stub
-    therefore echoes ``request.payload`` while still logging every call through the suite's
-    ``patch_decode`` patcher, which is what lets a test prove no real decoder ran.
-
-    The patch targets ``qrcheck.decode.decode_symbol``: the binding
-    :func:`qrcheck.checks.support.decode` imports inside its own call, so the check layer
-    resolves the stub without this module reaching into any check family.
-
-    Args:
-        monkeypatch: The fixture that owns the patch's lifetime.
-        patcher: The suite's ``patch_decode`` fixture, used as the call log.
-        make_decode_result: The suite's decoded-result factory.
+    returns the payload the image was drawn from (AAP §0.8.1), so a fixed canned result would
+    fail that case for a reason that has nothing to do with this module.
     """
 
     def stub(
@@ -463,19 +326,9 @@ def case_result(
     status: Status,
     reason: Reason,
 ) -> CaseResult:
-    """Return one result of `status` with a distinct identity, for a hand-built run.
-
-    The identity pair ``(check_id, case_id)`` must be unique within a
+    """Return one result of `status` with a distinct identity, for a hand-built run. The identity
+    pair ``(check_id, case_id)`` must be unique within a
     :class:`~qrcheck.report.model.RunResult`, so the index participates in both halves.
-
-    Args:
-        make_case_result: The suite's result factory.
-        index: A zero-based index that keeps the identity unique.
-        status: The status the result carries.
-        reason: The reason the status requires.
-
-    Returns:
-        The constructed result.
     """
     return make_case_result(
         check_id="RT-ROUNDTRIP",
@@ -494,21 +347,10 @@ def run_with_tallies(
     skipped: int,
 ) -> RunResult:
     """Return a run whose tallies are exactly the requested counts.
-
     :class:`~qrcheck.report.model.RunResult` recomputes its tallies from its results and
     refuses a record whose counts disagree, so results are the only way to state a tally --
     which is why the exit-code table is asserted over real records rather than over a
     hand-filled :class:`~qrcheck.report.model.Counts`.
-
-    Args:
-        make_case_result: The suite's result factory.
-        make_run_result: The suite's run factory.
-        failed: Number of ``failed`` results to include.
-        error: Number of ``error`` results to include.
-        skipped: Number of ``skipped`` results to include.
-
-    Returns:
-        The constructed run.
     """
     results = [
         case_result(make_case_result, index, Status.FAILED, Reason.VALUE_MISMATCH)
@@ -543,12 +385,11 @@ def test_an_unreachable_target_files_one_error_per_affected_check(
     make_decode_result: Callable[..., Any],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A dead target yields one ``synthetic:target`` error per check, never one per case.
-
-    The selection carries two checks that require ``png`` and two that require nothing, so
-    the expected tallies are read from the registry rather than typed: a policy applied per
-    case would file one error per corpus record per check and fail the count here, and a
-    policy that dropped the affected checks would fail it from the other side.
+    """A dead target yields one ``synthetic:target`` error per check, never one per case. The
+    selection carries two checks that require ``png`` and two that require nothing, so the
+    expected tallies are read from the registry rather than typed: a policy applied per case
+    would file one error per corpus record per check and fail the count here, and a policy that
+    dropped the affected checks would fail it from the other side.
     """
     echo_decode(monkeypatch, patch_decode, make_decode_result)
     selection = Selection(checks=LOSS_SELECTION)
@@ -594,11 +435,10 @@ def test_a_timed_out_target_files_one_error_per_affected_check_naming_the_timeou
     registry: Mapping[str, CheckContract],
     error_adapter: Callable[..., Any],
 ) -> None:
-    """A timeout is reported the same way, and its evidence names the configured timeout.
-
-    The value asserted is the one the resolved :class:`~qrcheck.config.models.Config`
-    declares for the target the adapter reports, not a number written here, so retuning
-    ``timeout_s`` in the configuration cannot leave this assertion behind.
+    """A timeout is reported the same way, and its evidence names the configured timeout. The
+    value asserted is the one the resolved :class:`~qrcheck.config.models.Config` declares for
+    the target the adapter reports, not a number written here, so retuning ``timeout_s`` in the
+    configuration cannot leave this assertion behind.
     """
     selection = Selection(checks=MINIMAL_LOSS_SELECTION)
     contracts = selected_contracts(registry, selection)
@@ -643,12 +483,11 @@ def test_the_run_continues_to_the_checks_that_need_no_target(
     make_decode_result: Callable[..., Any],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The first case loses the target; every later check is still decided and reported.
-
-    The counting stub records every invocation, so one recorded call proves all three
-    halves of the policy at once: the check that met the loss was invoked exactly once and
-    not retried, the two target-independent checks invoked the target zero times, and the
-    check that sorts after the loss never reached the adapter at all.
+    """The first case loses the target; every later check is still decided and reported. The
+    counting stub records every invocation, so one recorded call proves all three halves of the
+    policy at once: the check that met the loss was invoked exactly once and not retried, the
+    two target-independent checks invoked the target zero times, and the check that sorts after
+    the loss never reached the adapter at all.
     """
     echo_decode(monkeypatch, patch_decode, make_decode_result)
     selection = Selection(checks=LOSS_SELECTION)
@@ -687,13 +526,10 @@ def test_the_target_independent_checks_pass_with_zero_encode_invocations(
     make_decode_result: Callable[..., Any],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """``CL-ARTIFACTS`` and ``PF-DECODE`` need nothing of the target, which is the point.
-
-    This is the property that makes the two of them usable as witnesses under target loss:
-    if either ever needed the target, a run whose target was lost would have no independent
-    check left to prove it continued.  ``PF-DECODE`` also proves it reads the configured
-    floors rather than a measurement: its ``expected`` carries the configuration's values
-    and its ``decoded.metrics`` carries the measured ones.
+    """``CL-ARTIFACTS`` and ``PF-DECODE`` need nothing of the target, which is the point. This is
+    the property that makes the two of them usable as witnesses under target loss: if either
+    ever needed the target, a run whose target was lost would have no independent check left to
+    prove it continued.
     """
     echo_decode(monkeypatch, patch_decode, make_decode_result)
     selection = Selection(checks=WITNESS_SELECTION)
@@ -746,11 +582,10 @@ def test_a_target_loss_run_writes_a_schema_complete_report(
     make_decode_result: Callable[..., Any],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The run returns a model and the three writers serialise it, despite the loss.
-
-    The alternative -- raising out of the run so nothing is written -- is what this
-    assertion rules out: a CI consumer must still receive a schema-complete summary, a
-    JUnit document with one testcase per result, and a page that needs no network.
+    """The run returns a model and the three writers serialise it, despite the loss. The
+    alternative -- raising out of the run so nothing is written -- is what this assertion rules
+    out: a CI consumer must still receive a schema-complete summary, a JUnit document with one
+    testcase per result, and a page that needs no network.
     """
     echo_decode(monkeypatch, patch_decode, make_decode_result)
     selection = Selection(checks=LOSS_SELECTION)
@@ -828,10 +663,9 @@ def test_the_exit_code_reads_error_before_failed_before_ok(
     skipped: int,
     expected_code: int,
 ) -> None:
-    """The documented precedence, over the four tallies, with skips never deciding anything.
-
-    Exit code 2 is deliberately absent: it is decided before a run exists, so no run result
-    can imply it.
+    """The documented precedence, over the four tallies, with skips never deciding anything. Exit
+    code 2 is deliberately absent: it is decided before a run exists, so no run result can
+    imply it.
     """
     run_result = run_with_tallies(
         make_case_result, make_run_result, failed=failed, error=error, skipped=skipped
@@ -850,11 +684,10 @@ def test_a_declared_rejection_stays_per_case_and_never_becomes_a_lost_target(
     error_adapter: Callable[..., Any],
     committed_corpus: Sequence[Any],
 ) -> None:
-    """A rejection answers one request, so every case keeps its own failure and its text.
-
-    This is the assertion that keeps the two policies apart: folding a rejection into the
-    run-level path would collapse a corpus of failures into one error result, and lifting a
-    lost target into per-case failures would produce the 240-fold noise instead.
+    """A rejection answers one request, so every case keeps its own failure and its text. This is
+    the assertion that keeps the two policies apart: folding a rejection into the run-level
+    path would collapse a corpus of failures into one error result, and lifting a lost target
+    into per-case failures would produce the 240-fold noise instead.
     """
     selection = Selection(checks=SINGLE_CHECK_SELECTION, class_globs=(REJECTION_CLASS,))
     contracts = selected_contracts(registry, selection)
@@ -904,11 +737,10 @@ def test_the_case_that_loses_the_target_is_invoked_exactly_once(
     registry: Mapping[str, CheckContract],
     error_adapter: Callable[..., Any],
 ) -> None:
-    """One loss, one attempt: a retry would register as a second invocation of that case.
-
-    The selected check has one case per corpus record, so a retrying runner would keep
-    hammering the same dead target and the recorded invocation count would exceed the
-    number of loss results it produced.
+    """One loss, one attempt: a retry would register as a second invocation of that case. The
+    selected check has one case per corpus record, so a retrying runner would keep hammering
+    the same dead target and the recorded invocation count would exceed the number of loss
+    results it produced.
     """
     selection = Selection(checks=SINGLE_CHECK_SELECTION)
     contracts = selected_contracts(registry, selection)
@@ -936,12 +768,10 @@ def test_fail_fast_stops_launching_checks_and_still_returns_a_complete_model(
     registry: Mapping[str, CheckContract],
     error_adapter: Callable[..., Any],
 ) -> None:
-    """The default continues through every selected check; ``--fail-fast`` does not.
-
-    Fail-fast is the one execution-shortening option the product has, and it never
-    re-executes anything: it stops *launching* checks once one has produced a ``failed`` or
-    ``error`` result, keeps the check that produced it whole, and still returns a model the
-    writers can serialise.
+    """The default continues through every selected check; ``--fail-fast`` does not. Fail-fast is
+    the one execution-shortening option the product has, and it never re-executes anything: it
+    stops *launching* checks once one has produced a ``failed`` or ``error`` result, keeps the
+    check that produced it whole, and still returns a model the writers can serialise.
     """
     selection = Selection(checks=MINIMAL_LOSS_SELECTION)
     contracts = selected_contracts(registry, selection)
