@@ -25,7 +25,8 @@ network" costs:
 * **No design system.** There is no component library, no design-token file and no
   external font to conform to, so none is introduced: one inline stylesheet, system font
   stacks only, and a single ``@media (max-width: 720px)`` rule that collapses the layout
-  to one column. A later change that introduces a framework would break the
+  to one column narrow enough to hold any single token, so a long identifier wraps rather
+  than widening the page. A later change that introduces a framework would break the
   offline promise this module exists to keep.
 
 The document is a pure function of the :class:`~qrcheck.report.model.RunResult` and the
@@ -96,7 +97,11 @@ _IMAGE_SUFFIXES: tuple[str, ...] = (".png", ".svg")
 
 # The single stylesheet of the document. Logical properties throughout, system font
 # stacks only, colour never the sole carrier of meaning - every status is also spelled out
-# in its row - and not one external resource reference, so the file needs no network.
+# in its row - and not one external resource reference, so the file needs no network. Its
+# one media query collapses the layout to a single column whose track may shrink to
+# nothing, and lets every box that can hold an unbreakable identifier - the 64-character
+# run_id, an evidence directory, a case id - wrap inside itself rather than widening the
+# document past the viewport.
 _STYLE: str = """\
 *, *::before, *::after {
   box-sizing: border-box;
@@ -145,6 +150,13 @@ a:active {
 a:focus-visible {
   outline: 3px solid #1b5fb0;
   outline-offset: 2px;
+}
+
+/* A link a reader clicks meets the 24x24 CSS px target size WCAG 2.2 AA asks for. */
+.evidence-link {
+  display: inline-block;
+  min-block-size: 1.5rem;
+  padding-block: 0.125rem;
 }
 
 .skip-link {
@@ -327,6 +339,11 @@ figcaption {
   font-style: italic;
 }
 
+.evidence-recorded {
+  color: #55555f;
+  font-style: italic;
+}
+
 .evidence-unreadable {
   color: #6b4b00;
 }
@@ -343,7 +360,8 @@ footer {
 
 @media (max-width: 720px) {
   body { padding: 0.75rem; }
-  .facts, .counts { grid-template-columns: 1fr; }
+  .facts, .counts { grid-template-columns: minmax(0, 1fr); }
+  .facts dd, tbody td, .skips li, .evidence h3 { overflow-wrap: anywhere; }
   table, thead, tbody, tr, th, td { display: block; }
   caption { display: block; }
   thead tr {
@@ -590,10 +608,13 @@ def _render_table(run_result: RunResult, anchors: Mapping[int, str]) -> list[str
     The status class separates the four outcomes by colour and the status word spells the
     outcome out, so a skipped row is visibly distinct from a passed one without colour
     being the only signal. The reason column carries the machine-readable value verbatim,
-    because that is the vocabulary a reader greps for. A row links to its detail block by
-    an in-page anchor, and the anchor is generated here rather than derived from evidence.
-    The section carries ``tabindex="-1"`` so the jump from the skip link takes the keyboard
-    focus with it instead of leaving the reader's focus on the link.
+    because that is the vocabulary a reader greps for. The evidence column is derived from
+    the model - a link to the case's block, an explicit statement that a directory was
+    recorded for a case reported elsewhere, or the em dash that means nothing was recorded
+    (:func:`_evidence_cell`) - so the page cannot contradict ``summary.json`` about a case
+    that persisted evidence. The section carries ``tabindex="-1"`` so the jump from the
+    skip link takes the keyboard focus with it instead of leaving the reader's focus on the
+    link.
 
     A run that recorded no result gets the empty state in place of the table rather than a
     table with only a header: there is no row to read, and a header-only table under four
@@ -613,7 +634,10 @@ def _render_table(run_result: RunResult, anchors: Mapping[int, str]) -> list[str
         '<section id="results" tabindex="-1">',
         "<h2>Results</h2>",
         "<table>",
-        "<caption>One row per case, ordered by check ID and then by case ID.</caption>",
+        "<caption>One row per case, ordered by check ID and then by case ID. In the "
+        "Evidence column, a link opens that case's block below, "
+        '"recorded, not shown" marks evidence that was persisted for a case reported '
+        "elsewhere on this page, and an em dash means nothing was recorded.</caption>",
         "<thead>",
         '<tr><th scope="col">Check</th><th scope="col">Case</th>'
         '<th scope="col">Status</th><th scope="col">Reason</th>'
@@ -622,11 +646,6 @@ def _render_table(run_result: RunResult, anchors: Mapping[int, str]) -> list[str
         "<tbody>",
     ]
     for index, case in enumerate(run_result.results):
-        anchor = anchors.get(index)
-        if anchor is None:
-            evidence_cell = "—"
-        else:
-            evidence_cell = f'<a href="#{_esc(anchor)}">evidence</a>'
         fragments.append(
             f'<tr class="{_status_class(case.status)}">'
             f'<td data-label="Check"><code>{_esc(case.check_id)}</code></td>'
@@ -634,11 +653,36 @@ def _render_table(run_result: RunResult, anchors: Mapping[int, str]) -> list[str
             f'<td data-label="Status">{_esc(_status_text(case.status))}</td>'
             f'<td data-label="Reason">{_esc(_reason_text(case.reason))}</td>'
             f'<td data-label="Duration">{_esc(f"{case.duration_ms:.3f} ms")}</td>'
-            f'<td data-label="Evidence">{evidence_cell}</td>'
+            f'<td data-label="Evidence">'
+            f"{_evidence_cell(case, anchors.get(index))}</td>"
             "</tr>"
         )
     fragments += ["</tbody>", "</table>", "</section>"]
     return fragments
+
+
+def _evidence_cell(case: CaseResult, anchor: str | None) -> str:
+    """Return the Evidence column of ``case``'s row, derived from the result model alone.
+
+    Three states, and each one says what happened to the case's evidence:
+
+    * ``anchor`` is set - the case has a block below, so the cell is the link to it;
+    * no anchor but ``case.evidence_dir`` is set - a directory was recorded for a case with
+      no block of its own, which is every skip: the cell says so in words instead of
+      showing the dash that means "nothing was recorded", because ``summary.json`` and the
+      filesystem both record that directory (AAP §0.3.4);
+    * ``case.evidence_dir is None`` - the em dash, which therefore means only that nothing
+      was recorded: a passed case, or a failing one whose evidence was not persisted.
+
+    The second state is a fixed phrase, so no path and nothing absolute reaches the cell
+    (AAP §0.5.5), and all three are constants of the model rather than a reading of the
+    evidence tree.
+    """
+    if anchor is not None:
+        return f'<a class="evidence-link" href="#{_esc(anchor)}">evidence</a>'
+    if case.evidence_dir is not None:
+        return '<span class="evidence-recorded">recorded, not shown</span>'
+    return "—"
 
 
 def _render_details(
@@ -902,7 +946,9 @@ def _detail_anchors(results: Sequence[CaseResult]) -> dict[int, str]:
     Keyed by the result's position in the stored order, so the table and the blocks cannot
     disagree about which case an anchor names. Only a failed or errored case with a
     recorded evidence directory has a block; a skip is listed in its own section, and a
-    passing case writes no evidence at all.
+    passing case writes no evidence at all. A skipped case that did record a directory
+    therefore has no anchor, which is why the table states its evidence as recorded but
+    not shown (:func:`_evidence_cell`).
     """
     anchors: dict[int, str] = {}
     for index, case in enumerate(results):
