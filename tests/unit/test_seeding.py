@@ -49,9 +49,9 @@ import pytest
 from qrcheck.config import seeding as seeding_module
 from qrcheck.config.seeding import derive_seed
 
-# Resolved from the imported module, never from the working directory: before
-# qrcheck/__init__.py exists the package imports as a namespace package, whose
-# qrcheck.__file__ is None, while a submodule's __file__ is always real.
+# Resolved from the imported module, never from the working directory: a submodule's
+# __file__ is always the real source file, so the package directory and the repository
+# root above it are derived from the module rather than from the shell's cwd.
 _SEEDING_PATH = Path(seeding_module.__file__).resolve()
 _PACKAGE_DIR = _SEEDING_PATH.parents[1]  # .../qrcheck
 _REPOSITORY_ROOT = _SEEDING_PATH.parents[2]  # the directory that holds qrcheck/

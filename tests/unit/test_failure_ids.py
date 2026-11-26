@@ -62,9 +62,9 @@ from qrcheck.evidence.naming import (
 from qrcheck.report import model as model_module
 from qrcheck.report.model import CaseResult, Reason, Status, failure_id
 
-# Resolved from the imported module, never from the working directory: before
-# qrcheck/__init__.py exists the package imports as a namespace package, whose
-# qrcheck.__file__ is None, while a submodule's __file__ is always real.
+# Resolved from the imported module, never from the working directory: a submodule's
+# __file__ is always the real source file, so the package directory and the repository
+# root above it are derived from the module rather than from the shell's cwd.
 _MODEL_PATH = Path(model_module.__file__).resolve()
 _NAMING_PATH = Path(naming_module.__file__).resolve()
 _PACKAGE_DIR = _MODEL_PATH.parents[1]  # .../qrcheck
