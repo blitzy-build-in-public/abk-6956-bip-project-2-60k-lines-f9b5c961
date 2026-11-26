@@ -65,7 +65,7 @@ The same edges as a walk through the code, in the order a run takes them:
 
 1. `Cfg --> Select` — `qrcheck/config/load.py` parses and validates the configuration into the resolved dataclasses; `qrcheck/registry/selection.py` parses `--checks` and `--class` into the one `Selection` record the run carries.
 2. `CorpusFile --> Loop` — `qrcheck/corpus/io.py` reads the committed JSONL corpus; the `--class` globs filter it before any check is walked.
-3. `Select --> Probe` — `qrcheck/runner.py` probes what the host provides (both reference decoders and the SVG rasterizer) with **zero** target invocations, and refuses to start when the blocking primary decoder is absent.
+3. `Select --> Probe` — `qrcheck/runner.py` probes what the host provides (both reference decoders and the SVG rasterizer) with **zero** target invocations, and refuses to start when the blocking primary decoder is absent or cannot be imported, or when any other pinned runtime dependency — the oracle or a core library — cannot be imported.
 4. `Probe --> Loop` — a passing probe hands the run its resolution: `qrcheck/registry/resolve.py` decides once, before execution, which selected checks are runnable and which are skipped with a reason.
 5. `Loop --> Req` — for each case of each runnable check, `qrcheck/checks/support.py` builds that case's request through the port's single builder.
 6. `Req --> Cap` — `require_capabilities` refuses a request the adapter did not declare, before any I/O.
@@ -119,7 +119,7 @@ Three forces decide the structure, and each is a requirement rather than a prefe
 `qrcheck/runner.py` owns one run end to end, through the single public entry point `run_suite(config, selection, adapter, ec_level, seed, *, fail_fast=False) -> RunResult`. Its sequence is fixed:
 
 1. capture the run's start time, once;
-2. probe what the host provides — both reference decoders and the SVG rasterizer — with zero target invocations, and refuse to start when the blocking primary decoder is absent;
+2. probe what the host provides — both reference decoders and the SVG rasterizer — with zero target invocations, and refuse to start when the blocking primary decoder is absent or cannot be imported, or when any other pinned runtime dependency cannot be imported;
 3. load the corpus and apply the `--class` filter, refusing to start when the filter leaves nothing;
 4. build the one `RunContext` the checks of this run share;
 5. resolve the `--checks` selection against the adapter's declared capabilities, so every check is decided runnable or skipped **before** the first case runs;
@@ -129,7 +129,7 @@ Three forces decide the structure, and each is a requirement rather than a prefe
 
 A check never calls the runner and never knows which check ran before it. It receives a `RunContext` and yields cases; when a case executes and whether it executes at all is the runner's decision alone. The runner is the only place that decides three policies:
 
-- **The pre-flight probe.** A fault found before any case runs — the primary decoder absent, the corpus unreadable or malformed, a `--class` filter that leaves zero records — raises `RunPrerequisiteError`, which ends the command with exit code 2 and writes no report.
+- **The pre-flight probe.** A fault found before any case runs — the primary decoder absent or installed but not importable, another pinned runtime dependency (the oracle or a core library) that cannot be imported, the corpus unreadable or malformed, a `--class` filter that leaves zero records — raises `RunPrerequisiteError`, which ends the command with exit code 2 and writes no report.
 - **The one-error-per-check policy on target loss.** `TargetUnavailable` and `TargetTimeout` propagate out of a check unchanged, because only this layer can tell one dead target from one defective symbol. On the first such error the check that met it receives exactly **one** `error` result filed under `synthetic:target`, its remaining cases are abandoned, and every later check that requires a capability of the target receives its own single `synthetic:target` error without the target being called again. Checks that declare no capability requirement are target-independent, so they still run and the report describes what was measurable rather than only what broke.
 - **Fail-fast.** `--fail-fast` stops launching new checks after the first check that produced a `failed` or `error` result; the in-flight check always completes all of its cases, so the report never describes a check whose cases were cut off half-way, and the report stays schema-complete.
 
@@ -337,8 +337,8 @@ The `reference` target is built on segno, so `SY-MATRIX-EQUIV` against `referenc
 
 | Absent | Behaviour | Where the user sees it |
 |--------|-----------|------------------------|
-| `zxing-cpp`, the primary decoder | **Refuse.** `qrcheck doctor` and `qrcheck run` both exit 2 naming the dependency and the interpreter/platform; `RT-ROUNDTRIP` is never silently skipped. On a platform with no 2.2.0 wheel the diagnostic additionally names the platform tag and says no wheel is published for it. | stderr diagnostic; no report written |
-| `segno`, the oracle | **Refuse.** `qrcheck doctor` reports it as a blocking core distribution and exits 2 naming it, and no run can make an oracle-backed assertion without it. It is a required runtime dependency, so its absence means a broken environment rather than a user choice. | stderr diagnostic; no report written |
+| `zxing-cpp`, the primary decoder | **Refuse.** `qrcheck doctor` and `qrcheck run` both exit 2 naming the dependency and the interpreter/platform; `RT-ROUNDTRIP` is never silently skipped. The same refusal covers a binding that is installed yet cannot be imported, because both commands confirm the load through the shared importability probe instead of trusting module presence. On a platform with no 2.2.0 wheel the diagnostic additionally names the platform tag and says no wheel is published for it. | stderr diagnostic; no report written |
+| `segno`, the oracle | **Refuse.** `qrcheck doctor` reports it as a blocking core distribution and exits 2 naming it, and no run can make an oracle-backed assertion without it. It is a required runtime dependency, so an absent or unimportable install is a broken environment rather than a user choice. | stderr diagnostic; no report written |
 | The secondary decoder | **Degrade.** The run proceeds in single-decoder mode; `qrcheck/decode/consensus.py` records `agreement == "primary_only"`, and `index.html` carries a banner stating that the corroborating decoder was not installed, or was installed and could not be imported or run. When the decoder is not installed, `decoded.json`'s `per_decoder` holds the primary decoder alone; when it is installed but cannot be imported or run, `per_decoder` holds both names, the secondary at status `error` with its diagnostic in `error_text`, and no comparison was attempted, so `secondary_comparable` is `null`. No check is marked passed on the strength of a decoder that did not answer. | `decoded.json`, the HTML banner, and the run's own results |
 | An SVG rasterizer | **Degrade.** `RN-SVG` reports `skipped` with reason `missing_dependency`, and the result records the discovery order the framework attempted; a skip is counted separately and never as a pass. | the skipped block in `index.html`, and the reason in `summary.json` |
 

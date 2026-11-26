@@ -1,119 +1,65 @@
 """The invalid-input family: ``IV-BAD-OPTION``, ``IV-EMPTY`` and ``IV-OVERCAPACITY``.
 
-Plan item served: AAP §0.8.1's component-to-check-family table (``checks/invalid.py`` ->
-those three identifiers), §0.8.1's "What the built-in targets must do for the ``IV-*``
-cases" table, §0.8.2's validation rules and their documented bypass, and §0.9.1.  These
-three checks are the product's contract test of a target's *refusal* behaviour: a
+AAP §0.8.1's component-to-check-family table, its "What the built-in targets must do for the
+``IV-*`` cases" table, §0.8.2's validation rules and their documented bypass, and §0.9.1.
+These three checks are the product's contract test of a target's *refusal* behaviour: a
 generator that silently accepts an empty payload, an out-of-contract option or a payload
-larger than the symbol it was pinned to is broken in a way no round-trip assertion can
-see, because the symbol it returns may decode perfectly.
+larger than the symbol it was pinned to is broken in a way no round-trip assertion can see,
+because the symbol it returns may decode perfectly.
 
-No project rules exist for this product.  The review-rules source returns no user rules
-and AAP §0.12 records the same, so the binding constraints are the request's own MUST /
-MUST NOT list as §0.12 tabulates it, honoured here as if they were rules.  Three of them
-shape this file: nothing under ``qrcheck/checks/`` imports a concrete adapter (only
-:mod:`qrcheck.targets.base`, from that package); a check carries a stable identifier from
-the registry's own list and is reachable from ``qrcheck list`` and from a run; and no
-check may be weakened, skipped, retried or threshold-relaxed to make a defective target
-pass -- so nothing here tolerates an accepted request it was written to refuse.
+``IV-EMPTY`` sends ``payload=b""`` at level M in a PNG with a four-pixel module size and a
+four-module quiet zone.  A declared rejection is the expected outcome; a returned symbol is a
+*documented success* and passes too, which is AAP §0.3.5's substitute for the wrong assertion
+that a target must reject anything the framework dislikes.  A crash, a ``TargetContractError``
+or an artefact that is empty or of the wrong format fails with ``Reason.CONTRACT_ERROR``.
+``IV-OVERCAPACITY`` pins Version 10 at level M and sends one byte more than Version 10 holds
+at level **L**: a declared rejection passes, while a returned symbol is decoded once and fails
+with ``Reason.CAPACITY_VIOLATION``, recording ``requested_len``, ``capacity``,
+``decoded_len`` and ``first_divergence_offset`` -- the evidence AAP §0.4.5 requires of the
+``over_capacity_acceptance`` defect.  ``IV-BAD-OPTION`` runs four probes, each breaking one
+rule the port's builder enforces -- ``ec_level="X"``, ``module_size_px=0``,
+``quiet_zone_modules=-1``, and a colour pair below the target's **declared** ``contrast_floor``
+-- where a declared rejection passes and a returned symbol fails with
+``Reason.VALUE_MISMATCH``, because the target accepted a request it must refuse.
 
-The three checks, and what each passes on
------------------------------------------
-================================  =====================================================
-``IV-EMPTY``                      Sends ``payload=b""`` at error level M in a PNG with a
-                                  four-pixel module size and a four-module quiet zone.  A
-                                  declared rejection **is** the expected outcome.  A
-                                  returned symbol is a *documented success* and passes
-                                  too, which is AAP §0.3.5's substitute for the wrong
-                                  assertion "the target must reject anything the
-                                  framework dislikes": "declared rejection **or**
-                                  documented success, never a crash, never a partially
-                                  written file".  A crash, a ``TargetContractError`` or
-                                  an artefact that is empty or of the wrong format fails
-                                  with ``Reason.CONTRACT_ERROR``.
-``IV-OVERCAPACITY``               Pins Version 10 at error level M and sends one byte
-                                  more than Version 10 holds at level **L**.  A declared
-                                  rejection passes; a returned symbol is decoded once and
-                                  fails with ``Reason.CAPACITY_VIOLATION``, recording
-                                  ``requested_len``, ``capacity``, ``decoded_len`` and
-                                  ``first_divergence_offset`` -- the evidence AAP §0.4.5
-                                  requires of the ``over_capacity_acceptance`` defect.
-``IV-BAD-OPTION``                 Four probes, each breaking exactly one of the rules the
-                                  port's builder enforces: ``ec_level="X"``,
-                                  ``module_size_px=0``, ``quiet_zone_modules=-1``, and a
-                                  colour pair measured below the target's **declared**
-                                  ``contrast_floor``.  A declared rejection passes; a
-                                  returned symbol fails with ``Reason.VALUE_MISMATCH``,
-                                  because the target accepted a request it must refuse.
-================================  =====================================================
-
-Why the four over-capacity bytes are measured against level L
--------------------------------------------------------------
-The plan holds two statements that cannot both be satisfied by one payload length, and
-the cascade-containment requirement governs.  AAP §0.8.1 phrases the probe's payload as
-``max_payload_bytes(10, "M", "byte") + 1``, while §0.4.2 requires that the payload "also
-exceed the L-level capacity of the pinned version, so ``wrong_ec_level``'s downshift
-cannot rescale it into an acceptable range".  Level L holds more than level M, so a
-payload of ``M + 1`` bytes would fit comfortably after the ``defective`` target's D1
-downshift and the probe would stop proving anything about over-capacity acceptance.  The
-length is therefore ``max_payload_bytes(10, "L", "byte") + 1`` -- 272 bytes against level
-M's 213 -- which exceeds both levels' capacity at the pinned version and keeps
-``IV-OVERCAPACITY``'s failure attributable to D5 alone.  Both capacity figures come from
+The over-capacity length is ``max_payload_bytes(10, "L", "byte") + 1`` -- 272 bytes against
+level M's 213 -- rather than §0.8.1's ``max_payload_bytes(10, "M", ...) + 1``, because §0.4.2
+also requires the payload to exceed the L-level capacity: an ``M + 1`` payload would fit
+comfortably after the ``defective`` target's D1 downshift and the probe would stop proving
+anything about over-capacity acceptance.  Both figures come from
 :mod:`qrcheck.corpus.capacity` at call time and are never transcribed.
 
-The documented bypass, used for every case here
-----------------------------------------------
-An ordinary case builds its request through :func:`qrcheck.checks.support.build`, which
-is the single definition of "the framework considers this request valid".  These probes
-exist to prove that a target *refuses* a request breaking exactly the rules that builder
-enforces, so they cannot go through it: every request here is built by
-:func:`qrcheck.checks.support.construct_out_of_contract`, AAP §0.8.2's one documented
-bypass, and every result is recorded with ``out_of_contract=True`` so ``request.json``
-states plainly that the request was deliberately illegal.
+Every request here is built by :func:`qrcheck.checks.support.construct_out_of_contract`,
+AAP §0.8.2's one documented bypass of :func:`qrcheck.checks.support.build`, and every result
+records ``out_of_contract=True`` so ``request.json`` states that the request was deliberately
+illegal.
 
-Fixed workload and the declared encode counts
----------------------------------------------
-Six cases, one ``generate`` call each, and a decode only where an accepted symbol has to
-be measured -- AAP §0.8.1's case matrix for this family:
+Six cases, one ``generate`` call each, and a decode only where an accepted symbol has to be
+measured: ``IV-EMPTY`` 1 case, 1 encode, 0 decodes; ``IV-OVERCAPACITY`` 1 case, 1 encode, 1
+decode; ``IV-BAD-OPTION`` 4 cases, 4 encodes, 0 decodes.  Those counts are
+:data:`EXPECTED_ENCODES`, the declaration AAP §0.4.3 makes a counting stub assert, so a retry
+added anywhere here would surface as the declared count plus one.  There is no retry, no
+re-run-on-failure and no quarantine path.
 
-    ``IV-EMPTY``         1 case, 1 encode, 0 decodes   (``synthetic:iv-empty``)
-    ``IV-OVERCAPACITY``  1 case, 1 encode, 1 decode    (``synthetic:iv-overcapacity``)
-    ``IV-BAD-OPTION``    4 cases, 4 encodes, 0 decodes (``synthetic:iv-bad-option-*``)
-
-Those counts are :data:`EXPECTED_ENCODES`, the declaration AAP §0.4.3 makes a counting
-stub assert, so a retry added anywhere in this module would surface as the declared count
-plus one.  There is no retry, no re-run-on-failure and no quarantine path here.
-
-Error handling, and the two errors that leave
----------------------------------------------
-:func:`qrcheck.checks.support.case_status_for_error` is the single translation of an
-adapter error into a status, and it is called rather than reimplemented: a
-``TargetRejected`` on an ``IV-*`` check is a pass with the target's text verbatim in
-``decoded["rejection"]``, a ``TargetContractError`` is a failure with reason
+:func:`qrcheck.checks.support.case_status_for_error` is the single translation of an adapter
+error, called rather than reimplemented: a ``TargetRejected`` is a pass with the target's text
+verbatim in ``decoded["rejection"]``, a ``TargetContractError`` is a failure with reason
 ``contract_error``, and a ``TargetUnsupported`` is a skip.  ``TargetUnavailable`` and
-``TargetTimeout`` are **not** caught: ``qrcheck.runner`` owns the one-error-result-per-
-check target-loss policy, and a target that cannot be reached must not look like a target
-that accepted an illegal request.  There is no bare ``except`` and no ``except
-Exception`` anywhere in this file.
+``TargetTimeout`` are not caught, because ``qrcheck.runner`` owns the one-error-result-per-check
+target-loss policy, and a target that cannot be reached must not look like one that accepted an
+illegal request.  There is no bare or broad ``except`` in this file.
 
-What this file must never own
------------------------------
-Request validation (the port's builder), the pre-gate on capabilities
-(:func:`qrcheck.checks.support.generate`), the result vocabulary and the failure
-identifier (:mod:`qrcheck.report.model`), the evidence layout and the closed artefact set
-(:mod:`qrcheck.report.evidence`), and every threshold -- the contrast floor is read from
-the resolved :class:`~qrcheck.config.models.TargetConfig` for the target under test, never
-written here.  The three request parameters that are literals (the four-module size, the
-four-module quiet zone and Version 10) are the request values AAP §0.8.1 tabulates, not
-thresholds a check asserts against.
+This file owns no request validation (the port's builder), no capability pre-gate
+(:func:`qrcheck.checks.support.generate`), no result vocabulary or failure identifier
+(:mod:`qrcheck.report.model`), no evidence layout or artefact set
+(:mod:`qrcheck.report.evidence`), and no threshold: the contrast floor is read from the
+resolved :class:`~qrcheck.config.models.TargetConfig`.  The four-module size, the four-module
+quiet zone and Version 10 are the request values AAP §0.8.1 tabulates, not thresholds.
 
-Determinism
------------
-Nothing here reads a clock for an assertion, a random source, ``hash()``, ``id()``, the
-filesystem or a locale.  The six cases are generated in a fixed order (``case_id``
-ascending), the colour ladder that keeps the contrast probe below the declared floor is a
-fixed tuple, and the only measurement that varies between two runs is ``duration_ms``,
-which is recorded and never asserted (AAP §0.5.5).
+Determinism: nothing here reads a clock for an assertion, a random source, ``hash()``,
+``id()``, the filesystem or a locale; the six cases are generated in ``case_id`` order and the
+contrast probe's colour ladder is a fixed tuple, so ``duration_ms`` is the only measurement
+that varies between two runs and it is recorded and never asserted (AAP §0.5.5).
 """
 
 from __future__ import annotations

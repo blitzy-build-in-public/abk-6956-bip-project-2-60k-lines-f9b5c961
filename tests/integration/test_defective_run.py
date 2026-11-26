@@ -1,36 +1,26 @@
 """Set equality between a real ``--adapter defective`` run and its declared expectation.
 
 A suite that cannot fail proves nothing, so the framework ships the defect it is supposed to
-catch: ``qrcheck/targets/defective.py`` carries five injections, and this module holds AAP §0.4.2
--- a run against it fails **exactly** the nine checks those injections target, with zero ``error``
-results and the other twelve passing in the same run -- and §0.4.3, that nothing was weakened,
-skipped, retried or threshold-relaxed to reach that outcome. It is the defective half of success
-criterion 1 and the version-and-EC half of criterion 3 (AAP §0.6.1 #1 and #3).
+catch: ``qrcheck/targets/defective.py`` carries five injections, and this module holds AAP
+§0.4.2 -- a run against it fails **exactly** the nine checks those injections target, with zero
+``error`` results and the other twelve passing in the same run -- and §0.4.3, that nothing was
+weakened, skipped, retried or threshold-relaxed to reach that outcome (AAP §0.6.1 #1 and #3).
+Containment would accept any run whose failures *include* the nine, which is what a cascade of
+collateral failures looks like, so the observed set is compared with
+``SELF_CHECK_TARGETS["defective"]`` **and** with the nine-identifier literal of §0.4.2 as an
+equality, every message naming what is extra beside what is missing. Four of the nine fail from
+a **declared, unavoidable** consequence of another injection, so a test demanding only the five
+primary ones would be wrong, and the five are declared once in ``DEFECTS`` and once in
+``qrcheck/registry/expectations.py``, deliberately independently, with the last test here
+proving the two still agree.
 
-Set equality is the whole point, and it is asserted in both directions: containment would accept
-any run whose failures *include* the declared nine, which is exactly what a cascade of collateral
-failures looks like. So the observed set is compared with ``SELF_CHECK_TARGETS["defective"]``
-**and** with the nine-identifier literal of §0.4.2 as an equality, and every failure message names
-what is extra (failed but not declared) beside what is missing (declared but did not fail), sorted.
-The consequence columns are part of the expectation, not noise: four of the identifiers fail from a
-**declared, unavoidable** consequence of another injection, so a test demanding only the five
-primary ones would be wrong. The five injections are declared once in ``DEFECTS`` and once in
-``qrcheck/registry/expectations.py``, deliberately independently (the registry must not import an
-adapter that imports segno), and the last test here proves the two still agree.
-
-Evidence is written for failing, errored and skipped cases only (AAP §0.3.4), so this is the one
-integration module in which on-disk artefacts are guaranteed to exist and the attribution can be
-read rather than inferred: every failing case carries ``request.json`` and ``decoded.json`` under
-``<report_root>/evidence/<check-id>/<failure-id>/``, recording the case's identity and agreeing
-with ``summary.json`` about it. ``RN-QUIET-ZONE`` and ``RN-MODULE-SIZE`` are held to their own
-measurement keys instead, because AAP §0.4.2 measures both arithmetically from the image so that
-neither needs a decode. Each injection then has one observation from AAP §0.4.5 asserted against a
-real failure directory.
-
-It runs nothing itself: both runs come from the session-scoped ``reference_report`` and
-``defective_report`` fixtures, so the five-run budget of AAP §0.6.1 #9 is untouched. No retry, no
-``xfail``, no skip and no threshold appears here, no wall-clock value is compared (AAP §0.5.5), and
-every collection walked is ordered, so two runs assert the same things in the same order.
+Evidence is written for failing, errored and skipped cases only (AAP §0.3.4), so this is the
+one integration module whose artefacts are guaranteed to exist and whose attribution can be read
+rather than inferred: each failing case carries ``request.json`` and ``decoded.json`` under
+``<report_root>/evidence/<check-id>/<failure-id>/``, agreeing with ``summary.json``, while
+``RN-QUIET-ZONE`` and ``RN-MODULE-SIZE`` are held to their own measurement keys because AAP
+§0.4.2 measures both arithmetically from the image. Both runs come from the session-scoped
+fixtures, so the five-run budget of AAP §0.6.1 #9 is untouched.
 """
 
 from __future__ import annotations

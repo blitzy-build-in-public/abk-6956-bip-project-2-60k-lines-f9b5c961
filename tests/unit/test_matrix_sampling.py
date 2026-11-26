@@ -3,33 +3,23 @@
 :mod:`qrcheck.decode.matrix` is the product's **only** version source: the pinned ``zxing-cpp``
 2.2.0 reports no version and no mask, the secondary decoder reports neither, yet
 ``SY-VERSION-MIN``, ``SY-MASK``, ``SY-MATRIX-EQUIV`` and the measured quiet zone all read the
-module grid -- so one sampling defect corrupts four checks at once while each of them keeps
-returning a confident verdict. That is why the refusal paths are exercised as carefully as the
-happy path: ``sampling_failed`` is a diagnosis, a shifted grid is a wrong answer.
+module grid, so one sampling defect corrupts four checks at once while each keeps returning a
+confident verdict. The refusal paths are therefore exercised as carefully as the happy path:
+``sampling_failed`` is a diagnosis, a shifted grid a wrong answer.
 
-Every image is synthesised in-fixture: ``segno.make_qr`` supplies the module matrix, ``segno``
-renders it at a known module size and quiet zone, and :mod:`qrcheck.evidence.mux` is the image
-boundary in both directions. Because the geometry is therefore known exactly, the four symbol
-corners are handed to the sampler as its ``position`` quad instead of being obtained from a
-decoder, so the pixel-level cases need no decoder and nothing here touches the network, a
-subprocess or a file outside ``tmp_path``.
-
-Pinned: the sampled grid is element for element the oracle's matrix with dimension ``4V + 17``,
-Version 40 included, because an implementation that snaps to 178 produces a grid one module too
-wide and every downstream matrix assertion fails with a confusing message;
-:func:`~qrcheck.decode.matrix.version_from_dimension` inverts
-:func:`~qrcheck.decode.matrix.module_count_for_version` over Versions 1-40 and refuses every
-illegal dimension instead of silently snapping it; the finder pattern's dark run, the pitch it
-implies, the snap to a legal count and the timing-pattern confirmation are all measured, so a pitch
-estimator that reads seven modules as six fails here rather than inside four other checks; a count
-the pitch guard accepts but the timing pattern does not is **refused**, and the refusal keeps its
-numbers, the rectified square and the transition counts, which is what the evidence store needs to
-explain it; the ``straight_qrcode`` fallback recovers the grid when no quadrangle is available and
-marks the path it took; both paths failing gives ``None`` with ``reason="sampling_failed"``, which
-the matrix-dependent checks report rather than a verdict; and sampling imports no decoder, so it
-survives single-decoder mode (AAP §0.3.2). No threshold of ``qrcheck.toml`` appears in this file
-(AAP §0.4.3): the rendering parameters are this module's own fixture constants and the module-size
-tolerance belongs to ``RN-MODULE-SIZE``.
+Every image is synthesised in-fixture -- ``segno`` supplies the module matrix and renders it at
+a known module size and quiet zone, :mod:`qrcheck.evidence.mux` is the image boundary -- so the
+geometry is known exactly and the four corners are handed to the sampler as its ``position``
+quad, leaving the pixel cases decoder-free and touching nothing outside ``tmp_path``. Pinned:
+the grid is element for element the oracle's matrix at ``4V + 17``, Version 40 included, since
+snapping to 178 would put every downstream assertion one module out; ``version_from_dimension``
+must invert ``module_count_for_version`` over Versions 1-40 and refuse every illegal dimension
+rather than snap it; the finder dark run, the implied pitch, the snap and the timing pattern
+must all be measured, so an estimator reading seven modules as six fails here rather than inside
+four other checks; a count the pitch guard accepts and the timing pattern refuses must keep its
+numbers for the evidence store; the ``straight_qrcode`` fallback must recover the grid and mark
+the path taken; both paths failing must give ``None`` with ``reason="sampling_failed"``; and
+sampling must import no decoder, so it survives single-decoder mode (AAP §0.3.2).
 """
 
 from __future__ import annotations
@@ -63,14 +53,11 @@ from qrcheck.decode.matrix import (
 from qrcheck.evidence.mux import decode_image, encode_png
 from qrcheck.report.model import Reason, Status
 
-# ---------------------------------------------------------------------------
-# Fixture constants: the known geometry every case is rendered at
-#
-# Deterministic by construction -- integer pixels per module and a fixed quiet zone -- so
-# the module pitch the sampler measures is known in advance and can be asserted exactly
-# rather than compared against a second measurement. The payload is deliberately short
-# enough to fit Version 1 at every error level, so one payload serves every sampled pair.
-# ---------------------------------------------------------------------------
+# Fixture constants: the known geometry every case is rendered at. Deterministic by construction
+# -- integer pixels per module and a fixed quiet zone -- so the module pitch the sampler
+# measures is known in advance and can be asserted exactly rather than compared against a second
+# measurement. The payload is deliberately short enough to fit Version 1 at every error level,
+# so one payload serves every sampled pair.
 
 #: Pixels per module of every rendered symbol. Two is the smallest pitch at which the
 #: sampler's 3x3 averaging neighbourhood is still used, so the pixel-level cases exercise

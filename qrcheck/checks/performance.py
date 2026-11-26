@@ -1,95 +1,75 @@
 """The two performance checks: encode latency with throughput, and decode latency.
 
-Plan item served (AAP §0.8.1, the component-to-check-family table line
-``checks/performance.py`` -> ``PF-ENCODE``, ``PF-DECODE``), together with the case-matrix
-rows it fixes -- 1 synthetic case, **105 encodes** and 0 decodes for ``PF-ENCODE``; 1
-synthetic case, **0 encodes** and **205 decodes** of one fixed 500 x 500 PNG for
-``PF-DECODE`` -- and the numeric budgets of AAP §0.6.2 with the environment they are
-defined against in §0.6.3 (CPython 3.11, Linux x86_64, 2 vCPU, the pinned lock).
+AAP §0.8.1's component-to-check-family table and its case-matrix rows -- 1 synthetic case, **105
+encodes** and 0 decodes for ``PF-ENCODE``; 1 synthetic case, 0 encodes and **205 decodes** of one
+fixed 500 x 500 PNG for ``PF-DECODE`` -- and the numeric budgets of §0.6.2 with the environment
+they are defined against in §0.6.3 (CPython 3.11, Linux x86_64, 2 vCPU, the pinned lock).
 
-``PF-ENCODE`` and ``PF-DECODE`` are the **only** two checks in the product permitted to
-assert on a duration (AAP §0.12).  Every other case's ``duration_ms`` is recorded and
-never compared: timing is environment-bound, so a duration that reached any other
-assertion would make the suite flaky by construction (AAP §0.5.5).  That monopoly is why
-this module reads a monotonic clock at all, and why it never reads a wall clock -- a
-``perf_counter()`` difference can only produce a duration, never a date.
+``PF-ENCODE`` and ``PF-DECODE`` are the **only** two checks in the product permitted to assert on
+a duration (AAP §0.12).  Every other case's ``duration_ms`` is recorded and never compared,
+because timing is environment-bound and a duration that reached any other assertion would make
+the suite flaky by construction (AAP §0.5.5); that monopoly is why this module reads a monotonic
+clock at all, and why it never reads a wall clock -- a ``perf_counter()`` difference can only
+produce a duration, never a date.
 
-Every threshold comes from the configuration
---------------------------------------------
-This file carries no threshold, sample size or warm-up count as a literal.  All seven
-numbers -- ``encode_p95_ms``, ``decode_p95_ms``, ``min_symbols_per_minute``,
-``encode_samples``, ``decode_samples``, ``warmup`` and ``decode_image_px`` -- are read
-from :attr:`qrcheck.config.models.Config.performance`, the ``[checks.performance]`` table
-of the committed ``qrcheck.toml`` (AAP §0.6.2, §0.12), and each threshold is copied into
-the result's ``expected`` so the report proves which budget the case was measured
-against.  Changing a floor therefore means changing one declared default and the
-acceptance criterion that reads it, never editing a check.
+This file carries no threshold, sample size or warm-up count as a literal.  All seven numbers --
+``encode_p95_ms``, ``decode_p95_ms``, ``min_symbols_per_minute``, ``encode_samples``,
+``decode_samples``, ``warmup`` and ``decode_image_px`` -- are read from
+:attr:`qrcheck.config.models.Config.performance`, the ``[checks.performance]`` table of the
+committed ``qrcheck.toml`` (AAP §0.6.2, §0.12), and each threshold is copied into the result's
+``expected`` so the report proves which budget the case was measured against.  Changing a floor
+means changing one declared default and the acceptance criterion that reads it, never editing a
+check.
 
-What each check measures
-------------------------
-``PF-ENCODE`` asks the target for one symbol of a declared fixed payload ``warmup`` times
-without measuring, then ``encode_samples`` times measuring each call with
-:func:`time.perf_counter`.  It asserts the 95th-percentile encode duration against
-``encode_p95_ms`` and the measured throughput against ``min_symbols_per_minute``.  The
-invocation count is therefore exactly ``warmup + encode_samples`` (5 + 100 = 105 under
-the committed configuration), and :data:`EXPECTED_ENCODES` declares it: a retry would
-register as one more invocation and fail the counting-stub test rather than improve a
-figure (AAP §0.4.3, §0.5.6).
+``PF-ENCODE`` asks the target for one symbol of a declared fixed payload ``warmup`` times without
+measuring, then ``encode_samples`` times measuring each call with :func:`time.perf_counter`.  It
+asserts the 95th-percentile encode duration against ``encode_p95_ms`` and the measured throughput
+against ``min_symbols_per_minute``, so the invocation count is exactly
+``warmup + encode_samples`` (5 + 100 = 105 under the committed configuration), which
+:data:`EXPECTED_ENCODES` declares: a retry would register as one more invocation and fail the
+counting-stub test rather than improve a figure (AAP §0.4.3, §0.5.6).
 
-``PF-DECODE`` draws its probe image **inside the framework**, with no adapter call at
-all: it encodes a declared fixed payload with segno at the run's error level, scales the
-module grid by nearest neighbour to exactly ``decode_image_px`` pixels square, and
-encodes the PNG through :mod:`qrcheck.evidence.mux`.  That is why the check declares no
-capability -- it must be runnable against a target that cannot encode anything at all,
-including one that is unreachable -- and why its own declared count is zero encodes and
-``warmup + decode_samples`` (5 + 200 = 205) primary decodes of that one PNG:
-:data:`EXPECTED_DECODES` declares that half.  The first decode happens before any sample
-is timed and must return the payload the probe was drawn from; a probe that cannot decode
-would make the measurement meaningless, so that condition fails the case instead of
-timing an unreadable image.
+``PF-DECODE`` draws its probe image **inside the framework**, with no adapter call at all: it
+encodes a declared fixed payload with segno at the run's error level, scales the module grid by
+nearest neighbour to exactly ``decode_image_px`` pixels square, and encodes the PNG through
+:mod:`qrcheck.evidence.mux`.  That is why the check declares no capability -- it must run against
+a target that cannot encode anything at all, an unreachable one included -- and why its declared
+count is zero encodes and ``warmup + decode_samples`` (5 + 200 = 205) primary decodes of that one
+PNG, which :data:`EXPECTED_DECODES` declares.  The first decode happens before any sample is
+timed and must return the payload the probe was drawn from: a probe that cannot decode would make
+the measurement meaningless, so that condition fails the case instead of timing an unreadable
+image.
 
-The percentile rule
--------------------
 ``encode_p95_ms`` and ``decode_p95_ms`` are the **nearest-rank** percentile of the sample
-durations: the samples are sorted ascending and the reported value is the one at index
-``ceil(0.95 * n) - 1`` (the 95th of 100 sorted samples, the 190th of 200).  It is stated
-here because an undocumented percentile is not reproducible -- linear interpolation,
-inverted CDFs and nearest-rank agree on no two data sets -- and because the rule must not
-change silently between two runs whose figures are compared by a reader.  A slow outlier
-becomes a reported p95; it is never re-run, and no sample is discarded.
+durations -- the samples sorted ascending, the reported value at index ``ceil(0.95 * n) - 1``.
+The rule is stated here because an undocumented percentile is not reproducible (linear
+interpolation, inverted CDFs and nearest-rank agree on no two data sets) and because it must not
+change silently between two runs whose figures a reader compares.  A slow outlier becomes a
+reported p95; it is never re-run, and no sample is discarded.
 
-Determinism, and the one honest exception
------------------------------------------
-Nothing here reads ``random``, ``hash()``, ``id()``, the environment or a CPU model: the
-payloads and the probe grid are declared constants, so two runs draw the same image and
-compare the same budgets.  A **passing** case writes no evidence at all (the persistence
-policy of :mod:`qrcheck.report.evidence`), so the byte-identity promise for
-``request.json`` and ``decoded.json`` is untouched for every other case.  A *failing* PF
-case necessarily files the measured figures in its ``decoded.json``: the measurement is
-the finding, and a failure whose evidence omitted the numbers would be unreadable.
+Nothing here reads ``random``, ``hash()``, ``id()``, the environment or a CPU model: the payloads
+and the probe grid are declared constants, so two runs draw the same image and compare the same
+budgets.  A **passing** case writes no evidence at all, the persistence policy of
+:mod:`qrcheck.report.evidence`, so the byte-identity promise for ``request.json`` and
+``decoded.json`` is untouched for every other case; a *failing* PF case necessarily files the
+measured figures in its ``decoded.json``, because the measurement is the finding and a failure
+whose evidence omitted the numbers would be unreadable.
 
-Reasons this module emits
--------------------------
-:attr:`qrcheck.report.model.Reason.VALUE_MISMATCH` when a floor is breached or the probe
-image does not decode, with the measured value and the configured threshold named in
+Reasons emitted: :attr:`qrcheck.report.model.Reason.VALUE_MISMATCH` when a floor is breached or
+the probe image does not decode, with the measured value and the configured threshold named in
 ``decoded["message"]``.  Adapter failures travel through
-:func:`qrcheck.checks.support.case_status_for_error`, which reports a declared rejection
-as ``target_rejected`` and an unusable response as ``contract_error``;
+:func:`qrcheck.checks.support.case_status_for_error`, which reports a declared rejection as
+``target_rejected`` and an unusable response as ``contract_error``;
 :class:`~qrcheck.targets.base.TargetUnavailable` and
-:class:`~qrcheck.targets.base.TargetTimeout` are deliberately **not** caught here -- the
-runner owns the one-error-result-per-check policy on target loss (AAP §0.6.6 row 6), so
-this module lets both propagate unchanged.
+:class:`~qrcheck.targets.base.TargetTimeout` are deliberately **not** caught here, because the
+runner owns the one-error-result-per-check policy on target loss (AAP §0.6.6 row 6).
 
-Import cost and layering
-------------------------
-This module imports the standard library, :mod:`qrcheck.checks.support`, the registry's
-case and context types, the result vocabulary, the configuration record and the adapter
-port's capability type -- all at module scope, because it is a check family and the
-registry is expected to hold it.  The three heavy dependencies (``segno``, ``numpy`` and
-:mod:`qrcheck.evidence.mux`, which is the product's only Pillow importer) are imported
-inside :func:`_probe_png`, at the point of use, so ``qrcheck list`` does not pay for an
-encoder and an image library to print two titles.  Nothing here imports a concrete
-adapter or a decoder family: the port is the only adapter-side name in the file.
+Imports: the standard library, :mod:`qrcheck.checks.support`, the registry's case and context
+types, the result vocabulary, the configuration record and the port's capability type, all at
+module scope because a check family is expected to be held by the registry.  ``segno``, ``numpy``
+and :mod:`qrcheck.evidence.mux` -- the product's only Pillow importer -- are imported inside
+:func:`_probe_png` at the point of use, so ``qrcheck list`` does not pay for an encoder and an
+image library to print two titles.  Nothing here imports a concrete adapter or a decoder family.
 """
 
 from __future__ import annotations

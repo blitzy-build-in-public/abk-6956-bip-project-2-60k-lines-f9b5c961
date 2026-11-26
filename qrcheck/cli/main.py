@@ -2,60 +2,54 @@
 
 ``qrcheck`` tests a QR code *generator*.  This module is the entry point that both the
 ``qrcheck = "qrcheck.cli.main:main"`` console script declared in ``pyproject.toml`` and
-``python -m qrcheck`` (through :mod:`qrcheck.__main__`) reach, and it owns exactly three
-things: the click group that carries the group-level ``--config`` option, the registration of
-the subcommands, and the translation of whatever a command returns or raises into the process
-exit code.
+``python -m qrcheck`` (through :mod:`qrcheck.__main__`) reach, and it owns exactly three things:
+the click group that carries the group-level ``--config`` option, the registration of the
+subcommands, and the translation of whatever a command returns or raises into the process exit
+code.
 
-The five subcommands, and no others:
+The five subcommands, and no others: ``run`` exercises one target and writes the JSON, JUnit and
+HTML reports; ``doctor`` verifies the target and the local toolchain before any check runs;
+``list`` enumerates every registered check; ``corpus`` regenerates the deterministic payload corpus
+(``corpus build``); and ``loc`` reports tracked physical lines and gates on the configured ceiling.
 
-    run      exercise one target and write the JSON, JUnit and HTML reports
-    doctor   verify the target and the local toolchain before any check runs
-    list     enumerate every registered check
-    corpus   regenerate the deterministic payload corpus (``corpus build``)
-    loc      report tracked physical lines and gate on the configured ceiling
+``main`` returns the process exit code and never calls :func:`sys.exit`, because the console script
+and ``qrcheck/__main__.py``'s ``SystemExit(main())`` both consume the integer.  click therefore runs
+in non-standalone mode (``standalone_mode=False``), which is what lets a command's return value
+reach the caller, and it is also why the exceptions click would otherwise convert into a process
+status are mapped here: ``click.UsageError`` and ``click.ClickException`` return ``EXIT_CONFIG``
+after ``show()`` on stderr; ``click.Abort`` returns ``EXIT_INTERNAL`` after one ``Aborted!`` line;
+``click.exceptions.Exit`` returns the integer code the exception carries; ``SystemExit`` returns its
+integer code, else ``EXIT_INTERNAL``; ``ImportError`` or ``OSError`` returns ``EXIT_CONFIG`` when a
+pinned runtime dependency cannot be imported, after that dependency's own diagnostic on stderr, and
+otherwise falls through to the last arm; and any other ``Exception`` returns ``EXIT_INTERNAL`` after
+the exception's type and message and ``traceback.format_exc()`` on stderr.
 
-``main`` returns the process exit code and never calls :func:`sys.exit`, because the console
-script and ``qrcheck/__main__.py``'s ``SystemExit(main())`` both consume the integer.  click
-therefore runs in non-standalone mode (``standalone_mode=False``), which is what lets a
-command's return value reach the caller, and it is also why the exceptions click would
-otherwise convert into a process status are mapped here:
+A bad invocation is exit 2, never exit 1: exit 1 means a check failed, and conflating the two would
+let a mistyped option look like a failing generator.  A broken installation is exit 2 as well, and
+only a fault the framework did not anticipate is exit 3.  Registering the subcommands and importing
+the check families loads ``segno``, ``numpy``, ``PIL`` and ``httpx``, so an ``ImportError`` or
+``OSError`` raised here is reported through :func:`qrcheck.dependencies.blocking_problem`,
+naming the distribution and ``requirements.lock``: every pin is declared in the lock file, so an
+unusable one means a broken install rather than a defect of this program (AAP §0.7.2), and only
+when no pinned dependency is broken does the exception reach the last-resort arm and exit 3.
 
-    ==========================  ==========================================================
-    raised                      returned
-    ==========================  ==========================================================
-    ``click.UsageError``        ``EXIT_CONFIG``, after ``show()`` on stderr
-    ``click.ClickException``    ``EXIT_CONFIG``, after ``show()`` on stderr
-    ``click.Abort``             ``EXIT_INTERNAL``, after one ``Aborted!`` line on stderr
-    ``click.exceptions.Exit``   the integer code the exception carries
-    ``SystemExit``              its integer code, else ``EXIT_INTERNAL``
-    any other ``Exception``     ``EXIT_INTERNAL``, after the exception's type and message
-                                and ``traceback.format_exc()`` on stderr
-    ==========================  ==========================================================
-
-A bad invocation is exit 2, never exit 1: exit 1 means a check failed, and conflating the two
-would let a mistyped option look like a failing generator.  A broken installation is different
-again -- an ``ImportError`` out of a check family or a command module reaches the last arm and
-exits 3, which is the code ``qrcheck/cli/list.py`` documents for it.
-
-The interpreter guard is the first statement of ``main`` and so runs before click parses
-anything, which is what makes ``qrcheck --help`` refuse on an unsupported interpreter too.
-Below CPython 3.11 it writes one diagnostic naming the running interpreter, the required
-version and the reason -- the configuration is read with the standard library's ``tomllib``,
-which no interpreter below 3.11 provides -- and returns ``EXIT_CONFIG``.  A newer 3.x is
-allowed to run and is reported as an unsupported platform by ``qrcheck doctor`` rather than
-refused here.
+The interpreter guard is the first statement of ``main`` and so runs before click parses anything,
+which is what makes ``qrcheck --help`` refuse on an unsupported interpreter too.  Below CPython 3.11
+it writes one diagnostic naming the running interpreter, the required version and the reason -- the
+configuration is read with the standard library's ``tomllib``, which no interpreter below 3.11
+provides -- and returns ``EXIT_CONFIG``.  A newer 3.x is allowed to run and is reported as an
+unsupported platform by ``qrcheck doctor`` rather than refused here.
 
 For that reason the subcommands are registered on first use instead of at import: each of them
-imports :mod:`qrcheck.config`, whose package ``__init__`` imports the ``tomllib``-based loader,
-so registering them while this module loads would raise :exc:`ImportError` on exactly the
-interpreter the guard exists to report on.  The group therefore imports nothing from the
-package beyond :mod:`qrcheck.cli.exit`, and resolves and registers its commands the first time
-click asks which commands it has.
+imports :mod:`qrcheck.config`, whose package ``__init__`` imports the ``tomllib``-based loader, so
+registering them while this module loads would raise :exc:`ImportError` on exactly the interpreter
+the guard exists to report on.  The group therefore imports nothing from the package beyond
+:mod:`qrcheck.cli.exit`, and resolves and registers its commands the first time click asks which
+commands it has.
 
-Exit integers come from :mod:`qrcheck.cli.exit` and are never literals here.  Nothing in this
-module prints a banner, reads a clock, an environment variable or the filesystem, holds the
-configuration in module state, or changes the working directory.
+Exit integers come from :mod:`qrcheck.cli.exit` and are never literals here.  Nothing in this module
+prints a banner, reads a clock, an environment variable or the filesystem, holds the configuration
+in module state, or changes the working directory.
 """
 
 from __future__ import annotations
@@ -224,10 +218,12 @@ def _register_commands() -> None:
 
     Raises:
         ImportError: A command module or a check family module cannot be imported.  Deliberately
-            not caught here: a broken installation must reach the last arm of :func:`main` and
-            exit 3, never degrade to a shorter list of verbs or of checks.
+            not caught here: whether that is an exit-2 environment error or an exit-3 framework
+            fault is decided in :func:`main`, by probing the pinned dependencies, because a
+            broken install must never degrade to a shorter list of verbs or of checks.
         CheckRegistrationError: A check family contradicts the registry's own declaration of
-            check identity.  Also deliberately uncaught, for the same reason.
+            check identity.  Also deliberately uncaught, and it reaches :func:`main`'s
+            last-resort arm: no dependency is broken when a family misregisters itself.
     """
     from qrcheck.checks import load_families
     from qrcheck.cli.corpus import corpus_command
@@ -239,6 +235,26 @@ def _register_commands() -> None:
     load_families()
     for command in (run_command, doctor_command, list_command, corpus_command, loc_command):
         cli.add_command(command)
+
+
+def _report_import_failure(exc: Exception) -> int:
+    """Write the diagnostic for a failed import of a pinned dependency and return its exit code.
+
+    ``EXIT_CONFIG`` naming every unusable pin when one is broken (AAP §0.7.2), the last-resort
+    wording otherwise. It may not raise: :func:`main` promises every exception a code, and the
+    probe itself imports the pins, so the probe's own fault is what gets reported.
+    """
+    try:
+        from qrcheck.dependencies import blocking_problem, problems
+
+        if blocking_problem() is not None:  # the one decision `qrcheck run` refuses a run on
+            _write_stderr("; ".join(found.message for found in problems()))
+            return EXIT_CONFIG
+    except Exception as fault:  # The probe broke, so the probe is the fault worth reporting.
+        _write_stderr(f"internal error: {type(fault).__name__}: {fault}", traceback.format_exc())
+        return EXIT_INTERNAL
+    _write_stderr(f"internal error: {type(exc).__name__}: {exc}", traceback.format_exc())
+    return EXIT_INTERNAL
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -294,6 +310,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         return exc.exit_code
     except SystemExit as exc:
         return exc.code if isinstance(exc.code, int) else EXIT_INTERNAL
+    # A pinned runtime dependency that cannot be imported is an environment fault, not a framework
+    # one, and AAP §0.7.2 makes it exit 2 naming the distribution and ``requirements.lock``. The
+    # arm sits before the last-resort net so a probe, not the exception's type, decides: the
+    # importing done here -- the command modules and, through them, the nine check families -- is
+    # where ``segno``, ``numpy``, ``PIL`` and ``httpx`` load. When every dependency is usable the
+    # fault is elsewhere and the last arm's behaviour is reproduced unchanged.
+    except (ImportError, OSError) as exc:
+        # The probe and its import live in a helper that may not raise: see its docstring.
+        return _report_import_failure(exc)
     # The last-resort net: an exception no command anticipated is a framework fault, so the
     # process exits 3 and the type, the message and the traceback are printed, not discarded.
     except Exception as exc:

@@ -1,33 +1,23 @@
 """The end-to-end proof: one command, five runs, one ceiling (AAP §0.6.1 #9).
 
-``pytest -m e2e`` is the whole of success criterion 9. In a single command this module
-builds the corpus and proves it has not drifted from the committed file, consumes the five
-runs the session fixtures pay for -- ``reference`` and ``defective`` at EC M plus the
-40-record boundary subset at L, Q and H -- and then asserts, from the artefacts those runs
-left on disk, that
+``pytest -m e2e`` is the whole of success criterion 9: in one command this module builds the
+corpus and proves it has not drifted from the committed file, consumes the five runs the session
+fixtures pay for (``reference`` and ``defective`` at EC M plus the 40-record boundary subset at
+L, Q and H), and asserts from the artefacts on disk that the sequence is five runs into five
+distinct report roots, that each root carries a parseable ``summary.json``, ``junit.xml`` and
+``index.html``, that ``reference`` failed nothing and ``defective`` exactly the nine checks of
+AAP §0.4.2 with every boundary run clean, that the five finished inside the 600 000 ms ceiling,
+that each failing case's evidence is on disk and its image visible in the HTML report, that each
+``run_id`` is a content hash rather than a clock, and that nothing was written into the
+repository.
 
-* the sequence is exactly five runs into five distinct report roots under the temporary base;
-* every root carries a parseable ``summary.json``, ``junit.xml`` and ``index.html``;
-* ``reference`` failed nothing and ``defective`` failed exactly the nine checks AAP §0.4.2
-  declares, with every boundary run clean;
-* the five runs together finished inside the 600 000 ms ceiling;
-* every failing case's evidence is on disk and its image is visible in the HTML report;
-* each ``run_id`` is a content hash rather than a random value or a clock; and
-* nothing was written into the repository.
-
-It starts no run of its own. The run fixtures in this folder are session-scoped, so the tier
-costs five runs -- the workload AAP §0.6.1 #9 states the ceiling against, about 3,700 encodes
-and 4,100 decodes. A sixth ``run`` here would double the tier's cost and break the budget this
-module itself asserts, so a datum that is missing belongs in the fixture and never in a fresh
-process started from this file.
-
-What is deliberately asserted elsewhere
---------------------------------------
-Check and decoder behaviour, the HTML escaping and per-failure-image contract, and the exit
-code of each individual command are held by ``tests/unit/`` and by the sibling integration
-modules; this module holds the sequence end to end and does not restate them. The one
-wall-clock assertion in the whole folder lives here -- the ceiling -- because AAP §0.5.5
-permits only the ``PF-*`` checks and this gate to read a clock.
+It starts no run of its own: the run fixtures are session-scoped, so the tier costs the five
+runs the ceiling is stated against -- about 3,700 encodes and 4,100 decodes -- and a sixth
+``run`` here would break the budget this module asserts. Check and decoder behaviour, the HTML
+escaping and per-failure-image contract and each command's own exit code belong to
+``tests/unit/`` and to the sibling integration modules; the one wall-clock assertion in the
+folder lives here, because AAP §0.5.5 permits only the ``PF-*`` checks and this gate to read a
+clock.
 """
 
 from __future__ import annotations

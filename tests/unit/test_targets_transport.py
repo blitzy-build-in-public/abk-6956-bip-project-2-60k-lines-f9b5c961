@@ -1,26 +1,26 @@
 """The transport-mapping half of the adapter contract: how an answer is decoded, and how a request
 is shaped, all of it from configuration.
 
-:mod:`qrcheck.targets.base` states the ``returns`` contract once and both the ``library`` and the
-``cli`` adapters consume it through :func:`~qrcheck.targets.base.decode_returned_image`; the dotted
-``metadata_map`` lookup, the dotted ``image_field`` and the ``kwargs_map`` projection are each one
-implementation too. Three properties are load-bearing: every delivery mode delivers the same bytes,
-and the four ways that can go wrong (a missing file, a path that is a directory, base64 that does
-not decode, an empty body) all arrive as :class:`~qrcheck.targets.base.TargetContractError`, never
-as the ``OSError`` or ``binascii.Error`` underneath them; a response's shape comes only from
-configuration, with ``_body`` the one sentinel the adapter may know (AAP §0.3.4, "MUST NOT: the
-HTTP adapter hard-code any vendor endpoint, field name or response shape; all mapping comes from
-config"), whose mechanical half is the AST deny-list this module runs over
-``qrcheck/targets/http.py``; and a subprocess is argv-only -- a list of ``str`` words,
-``shell=False`` and the configured ``timeout_s`` handed to ``subprocess.run`` (AAP §0.3.2, NFR-7),
-because a missing ``timeout`` would let a hung target hang the whole run.
+:mod:`qrcheck.targets.base` states the ``returns`` contract once and both the ``library`` and
+the ``cli`` adapters consume it through :func:`~qrcheck.targets.base.decode_returned_image`; the
+dotted ``metadata_map`` lookup, the dotted ``image_field`` and the ``kwargs_map`` projection are
+each one implementation too. Three properties are load-bearing: every delivery mode delivers the
+same bytes, and the four ways that can go wrong -- a missing file, a path that is a directory,
+base64 that does not decode, an empty body -- all arrive as
+:class:`~qrcheck.targets.base.TargetContractError` rather than as the ``OSError`` or
+``binascii.Error`` underneath them; a response's shape comes only from configuration, with
+``_body`` the one sentinel the adapter may know (AAP §0.3.4's MUST NOT on vendor endpoints,
+field names and response shapes), whose mechanical half is the AST deny-list this module runs
+over ``qrcheck/targets/http.py``; and a subprocess is argv-only -- a list of ``str`` words,
+``shell=False`` and the configured ``timeout_s`` handed to ``subprocess.run`` (AAP §0.3.2,
+NFR-7) -- because a missing ``timeout`` would let a hung target hang the whole run.
 
 Deliberately not asserted: the ``declared_*`` fields of
 :class:`~qrcheck.targets.base.GeneratedSymbol` are the target's own claim, so what is pinned is
 that they carry exactly what the configured path holds and stay ``None`` when nothing is
 configured. No threshold from ``qrcheck.toml`` is read, nothing is skipped, marked, retried or
-timed, no socket is opened (``httpx.MockTransport`` answers every request and ``subprocess.run`` is
-replaced by a recorder), and no directory is created outside ``tmp_path``.
+timed, no socket is opened (``httpx.MockTransport`` answers every request and ``subprocess.run``
+is replaced by a recorder), and no directory is created outside ``tmp_path``.
 """
 
 from __future__ import annotations

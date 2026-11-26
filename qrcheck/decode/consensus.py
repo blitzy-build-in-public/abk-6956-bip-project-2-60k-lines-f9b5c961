@@ -1,105 +1,73 @@
 """Consensus: both reference decoders, one authority, one :class:`DecodeResult`.
 
-Every check in the product reads exactly one decoded-evidence object, and this
-module is what assembles it. The pipeline it owns, in order:
-
-1. **Bytes to pixels.** ``qrcheck.evidence.mux`` -- the framework's owner of the
-   image byte path -- opens the artefact the target returned, any alpha band is
-   composited over an opaque backdrop, and the pixels become one ``H x W``
-   grayscale array that both decoders and the grid sampler read. The image closes
-   once that array exists, because ``CL-ARTIFACTS`` asserts that nothing the
-   framework touched is still open, and an artefact whose longer side is above the
-   ceiling this module declares is refused before a single pixel is decoded.
-2. **Passes.** The primary decoder is run on the artefact as generated, and the
-   secondary decoder too when it is installed. For an inverted request both
-   decoders run a second time on the 255-inverted copy.
-3. **Authority.** The primary decoder's payload, at the first polarity that
-   produced one, is authoritative for all twenty-one checks.
-4. **Grid.** The module grid is sampled from the symbol's normalised polarity
-   and its format information read, which is the only source of the version, the
-   mask and the second, decoder-independent EC-level reading. The reading itself is
-   recorded on the result -- both copies' distances and the number of bits each
-   needed corrected included -- so "the grid could not be recovered" and "the grid
-   was recovered and its format information could not be read" are two different
-   pieces of evidence rather than one missing mask.
-5. **Classification.** The two answers are compared into one ``agreement`` value.
+Every check in the product reads exactly one decoded-evidence object and this module assembles
+it, in this order: :mod:`qrcheck.evidence.mux` opens the artefact the target returned, composites
+any alpha band over an opaque backdrop and hands back one ``H x W`` grayscale array that both
+decoders and the grid sampler read -- the image closes as soon as that array exists, because
+``CL-ARTIFACTS`` asserts that nothing the framework touched is still open, and an artefact whose
+longer side is above the ceiling this module declares is refused before a pixel is decoded; the
+primary decoder runs on the artefact as generated and the secondary too when it is installed,
+both a second time on the 255-inverted copy for an inverted request; the module grid is sampled
+from the symbol's normalised polarity and its format information read, which is the only source
+of the version, the mask and the second, decoder-independent EC-level reading, both copies'
+distances and corrected-bit counts recorded so "the grid could not be recovered" and "the grid
+was recovered and its format information could not be read" are two pieces of evidence rather
+than one missing mask; and the two answers are compared into one ``agreement`` value.
 
 The rules below are contract, not implementation detail (AAP §0.3.2).
 
-* **A decoder that returns no payload is ``undetected``, never a
-  disagreement.** ``disagree`` requires two payloads that differ, so a decoder's
-  silence can never fail a conforming target.
-* **One authority for all twenty-one checks.** ``DecodeResult.payload_bytes`` is
-  the primary decoder's payload whenever it produced one. The secondary decoder
-  corroborates and never becomes the authority: "primary failed, secondary
-  succeeded" is ``secondary_only`` and *fails* downstream with
-  ``payload_bytes`` left ``None``, so no check can pass on the secondary's
-  strength.
-* **Inversion is handled here, not hoped for from a decoder** (§0.3.2, IM-4).
-  ``zxing-cpp`` 2.2.0 exposes no inversion switch -- it happens to read either
-  palette -- while OpenCV 4.10 cannot detect a light-on-dark symbol at all. So an
-  inverted request, meaning one whose ``foreground_rgb`` is lighter than its
-  ``background_rgb``, is decoded twice with both decoders, and the grid is
-  sampled from the normalised copy: sampling a light-on-dark array measures the
-  finder pattern's light ring as its dark run and reports ``finder_unreadable``,
-  which is exactly the wrong-verdict trap ``format_info`` warns about when it
-  says an inverted symbol is normalised by the consensus layer before a grid is
-  sampled. ``polarity_applied`` records which polarity the authoritative payload
-  came from, and a non-inverted request is decoded once, in the polarity as
-  generated.
-* **Two independent EC-level readings, never reconciled.** ``ec_level_decoder``
-  is the primary decoder's metadata and ``ec_level_format`` is the symbol's own
-  15-bit format information. A disagreement between them is the
-  ``format_info_disagreement`` finding a check reports, so collapsing one into
-  the other here would delete the finding.
-* **Damage is not special-cased** (§0.4). Under ``DM-*`` only the primary
-  decoder's success is asserted, and the classification rules above already
-  guarantee that the secondary decoder's silence cannot manufacture a failure.
+* A decoder that returns no payload is ``undetected``, never a disagreement: ``disagree``
+  requires two payloads that differ, so a decoder's silence can never fail a conforming target.
+* ``DecodeResult.payload_bytes`` is the primary decoder's payload whenever it produced one, so
+  "primary failed, secondary succeeded" is ``secondary_only`` and *fails* downstream with
+  ``payload_bytes`` left ``None``: no check can pass on the secondary's strength.
+* Inversion is handled here, not hoped for from a decoder (§0.3.2, IM-4).  ``zxing-cpp`` 2.2.0
+  exposes no inversion switch and OpenCV 4.10 cannot detect a light-on-dark symbol at all, so an
+  inverted request -- one whose ``foreground_rgb`` is lighter than its ``background_rgb`` -- is
+  decoded twice with both decoders and the grid is sampled from the normalised copy: sampling a
+  light-on-dark array measures the finder pattern's light ring as its dark run and reports
+  ``finder_unreadable``.  ``polarity_applied`` records which polarity the authoritative payload
+  came from, and a non-inverted request is decoded once, in the polarity as generated.
+* ``ec_level_decoder`` (the primary decoder's metadata) and ``ec_level_format`` (the symbol's own
+  15-bit format information) are two independent readings, never reconciled: a disagreement
+  between them is the ``format_info_disagreement`` finding a check reports.
+* Damage is not special-cased (§0.4): under ``DM-*`` only the primary decoder's success is
+  asserted, and the classification rules above already stop the secondary's silence from
+  manufacturing a failure.
 
-**One documented refinement, and why it is the only deviation.** The secondary
-decoder returns text, not bytes, so for a payload that is not losslessly
-text-representable -- the ``random-bytes`` corpus class and every ``payload_b64``
-record -- its re-encoded bytes legitimately differ from a binary primary payload
-even for a perfectly conforming symbol. Comparing them byte-exactly would
-classify those records as ``disagree``, and AAP §0.4.1's clean-run gate demands
-``counts.failed == 0`` for the conforming ``reference`` target across all 240
-records, so forty conforming cases would fail and the non-vacuity proof would
-collapse. ``disagree`` therefore applies only when the primary payload round-trips
-through UTF-8 (``primary.text.encode("utf-8") == primary.payload``) and the
-secondary's payload still differs; anything else the secondary cannot corroborate
-is recorded as ``primary_only``. This never loosens the primary's authority -- it
-only declines to let a corroborator that cannot speak about bytes contradict
-bytes.
+One documented refinement, and the only deviation.  The secondary decoder returns text, not
+bytes, so for a payload that is not losslessly text-representable -- the ``random-bytes`` corpus
+class and every ``payload_b64`` record -- its re-encoded bytes legitimately differ from a binary
+primary payload even for a perfectly conforming symbol.  Comparing them byte-exactly would
+classify those records ``disagree``, and AAP §0.4.1's clean-run gate demands ``counts.failed ==
+0`` for the conforming ``reference`` target across all 240 records, so forty conforming cases
+would fail.  ``disagree`` therefore applies only when the primary payload round-trips through
+UTF-8 (``primary.text.encode("utf-8") == primary.payload``) and the secondary's payload still
+differs; anything else the secondary cannot corroborate is recorded as ``primary_only``, which
+never loosens the primary's authority: it only declines to let a corroborator that cannot speak
+about bytes contradict bytes.
 
-``DecodeResult.secondary_comparable`` is what makes that narrowing visible rather
-than silent, and it is the only place it is visible: ``True`` when both decoders
-answered and their payloads were comparable -- equal, or a primary payload whose
-text the secondary's could have contradicted -- ``False`` when both answered with
-differing payloads the refinement declined to compare, and ``None`` when no
-comparison was attempted because the secondary decoder did not run, found nothing
-or errored, or the primary decoder produced no payload. A reader of
-``decoded.json`` or ``summary.json`` can therefore tell "the secondary said
-nothing" from "the secondary's answer could not be compared", which the
-``primary_only`` classification alone records identically.
+``DecodeResult.secondary_comparable`` makes that narrowing visible, and it is the only place it
+is visible: ``True`` when both decoders answered and their payloads were comparable, ``False``
+when both answered with differing payloads the refinement declined to compare, and ``None`` when
+no comparison was attempted because the secondary decoder did not run, found nothing or errored,
+or the primary decoder produced no payload.  A reader of ``decoded.json`` or ``summary.json`` can
+therefore tell "the secondary said nothing" from "the secondary's answer could not be compared",
+which the ``primary_only`` classification alone records identically.
 
-Imports: the four decode-layer modules this pipeline joins, ``qrcheck.evidence.mux``
-and ``qrcheck.config.models``, the standard library, ``numpy`` and ``Pillow``.
-``GenerateRequest`` is imported for its annotations only, under ``TYPE_CHECKING``,
-so importing this module does not load ``qrcheck.targets`` -- whose package import
-pulls in ``click``, ``httpx`` and ``segno`` -- which is the same guard
-``qrcheck/decode/__init__.py`` applies to the same name (AAP §0.7.1). The two
-non-annotation additions are ownership rather than convenience: ``mux`` owns every
-byte the framework turns into an image, so the pixel decode is delegated to it
-instead of being repeated here (AAP §0.8.1), and ``config.models`` declares the
-reference decode size ``decode_image_px`` exactly once, which is the budget this
-module's artefact ceiling is derived from (AAP §0.6.2). No concrete adapter is
-imported, and nothing here comes from ``qrcheck.checks``, ``qrcheck.report`` or
+Imports: the four decode-layer modules this pipeline joins, ``qrcheck.evidence.mux`` (the owner of
+every byte the framework turns into an image, so the pixel decode is delegated rather than
+repeated) and ``qrcheck.config.models`` (which declares the reference decode size
+``decode_image_px`` exactly once, the budget this module's artefact ceiling derives from -- AAP
+§0.6.2).  ``GenerateRequest`` is imported for its annotations only, under ``TYPE_CHECKING``, so
+importing this module does not load ``qrcheck.targets`` with its ``click``, ``httpx`` and
+``segno`` (AAP §0.7.1).  Nothing here comes from ``qrcheck.checks``, ``qrcheck.report`` or
 ``qrcheck.registry``.
 
-It raises nothing for target-supplied data: unreadable bytes, an SVG artefact, a
-symbol neither decoder can read, and a grid that cannot be sampled all come back
-as a ``DecodeResult``. ``ValueError`` is reserved for a programmer error in an
-argument -- an object that is not bytes, or a request that carries no colours.
+It raises nothing for target-supplied data: unreadable bytes, an SVG artefact, a symbol neither
+decoder can read and a grid that cannot be sampled all come back as a ``DecodeResult``.
+``ValueError`` is reserved for a programmer error in an argument -- an object that is not bytes,
+or a request that carries no colours.
 """
 
 from __future__ import annotations

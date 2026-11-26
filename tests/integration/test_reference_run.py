@@ -1,45 +1,26 @@
 """The reference run's gates: a conforming target must come back completely clean.
 
-This module asserts the acceptance evidence AAP §0.4.1 and §0.6.1 rows **#1, #2, #3, #5**
-and **#10** require from a whole run against the built-in ``reference`` target over the
-committed 240-record corpus at EC level M, plus the boundary subset §0.6.1 #2 replays at
-L, Q and H. Six of the conditions it holds would each fail on a vacuous suite:
+Holds the acceptance evidence AAP §0.4.1 and §0.6.1 rows #1, #2, #3, #5 and #10 require from a
+whole run against the built-in ``reference`` target over the committed 240-record corpus at EC
+level M, plus the boundary subset #2 replays at L, Q and H. Each condition below fails on a
+vacuous suite: the run is clean, with ``failed``, ``error`` and ``skipped`` all zero; all 21
+registered checks executed and passed something, so none is reachable from a test alone (#8);
+the observable workload equals the case matrix check for check, 1,283 cases; round-trip holds
+for all 240 records with the identifiers tied back to the corpus file (#2); the same round-trip,
+version and EC assertions hold for the 40 boundary records at L, Q and H; and the performance
+floors are the configured ones, read from ``qrcheck.toml`` by the check and reported in
+``expected`` so nothing is restated (#10, §0.6.2). The report contracts are held here too:
+``summary.json`` is exactly the documented schema in the documented order, ``junit.xml`` is the
+``xunit2`` document carrying no hostname or timestamp, ``index.html`` cites no external origin,
+and a clean run writes no evidence (#6).
 
-* the run is clean -- ``failed == 0``, ``error == 0`` **and** ``skipped == 0`` (AAP §0.4.1);
-* every one of the 21 registered checks executed and has at least one ``passed`` result, so
-  no check is reachable only from a test (AAP §0.6.1 #8);
-* the observable workload equals AAP §0.8.1's case matrix check for check, 1,283 cases;
-* round-trip holds for all 240 committed corpus records and the case identifiers are tied
-  back to the corpus file rather than to the report itself (AAP §0.6.1 #2);
-* the same round-trip, version and EC assertions hold for the 40 boundary records at L, Q
-  and H, which is how §0.6.1 #2's four-run sequence is invoked;
-* the performance floors are the configured ones, read from ``qrcheck.toml`` by the check
-  and reported in the result's ``expected`` so nothing is restated (AAP §0.6.1 #10, §0.6.2).
-
-The remaining three hold the report-side contracts a real run must satisfy: ``summary.json``
-is exactly the documented schema in the documented order, ``junit.xml`` is the ``xunit2``
-document that carries no hostname or timestamp, ``index.html`` references no external
-origin, and a clean run writes no evidence at all (AAP §0.6.1 #6).
-
-Two session fixtures, not two runs
-----------------------------------
-Every case here consumes a fixture from ``tests/integration/conftest.py``:
-:func:`reference_report` for the whole-corpus run and :func:`boundary_runs` for L, Q and H.
-Both are session-scoped, so each run is paid for exactly once per session. That is a budget
-constraint rather than a convenience: AAP §0.6.1 #9 allows the whole tier five runs (about
-3,700 encodes and 4,100 decodes) inside 600 s, and a second reference run made "to compare"
-would break it. Nothing here starts a run of its own, calls the command line, or writes a
-report.
-
-Determinism
------------
-No wall-clock quantity is compared here: ``duration_ms`` is recorded and never asserted, and
-the two run timestamps are checked for shape only, because the ``PF-*`` checks are the only
-cases in the product permitted to assert on a duration (AAP §0.5.5, §0.12). Every collection
-is walked in sorted order or through the ordering the schema fixes, so a failure message
-names the same case on every machine. No threshold, sample count or tolerance is written in
-this file: the performance floors are read from ``qrcheck.toml`` and compared with the values
-the run itself reported (AAP §0.6.2).
+Both runs come from the session-scoped ``reference_report`` and ``boundary_runs`` fixtures in
+``tests/integration/conftest.py``, because #9 allows the tier five runs inside 600 s and a
+second reference run "to compare" would break it; nothing here starts a run, calls the command
+line or writes a report. No wall-clock quantity is compared -- ``duration_ms`` is recorded and
+never asserted, and the run timestamps are checked for shape only (§0.5.5, §0.12) -- and every
+collection is walked in sorted order or through the ordering the schema fixes, so a failure
+message names the same case on every machine.
 """
 
 from __future__ import annotations
@@ -71,13 +52,10 @@ from qrcheck.registry.check import REGISTRY
 pytestmark = pytest.mark.e2e
 
 
-# ---------------------------------------------------------------------------
-# The contract constants
-#
-# Each value below is a fact the report is asserted against, never a threshold this file
-# chose: the identifiers and the case counts are AAP §0.3.4 and §0.8.1's, the seed and the
-# EC level are the committed configuration's, and the corpus size is the committed file's.
-# ---------------------------------------------------------------------------
+# The contract constants. Each value below is a fact the report is asserted against, never a
+# threshold this file chose: the identifiers and the case counts are AAP §0.3.4's and
+# §0.8.1's, the seed and the EC level are the committed configuration's, and the corpus size is
+# the committed file's.
 
 #: The 21 check identifiers of AAP §0.3.4, verbatim. A check cannot be dropped, renamed or
 #: silently duplicated without this set disagreeing with the run.
@@ -229,14 +207,10 @@ _REFERENCE_ATTRIBUTE: Final[re.Pattern[str]] = re.compile(
 )
 
 
-# ---------------------------------------------------------------------------
-# Reading the artefacts
-#
-# Every helper below either returns a value or fails with a diagnostic naming what it saw:
-# none of them skips, retries or repairs. A report that cannot be read is a defect in the
-# product, and a test that tolerated it would be the vacuous gate this module exists to
+# Reading the artefacts. Every helper below either returns a value or fails with a diagnostic
+# naming what it saw; none skips, retries or repairs. A report that cannot be read is a defect
+# in the product, and a test that tolerated it would be the vacuous gate this module exists to
 # prevent (AAP §0.4.3).
-# ---------------------------------------------------------------------------
 
 
 def _results(summary: Mapping[str, Any]) -> list[Mapping[str, Any]]:
@@ -408,14 +382,10 @@ def _reference_attributes(document: str) -> list[str]:
     ]
 
 
-# ---------------------------------------------------------------------------
-# The gates
-#
-# One test per condition, in the order the report is read: is the run clean, did every check
-# execute, did each run the declared number of cases, then the case-level proofs (round-trip
-# over the committed corpus, the boundary subset at three levels, the performance floors), and
-# finally the three report contracts. No test repeats another's assertion.
-# ---------------------------------------------------------------------------
+# The gates: one test per condition, in the order the report is read -- is the run clean, did
+# every check execute, did each run the declared number of cases, then the case-level proofs
+# (round-trip over the committed corpus, the boundary subset at three levels, the performance
+# floors) and finally the three report contracts. No test repeats another's assertion.
 
 
 def test_reference_run_is_clean(

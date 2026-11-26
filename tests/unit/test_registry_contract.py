@@ -1,37 +1,26 @@
 """Contract test: check identity, the fields each check declares, and resolution to skips.
 
 ``qrcheck/registry/check.py`` is the single owner of check identity and ordering and
-``qrcheck/registry/resolve.py`` is the single place a shortfall becomes a skip (AAP §0.3.4
-"Identity and selection"). A check that exists but never runs, one registered under an identifier
-nobody declared, a requirement that quietly disappears, or a shortfall quietly counted as a pass
-would each let a report describe a run that never happened, so this module asserts that:
-
-* the registry holds **exactly** the twenty-one identifiers of AAP §0.3.4, with no duplicate, and a
-  duplicate registration raises instead of replacing the registered check;
-* every contract carries the declared fields and types, and iteration is by identifier ascending --
-  after the families are loaded again, and after a separate process imports them in the reverse of
-  :data:`FAMILY_MODULES` order -- so import order cannot reach an artefact (AAP §0.3.4, §0.5.3);
-* the nine family modules, their identifier ownership, every check's capability requirements and
-  its optional runtime dependency are the plan's; the requirements are what let a fourth adapter
-  kind be added without touching a check;
-* an unmet capability resolves to ``skipped``/``unsupported_capability``, a missing runtime
-  dependency to ``skipped``/``missing_dependency``, the capability reason outranks the dependency
-  one, and ``skipped`` rises while ``passed`` stays at zero (AAP §0.6.6 row 9); ``resolve`` raises
-  for neither, because a shortfall is a result rather than an exception;
-* each built-in self-check target's expected failing set is the declared one -- empty for
-  ``reference``, the nine identifiers of AAP §0.4.2 for ``defective`` -- validates against the real
-  registry, and an expectation naming an unregistered check raises rather than shrinking what the
-  acceptance gate compares;
-* ``qrcheck list --json`` enumerates all twenty-one checks ascending with sorted ``requires`` and
-  ``dependencies`` matching the same tables, so a check reachable from an import alone fails here;
-  the executed-set half of that criterion belongs to
-  ``tests/integration/test_registry_reachability.py``.
+``qrcheck/registry/resolve.py`` the single place a shortfall becomes a skip (AAP §0.3.4
+"Identity and selection"). A check that exists but never runs, one registered under an
+identifier nobody declared, a requirement that quietly disappears, or a shortfall counted as a
+pass would each let a report describe a run that never happened, so the registry must hold
+**exactly** the twenty-one identifiers with no duplicate and a duplicate registration raising;
+iteration must be ascending by identifier even after a separate process imports the families in
+reverse :data:`FAMILY_MODULES` order (AAP §0.5.3); the nine families, every check's capability
+requirements and its optional runtime dependency must be the plan's; an unmet capability must
+resolve to ``skipped``/``unsupported_capability``, a missing runtime dependency to
+``skipped``/``missing_dependency``, the capability reason outranking the dependency one (AAP
+§0.6.6 row 9), with ``resolve`` raising for neither; and each built-in target's expected
+failing set -- empty for ``reference``, the nine identifiers of AAP §0.4.2 for ``defective`` --
+must validate against the real registry.
 
 The dependency column is asserted as the AAP's table writes it, not as a one-line summary of the
-row reads: ``PF-DECODE`` decodes a fixed probe image and needs nothing of the target, so it
-declares the primary decoder, while ``CL-ARTIFACTS`` touches neither a decoder nor a target and
-declares no token; both require no capability. Nothing here drives a target, decodes a symbol,
-reads a corpus record or writes a file, and no threshold is written here.
+row reads: ``PF-DECODE`` needs the primary decoder to decode its fixed probe image, while
+``CL-ARTIFACTS`` touches neither decoder nor target and declares no token, and both require no
+capability. Nothing here drives a target, decodes a symbol, reads a corpus record or writes a
+file, and the executed-set half of ``qrcheck list --json`` belongs to
+``tests/integration/test_registry_reachability.py``.
 """
 
 from __future__ import annotations

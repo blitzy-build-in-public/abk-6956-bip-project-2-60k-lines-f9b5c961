@@ -1,23 +1,22 @@
 """Contract test: the adapter factory covers every target type the configuration declares.
 
 ``qrcheck/targets/__init__.py`` is the product's single extension point (AAP §0.3.4, "Extension
-boundary"), so this module is the mechanical proof that the table's keys are exactly
-``models.ADAPTER_TYPE_NAMES``; that each entry is the class the extension model names, compared by
-**identity** rather than by name string; that every entry given a record of its own dataclass type
-returns an object satisfying the :class:`~qrcheck.targets.base.Adapter` protocol -- ``isinstance``
-and never ``issubclass``, because the protocol has non-method members (``name``, ``capabilities``)
-and CPython 3.11 refuses ``issubclass`` for those; that an undeclared type raises ``KeyError``
-rather than resolving to ``None`` and the table cannot be mutated into redirecting a run; and that
-the capability vocabulary is the same on both sides of the configuration seam.
+boundary"), so this module proves mechanically that the table's keys are exactly
+``models.ADAPTER_TYPE_NAMES``; that each entry is the class the extension model names, compared
+by **identity** rather than by name string; that every entry given a record of its own dataclass
+type returns an object satisfying the :class:`~qrcheck.targets.base.Adapter` protocol --
+``isinstance`` and never ``issubclass``, because the protocol has non-method members (``name``,
+``capabilities``) and CPython 3.11 refuses ``issubclass`` for those; that an undeclared type
+raises ``KeyError`` rather than resolving to ``None``, and that the table cannot be mutated into
+redirecting a run; and that the capability vocabulary is the same on both sides of the
+configuration seam. The capability half is load-bearing beyond this module: the three
+configurable adapters declare exactly the capabilities their resolved record carries and the two
+built-in self-check targets declare all thirteen themselves, which is what lets the clean-run
+gate demand zero skips (AAP §0.4.1) and stops an expected failure of the ``defective`` target
+from being turned into a skip (AAP §0.4.2).
 
-The capability half is load-bearing beyond this module: the three configurable adapters declare
-exactly the capabilities their resolved record carries and the two built-in self-check targets
-declare all thirteen themselves, which is what lets the clean-run gate demand zero skips (AAP
-§0.4.1) and stops an expected failure of the ``defective`` target from being turned into a skip
-(AAP §0.4.2).
-
-Construction only: nothing here calls ``generate``, spawns a subprocess, opens a socket, encodes a
-symbol or writes a file, because the subject is the factory and the port; no case is skipped,
+Construction only: nothing here calls ``generate``, spawns a subprocess, opens a socket, encodes
+a symbol or writes a file, because the subject is the factory and the port; no case is skipped,
 marked, xfailed or retried.
 """
 

@@ -1,72 +1,52 @@
 """Resolve a check selection against what a target and a host can actually do.
 
-Nothing in qrcheck may decide *while running* that a check cannot run: a check that
-turned out to be impossible half-way through a case would produce a failure that
-describes the host rather than the target, and a check that was quietly dropped would
-let a run look complete when it covered less.  This module makes that decision once,
-before execution, from the two facts the runner already holds:
+Nothing in qrcheck may decide *while running* that a check cannot run: a check that turned out to be
+impossible half-way through a case would produce a failure that describes the host rather than the
+target, and a check that was quietly dropped would let a run look complete when it covered less.
+This module makes that decision once, before execution, from the two facts the runner already holds:
+the capabilities the adapter declares, intersected with each
+:class:`~qrcheck.registry.check.CheckContract`'s own ``requires`` set, and the availability of the
+optional runtime dependencies the host provides, keyed by the
+:data:`~qrcheck.registry.check.DEPENDENCY_TOKENS` tokens a contract declares in its
+``dependencies``.  Its output is a :class:`Resolution`: the checks that will run and the checks that
+will not, each skip carrying the reason and the exact requirements it lacks.
 
-* the capabilities the adapter declares (its ``capabilities`` set), intersected with
-  each :class:`~qrcheck.registry.check.CheckContract`'s own ``requires`` set; and
-* the availability of the optional runtime dependencies the host provides, keyed by
-  the :data:`~qrcheck.registry.check.DEPENDENCY_TOKENS` tokens a contract declares in
-  its ``dependencies``.
-
-Its output is a :class:`Resolution`: the checks that will run and the checks that will
-not, each skip carrying the reason and the exact requirements it lacks.
-
-A shortfall is never an exception
----------------------------------
-Every shortfall becomes a :class:`SkipOutcome`, and the runner turns those into
-``skipped`` :class:`~qrcheck.report.model.CaseResult` records through
-:func:`skip_case_results`.  Nothing here raises because a target cannot do something,
-and nothing here decides an exit code.  Exactly two reasons exist, and this module
-produces no other:
-
-* :attr:`~qrcheck.report.model.Reason.UNSUPPORTED_CAPABILITY` -- the target did not
-  declare a capability the check requires.  The configuration is valid; this target
-  simply cannot serve this check, which is why it is a skip rather than the exit-code-2
-  configuration error an unknown capability *name* is (the configuration schema
-  rejects that far earlier, where it is wrong in itself).
-* :attr:`~qrcheck.report.model.Reason.MISSING_DEPENDENCY` -- the check needs an
-  optional runtime dependency the host does not provide (the SVG rasterizer), so its
-  assertion could not be made at all.  The platform file-descriptor directory is not
-  one of these: that check reports the handle half per case as
-  ``unsupported_platform`` while its temporary-file half still asserts (AAP §0.8.1),
-  which a whole-check skip here would drop.
-
-A capability shortfall outranks a missing dependency: a check whose target cannot even
-produce the artefact would not become runnable by installing the missing tool, so one
-skip per check is the honest description and the capability reason is the true one.
+Every shortfall becomes a :class:`SkipOutcome`, and the runner turns those into ``skipped``
+:class:`~qrcheck.report.model.CaseResult` records through :func:`skip_case_results`; nothing here
+raises because a target cannot do something, and nothing here decides an exit code.  Exactly two
+reasons exist, and this module produces no other.
+:attr:`~qrcheck.report.model.Reason.UNSUPPORTED_CAPABILITY` -- the target did not declare a
+capability the check requires: the configuration is valid and this target simply cannot serve this
+check, which is why it is a skip rather than the exit-code-2 configuration error an unknown
+capability *name* is (the configuration schema rejects that far earlier, where it is wrong in
+itself).  :attr:`~qrcheck.report.model.Reason.MISSING_DEPENDENCY` -- the check needs an optional
+runtime dependency the host does not provide (the SVG rasterizer), so its assertion could not be
+made at all; the platform file-descriptor directory is deliberately not one of these, because that
+check reports the handle half per case as ``unsupported_platform`` while its temporary-file half
+still asserts (AAP §0.8.1), which a whole-check skip here would drop.  A capability shortfall
+outranks a missing dependency: a check whose target cannot even produce the artefact would not
+become runnable by installing the missing tool, so one skip per check is the honest description and
+the capability reason is the true one.
 
 A skip is a real outcome, never a flavoured pass: it is counted in its own integer of
-:class:`~qrcheck.report.model.Counts` and can never produce a passing exit code.  The
-reference target declares all thirteen capabilities, so a conforming run reaches zero
-skips, which is what keeps this module from being a hiding place.
+:class:`~qrcheck.report.model.Counts` and can never produce a passing exit code.  The reference
+target declares all thirteen capabilities, so a conforming run reaches zero skips, which is what
+keeps this module from being a hiding place.
+:func:`qrcheck.targets.base.require_capabilities` refuses an unsupported request before any I/O and
+stays, as the adapter's own guard for a request that reaches it by any other route; this module is
+the pre-execution path that turns the same shortfall into a result a report can show, so the two
+mechanisms answer different questions and neither may be removed in favour of the other.
 
-The gap this closes against the adapter's own gate
---------------------------------------------------
-:func:`qrcheck.targets.base.require_capabilities` refuses an unsupported request before
-any I/O, and it stays: it is the adapter's own guard for a request that reaches it by
-any other route.  This module is the pre-execution path that turns the same shortfall
-into a result a report can show, so the two mechanisms answer different questions and
-neither may be removed in favour of the other.
+Determinism: both tuples of a :class:`Resolution` are ordered by check identifier ascending, the
+``missing`` tuple of a skip is sorted and de-duplicated, and no input is mutated, so two resolutions
+of the same selection describe it identically.  Nothing here reads the clock, the environment, the
+filesystem, the network or a random source.
 
-Determinism
------------
-Both tuples of a :class:`Resolution` are ordered by check identifier ascending, the
-``missing`` tuple of a skip is sorted and de-duplicated, and no input is mutated, so
-two resolutions of the same selection describe it identically.  Nothing here reads the
-clock, the environment, the filesystem, the network or a random source.
-
-Layering
---------
-The only runtime imports are :mod:`qrcheck.registry.check` -- which owns check identity,
-the dependency vocabulary and the capability type -- and :mod:`qrcheck.report.model`,
-which owns the status and reason words.  Neither the check modules, nor an adapter
-implementation, nor the decode layer is imported here: requirements travel on the
-contract and availability arrives as data, so this module has nothing to keep in step
-when a fourth adapter kind or a fifth check family appears.
+Layering: the only runtime imports are :mod:`qrcheck.registry.check` -- which owns check identity,
+the dependency vocabulary and the capability type -- and :mod:`qrcheck.report.model`, which owns the
+status and reason words.  Neither the check modules, nor an adapter implementation, nor the decode
+layer is imported here: requirements travel on the contract and availability arrives as data, so
+this module has nothing to keep in step when a fourth adapter kind or a fifth check family appears.
 """
 
 from __future__ import annotations

@@ -1,82 +1,78 @@
 """``DM-RESILIENCE`` and ``DM-SEEDED``: damage one symbol seven ways, then reproduce it.
 
 The damage family and nothing else (AAP §0.8.1, §0.9.1).  Every threshold lives in
-``qrcheck.toml`` and is read from the resolved configuration -- this module holds no threshold
-of its own -- and no assertion is weakened, skipped or relaxed to keep a target green.
+``qrcheck.toml`` and is read from the resolved configuration -- this module holds no
+threshold of its own -- and no assertion is weakened, skipped or relaxed to keep a target green.
 
-Case matrix: both checks run the same 56 cases, a fixed 8-record sample crossed with the seven
-declared damage kinds in their declared order
-(:data:`~qrcheck.evidence.naming.DAMAGE_KINDS`).  One case is one variant of one record, and
-its case identifier is ``corpus:<record-id>@<kind>`` -- the AAP §0.3.4 prefix plus the variant
-suffix, which :func:`qrcheck.report.model.failure_id` sanitizes for the evidence path.  The
-sample is the first eight corpus records in ``id`` order whose payload is between
-:data:`_MIN_PAYLOAD_BYTES` and :data:`_MAX_PAYLOAD_BYTES`: the upper bound keeps the defective
-target's ``truncated_payload`` injection away from them (it truncates only payloads longer than
-64 bytes whose truncation keeps the version), and the window keeps them well inside capacity,
-so the damage budget is the only thing under test.
+Both checks run the same 56 cases: a fixed 8-record sample crossed with the seven declared damage
+kinds in their declared order (:data:`~qrcheck.evidence.naming.DAMAGE_KINDS`), one case being one
+variant of one record with case identifier ``corpus:<record-id>@<kind>``, which
+:func:`qrcheck.report.model.failure_id` sanitizes for the evidence path.  The sample is the first
+eight corpus records in ``id`` order whose payload is between :data:`_MIN_PAYLOAD_BYTES` and
+:data:`_MAX_PAYLOAD_BYTES`: the upper bound keeps the defective target's ``truncated_payload``
+injection away from them, since it truncates only payloads longer than 64 bytes whose truncation
+keeps the version, and the window keeps them well inside capacity so the damage budget is the only
+thing under test.
 
 Encoder invocations are declared, not incidental (:data:`EXPECTED_ENCODES`, AAP §0.4.3):
-``DM-RESILIENCE`` makes 8 -- one per sampled record, shared across that record's seven kinds --
-and ``DM-SEEDED`` makes 0.  No retry, re-run or second call exists in this module, so a count of
-nine or one is a framework defect.  Decoder invocations are one per case for the damaged
-variant (56 each) plus, in ``DM-RESILIENCE``, one memoised pristine reading per sampled record
-(8), because the occlusion budget is the recovery capacity of the EC level decoded from the
-symbol and that fact exists only after a decode.
+``DM-RESILIENCE`` makes 8 -- one per sampled record, shared across that record's seven kinds -- and
+``DM-SEEDED`` makes 0, so a count of nine or one is a framework defect.  Decoder invocations are one
+per case for the damaged variant (56 each) plus, in ``DM-RESILIENCE``, one memoised pristine
+reading per sampled record (8), because the occlusion budget is the recovery capacity of the EC
+level decoded from the symbol and that fact exists only after a decode.
 
-What each check asserts: ``DM-RESILIENCE`` applies one damage kind to the symbol the target
-returned and asserts that the **primary decoder** still returns the requested payload, while
-the secondary decoder's outcome is recorded and never asserted (AAP §0.3.2) -- opencv is
-fragile on damaged symbols and a silent second opinion is not a disagreement, so failing on it
-would report the corroborating decoder's weakness as the target's defect.  ``DM-SEEDED``
-re-applies the same damage to the symbol it already holds, with the same derived seed and the
-same resolved thresholds, and asserts the result is **byte-identical** to the variant
-``DM-RESILIENCE`` produced, before decoding it and asserting the payload again; it never calls
-the adapter, which makes "a damaged image is reproducible from what the report records" (AAP
-§0.5.2, criterion 4) a property of the product rather than of a re-run.
+``DM-RESILIENCE`` applies one damage kind to the symbol the target returned and asserts that the
+**primary decoder** still returns the requested payload, while the secondary decoder's outcome is
+recorded and never asserted (AAP §0.3.2): opencv is fragile on damaged symbols and a silent second
+opinion is not a disagreement, so failing on it would report the corroborating decoder's weakness
+as the target's defect.  ``DM-SEEDED`` re-applies the same damage to the symbol it already holds,
+with the same derived seed and the same resolved thresholds, and asserts the result is
+**byte-identical** to the variant ``DM-RESILIENCE`` produced, before decoding it and asserting the
+payload again; it never calls the adapter, which makes "a damaged image is reproducible from what
+the report records" (AAP §0.5.2, criterion 4) a property of the product rather than of a re-run.
 
-The occluder budget is ``recovery_fraction(decoded EC level) - occlusion_margin`` taken from
-the level the symbol itself reports, never the requested one -- AAP §0.4.2's cascade
-containment, and why the defective target's ``wrong_ec_level`` injection cannot push damage past
-the symbol's real capacity and turn eight damage cases into failures.  It buys
+The occluder budget is ``recovery_fraction(decoded EC level) - occlusion_margin``, taken from the
+level the symbol itself reports and never the requested one -- AAP §0.4.2's cascade
+containment, and
+why the defective target's ``wrong_ec_level`` injection cannot push damage past the symbol's real
+capacity and turn eight damage cases into failures.  It buys
 ``round(budget x eligible module count)`` modules, spent whole codewords at a time: the recovery
-fractions are stated per codeword and one occluded module corrupts the entire codeword it sits
-in, so spreading the same modules one by one would corrupt up to eight times the codewords the
-budget allows and fail a conforming target at EC Q and EC H.  A codeword is
+fractions are stated per codeword and one occluded module corrupts the entire codeword it sits in,
+so spreading the same modules one by one would corrupt up to eight times the codewords the budget
+allows and fail a conforming target at EC Q and EC H.  A codeword is
 :data:`_MODULES_PER_CODEWORD` modules (ISO/IEC 18004 §7.6), and the codewords are located by
 replaying the standard's placement traversal (:func:`_codeword_modules`) over the exact
 function-pattern mask.
 
 The run-scoped symbol memo lives here because ``RunContext`` carries no symbol store, and three
-invariants keep it honest: it is cleared once, at the start of ``DM-RESILIENCE``'s case
-enumeration, which the runner always reaches first because it walks checks by identifier
-ascending; a record's symbol is encoded lazily on first touch, since case identifiers sort
-alphabetically and nothing may assume an order; and nothing else in the product may read it --
-the framework is single-process and sequential (AAP §0.3.6), so it needs no lock.
+invariants keep it honest: it is cleared once, at the start of ``DM-RESILIENCE``'s case enumeration,
+which the runner always reaches first because it walks checks by identifier ascending; a record's
+symbol is encoded lazily on first touch, since case identifiers sort alphabetically and nothing may
+assume an order; and nothing else in the product may read it -- the framework is single-process and
+sequential (AAP §0.3.6), so it needs no lock.
 
-Never: no retry, no ``xfail``, no threshold literal, no ``except Exception``, no bare
-``except``, no assertion on the secondary decoder under damage and none on wall-clock time (the
-only clock read produces ``duration_ms``, which every report masks).  ``TargetUnavailable`` and
-``TargetTimeout`` propagate to :mod:`qrcheck.runner`, which owns the one-error-result-per-check
-target-loss policy; the other three adapter errors are translated by
+Never: no retry, no ``xfail``, no threshold literal, no ``except Exception``, no bare ``except``, no
+assertion on the secondary decoder under damage and none on wall-clock time (the only clock read
+produces ``duration_ms``, which every report masks).  ``TargetUnavailable`` and ``TargetTimeout``
+propagate to :mod:`qrcheck.runner`, which owns the one-error-result-per-check target-loss policy,
+and the other three adapter errors are translated by
 :func:`qrcheck.checks.support.case_status_for_error`, the single translation in the product.  No
-image library is imported: Pillow is reachable only through :mod:`qrcheck.evidence.mux`, so a
-raster is built from the image mux handed us (:func:`_raster`) and every raster is encoded by
+image library is imported: Pillow is reachable only through :mod:`qrcheck.evidence.mux`, so a raster
+is built from the image mux handed here (:func:`_raster`) and every raster is encoded by
 :func:`qrcheck.evidence.mux.encode_png`.
 
-Reason codes this family emits: ``value_mismatch`` (the damaged symbol no longer returns the
-requested payload, or the regenerated variant differs from the recorded one),
-``sampling_failed`` (only when the pristine, pre-damage measurement cannot recover the module
-grid or the symbol's own EC level, without which no budget exists), ``missing_dependency``
-(``DM-SEEDED`` selected without the ``DM-RESILIENCE`` run that holds the symbol), plus whatever
-:func:`~qrcheck.checks.support.case_status_for_error` reports for ``target_rejected``,
-``contract_error`` and ``unsupported_capability``.
+Reasons emitted: ``value_mismatch`` (the damaged symbol no longer returns the requested payload, or
+the regenerated variant differs from the recorded one), ``sampling_failed`` (only when the pristine,
+pre-damage measurement cannot recover the module grid or the symbol's own EC level, without which no
+budget exists), ``missing_dependency`` (``DM-SEEDED`` selected without the ``DM-RESILIENCE`` run
+that holds the symbol), plus ``target_rejected``, ``contract_error`` and ``unsupported_capability``
+from :func:`~qrcheck.checks.support.case_status_for_error`.
 
 Determinism (AAP §0.5.1, §0.5.2): every random draw comes from
 ``derive_seed(run_seed, "DM-RESILIENCE", case_id, kind)`` fed only into
 :class:`numpy.random.PCG64`; the derived seed is the result's ``seed``, the ``<seed>`` of the
-``damage-<kind>-<seed>.png`` artefact name, and the value ``DM-SEEDED`` re-derives.  Identical
-inputs therefore produce identical damaged bytes, which is what makes criterion 4's
-byte-for-byte comparison meaningful.
+``damage-<kind>-<seed>.png`` artefact name, and the value ``DM-SEEDED`` re-derives, so identical
+inputs produce identical damaged bytes and criterion 4's byte-for-byte comparison is meaningful.
 """
 
 from __future__ import annotations

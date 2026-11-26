@@ -1,91 +1,62 @@
 """Round-trip conformance: the decoded payload is byte-identical to the request.
 
-``RT-ROUNDTRIP`` asserts exactly one property: a symbol a target produced for a payload
-decodes, under the framework's primary decoder, back to the very bytes that were
-requested.  Each of the corpus's 240 records contributes one case, so a full run is
-240 cases, 240 encodes and 240 decodes (AAP §0.8.1 case matrix).  That count is declared
-by :data:`EXPECTED_ENCODES`, which is what lets a counting stub prove that no case ran
-twice and that no retry path exists (AAP §0.4.3).  The check is also one of the nine
-identifiers a ``--adapter defective`` run must fail: the ``truncated_payload`` injection
-encodes only the first 64 bytes of a longer payload, so the symbol still decodes but to
-the wrong bytes (AAP §0.4.2).
+``RT-ROUNDTRIP`` asserts exactly one property -- a symbol a target produced for a payload
+decodes, under the framework's primary decoder, back to the very bytes that were requested -- over
+all 240 corpus records, so a full run is 240 cases, 240 encodes and 240 decodes (AAP §0.8.1 case
+matrix).  That count is declared by :data:`EXPECTED_ENCODES`, which is what lets a counting stub
+prove that no case ran twice and that no retry path exists (AAP §0.4.3).  The check is also one of
+the nine identifiers a ``--adapter defective`` run must fail: the ``truncated_payload`` injection
+encodes only the first 64 bytes of a longer payload, so the symbol still decodes but to the wrong
+bytes (AAP §0.4.2).
 
-What is asserted, and what is deliberately not
-----------------------------------------------
-The assertion is ``DecodeResult.payload_bytes == request.payload`` and nothing else.
-Version, error-correction level, mask, module geometry, quiet zone and encoding mode
-belong to ``SY-*``, ``MD-*`` and ``RN-*``; repeating one of them here would make a single
-defect fail several checks and would stop the ``defective`` target's expected failure set
-from being exactly enumerable (AAP §0.4.2).
+The assertion is ``DecodeResult.payload_bytes == request.payload`` and nothing else.  Version,
+error-correction level, mask, module geometry, quiet zone and encoding mode belong to ``SY-*``,
+``MD-*`` and ``RN-*``; repeating one of them here would make a single defect fail several checks
+and would stop the ``defective`` target's expected failure set from being exactly enumerable (AAP
+§0.4.2).
 
-Three outcomes fail a case, evaluated in this order:
+Three outcomes fail a case, evaluated in this order.  ``agreement == "disagree"`` -- both decoders
+returned a payload and the payloads differ -- is a finding in its own right rather than a payload
+mismatch (AAP §0.3.2), so it is reported as
+:attr:`~qrcheck.report.model.Reason.DECODER_DISAGREEMENT` with both payloads and both metadata
+blocks preserved in the evidence.  ``payload_bytes is None`` -- the primary decoder produced no
+payload -- fails with :attr:`~qrcheck.report.model.Reason.VALUE_MISMATCH` and the decoder's own
+error text, because a decoder that returns nothing is ``undetected``, never a "disagreement", and
+the secondary decoder's payload is *not* consulted: the primary decoder is the authority for all
+twenty-one checks, so a symbol it could not read never passes on the secondary's strength (AAP
+§0.3.2).  A differing ``payload_bytes`` fails with the same reason, with both sides' digests and
+the byte offset of the first divergence recorded, which is the evidence AAP §0.4.5 requires for the
+``truncated_payload`` defect.
 
-1. ``agreement == "disagree"`` -- both decoders returned a payload and the payloads
-   differ.  That is a finding in its own right rather than a payload mismatch (AAP
-   §0.3.2), so it is reported as
-   :attr:`~qrcheck.report.model.Reason.DECODER_DISAGREEMENT` with both payloads and both
-   metadata blocks preserved in the evidence.
-2. ``payload_bytes is None`` -- the primary decoder produced no payload.  The case fails
-   with :attr:`~qrcheck.report.model.Reason.VALUE_MISMATCH` and the decoder's own error
-   text, because a decoder that returns nothing is ``undetected``, never a
-   "disagreement".  The secondary decoder's payload is *not* consulted: the primary
-   decoder is the authority for all twenty-one checks, so a symbol it could not read
-   never passes on the secondary's strength (AAP §0.3.2).
-3. ``payload_bytes != request.payload`` -- reason
-   :attr:`~qrcheck.report.model.Reason.VALUE_MISMATCH`, with both sides' digests and the
-   byte offset of the first divergence recorded, which is the evidence AAP §0.4.5
-   requires for the ``truncated_payload`` defect.
+Every case requests a PNG at the run's EC level with no module-size, quiet-zone, colour, version or
+mask pin.  Nothing else is pinned deliberately: pinning geometry would add a capability
+requirement, and ``requires={png}`` is the complete statement of what this check needs (AAP §0.3.4
+capability table).  The three errors a check translates -- ``TargetRejected``,
+``TargetContractError`` and ``TargetUnsupported`` -- are turned into a result by
+:func:`qrcheck.checks.support.case_status_for_error`, the product's single translation, while
+``TargetUnavailable`` and ``TargetTimeout`` propagate to the runner, which owns the
+one-error-result-per-check target-loss policy and can only apply it if it sees the error itself.
 
-Requests
---------
-Every case requests a PNG at the run's EC level with no module-size, quiet-zone, colour,
-version or mask pin.  Nothing else is pinned deliberately: pinning geometry would add a
-capability requirement, and ``requires={png}`` is the complete statement of what this
-check needs (AAP §0.3.4 capability table).  Unpinned fields are the target's own choice,
-which is why the target's defaults apply and no capability beyond ``png`` is demanded.
-
-Adapter errors
---------------
-The three a check translates -- :class:`~qrcheck.targets.base.TargetRejected`,
-:class:`~qrcheck.targets.base.TargetContractError` and
-:class:`~qrcheck.targets.base.TargetUnsupported` -- are turned into a result by
-:func:`qrcheck.checks.support.case_status_for_error`, the product's single translation of
-an adapter failure into a status.  :class:`~qrcheck.targets.base.TargetUnavailable` and
-:class:`~qrcheck.targets.base.TargetTimeout` propagate to the runner, which owns the
-one-error-result-per-check target-loss policy and can only apply it if it sees the error
-itself.
-
-Evidence and determinism
-------------------------
 Only a non-passing case persists evidence: the artefact travels to
-:func:`qrcheck.checks.support.record_evidence` byte for byte as the target returned it,
-beside ``request.json`` and ``decoded.json``, so a failure is re-derivable without
-consulting this module.  A passing case writes nothing and records ``evidence_dir`` as
-null, which keeps a 240-case run from producing 240 directories.  ``decoded.json`` holds
-the :meth:`~qrcheck.decode.base.DecodeResult.as_dict` projection plus the measurements
-this check adds and nothing else; it carries no duration and no path, so it is
-byte-identical across runs for the same case and seed.
+:func:`qrcheck.checks.support.record_evidence` byte for byte as the target returned it, beside
+``request.json`` and ``decoded.json``, so a failure is re-derivable without consulting this module,
+while a passing case writes nothing and records ``evidence_dir`` as null.  ``decoded.json`` holds
+the :meth:`~qrcheck.decode.base.DecodeResult.as_dict` projection plus this check's measurements and
+nothing else -- no duration, no path -- so it is byte-identical across runs for the same case and
+seed.
 
-The only clock this module reads is :func:`time.perf_counter`, around the encode and the
-decode together, and the value reaches the result's volatile ``duration_ms`` field alone
--- never an assertion and never an artefact.  No ``hash()``, ``id()``, ``random`` or
-``time.time()`` appears anywhere, and cases are yielded in ascending record ``id`` order,
-so a run's case order cannot depend on import order, a dict's insertion order or the
-filesystem.
+The only clock this module reads is :func:`time.perf_counter`, around the encode and the decode
+together, and the value reaches the result's volatile ``duration_ms`` field alone: never an
+assertion, never an artefact.  No ``hash()``, ``id()``, ``random`` or ``time.time()`` appears
+anywhere, and cases are yielded in ascending record ``id`` order, so a run's case order cannot
+depend on import order, a dict's insertion order or the filesystem.
 
-Layering
---------
-Only :mod:`qrcheck.targets.base` is imported from ``qrcheck.targets`` -- the capability
-vocabulary and three error types -- and no concrete adapter is reachable from here, which
-is what lets a fourth adapter kind be added without touching a check.  The image stack,
-the decoders and the corpus builder are type-only imports, so importing this module pulls
-no decoder, encoder or image library into a process that only wants to list checks.
-
-Rules
------
-No user rules exist for this project, so the binding constraints on this module are the
-``MUST``/``MUST NOT`` list of AAP §0.12: ``checks/`` imports no concrete adapter, and no
-check is weakened, skipped or retried to make a defective target pass.
+Layering: only :mod:`qrcheck.targets.base` is imported from ``qrcheck.targets`` -- the capability
+vocabulary and three error types, with no concrete adapter reachable from here, which is what lets
+a fourth adapter kind be added without touching a check -- and the image stack, the decoders and
+the corpus builder are type-only imports.  No user rules exist for this project, so the binding
+constraints are the ``MUST``/``MUST NOT`` list of AAP §0.12: ``checks/`` imports no concrete
+adapter, and no check is weakened, skipped or retried to make a defective target pass.
 """
 
 from __future__ import annotations

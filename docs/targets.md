@@ -311,7 +311,7 @@ Three commands, in this order, tell you whether the table is right before a 1,28
 | `dependencies` | one entry per prerequisite, each with `name`, `version`, `status` and `blocking`; `status` is `ok`, `missing` or `degraded` |
 | `svg_rasterizer` | the rasterizer `RN-SVG` would use: an object with `configured`, `name`, `available` and `attempted` — the discovery order actually probed — or `null` when the configuration named none |
 
-A missing primary decoder, the oracle or a core library is blocking — exit 2, the report names the dependency and the pinned lock file. A missing secondary decoder or SVG rasterizer is **degrading**: exit 0, the run proceeds in single-decoder mode or skips `RN-SVG` with reason `missing_dependency`, and the report states the degradation rather than leaving a reader to infer it from a skip.
+A primary decoder, an oracle or a core library that is missing or cannot be imported is blocking — exit 2, the report names the dependency and the pinned lock file. A missing secondary decoder or SVG rasterizer is **degrading**: exit 0, the run proceeds in single-decoder mode or skips `RN-SVG` with reason `missing_dependency`, and the report states the degradation rather than leaving a reader to infer it from a skip.
 
 **`qrcheck list --json`** prints every registered check with exactly five keys — `id`, `title`, `family`, `requires` and `dependencies` — sorted by `id`. Cross the `requires` of each check against your `capabilities` list to see which checks your target can attempt and which will skip.
 
@@ -323,7 +323,7 @@ The exit codes a target author meets:
 |------|---------|
 | `0` | the run completed with no failure and no error; a skip does not make it a failure, but a skip is also not a pass |
 | `1` | at least one check failed and none errored |
-| `2` | configuration, selection, corpus filter, primary decoder or target availability — decided before any check runs, and **no report is written**; the offending key, filter or dependency is named |
+| `2` | configuration, selection, corpus filter, an unusable pinned dependency (primary decoder, oracle or core library) or target availability — decided before any check runs, and **no report is written**; the offending key, filter or dependency is named |
 | `3` | a check errored internally, the report directory could not be written, or an unhandled framework exception occurred |
 
 ## 11. Adding a fourth adapter kind

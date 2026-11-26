@@ -1,48 +1,38 @@
 """The two decoder-absence rows of the state-handling table, held as gates.
 
-AAP §0.6.6 names this module for two rows, and AAP §0.7.2 fixes the distinction between them:
-
-* **row 3 -- the primary decoder is missing.** ``zxing-cpp`` is the authority for every round-trip
-  assertion, so its absence is *blocking*: ``qrcheck doctor`` and ``qrcheck run`` both exit 2 naming
-  the dependency, and no check is silently skipped in its place. The observable proof of "never
-  silently skipped" is that the run writes no report at all: exit code 2 is decided before a single
-  case runs (AAP §0.3.4), so there is no result list in which ``RT-ROUNDTRIP`` could appear as a
-  skip.
-* **row 4 -- the secondary decoder is missing.** ``opencv-python-headless`` corroborates and never
-  decides, so its absence is a *supported degradation*: ``qrcheck doctor`` stays green and reports
-  the entry as degraded, the run proceeds in single-decoder mode, every decoded result records
-  ``agreement == "primary_only"`` with one entry in ``per_decoder`` (or two, the second at status
-  ``error``, when the decoder is installed but unusable), the evidence a failing case writes shows
-  the same decoder set, and ``index.html`` states the degradation. Nothing is skipped on its behalf
-  and nothing passes on the strength of the decoder that could not answer.
+AAP §0.6.6 names this module for two rows and AAP §0.7.2 fixes the distinction between them.
+Row 3: ``zxing-cpp`` is the authority for every round-trip assertion, so its absence is
+*blocking* -- ``qrcheck doctor`` and ``qrcheck run`` both exit 2 naming the dependency, and no
+check is silently skipped in its place, the observable proof being that the run writes no report
+at all, since exit 2 is decided before a single case runs (AAP §0.3.4). Row 4:
+``opencv-python-headless`` corroborates and never decides, so its absence is a *supported
+degradation* -- doctor stays green and reports the entry as degraded, the run proceeds in
+single-decoder mode, every decoded result records ``agreement == "primary_only"`` with one
+``per_decoder`` entry (or two, the second at status ``error``, when the decoder is installed but
+unusable), the evidence a failing case writes shows the same decoder set, and ``index.html``
+states the degradation.
 
 Absence is forced honestly: nothing is uninstalled and nothing inside the product is patched. A
 ``None`` entry in ``sys.modules`` makes ``import zxingcpp`` raise :exc:`ImportError` and
-``importlib.util.find_spec`` -- the probe :mod:`qrcheck.decode.base` uses -- answer "not present",
-and the decoder wrappers resolve their binding lazily on every call, so no cached wrapper can
-short-circuit the probe; ``monkeypatch`` restores both entries at teardown, which
-:func:`test_module_state_is_restored_after_a_stubbed_call` asserts.
+``importlib.util.find_spec`` -- the probe :mod:`qrcheck.decode.base` uses -- answer "not
+present", and the decoder wrappers resolve their binding lazily on every call, so no cached
+wrapper can short-circuit the probe; ``monkeypatch`` restores both entries at teardown, which
+:func:`test_module_state_is_restored_after_a_stubbed_call` asserts. Every stubbed invocation
+therefore runs **in this interpreter** through ``run_cli(..., in_process=True)``, because a
+child process does not inherit a ``sys.modules`` entry, while row 3's harder state -- a binding
+**present but unimportable**, which ``find_spec`` cannot produce -- runs out of process through
+the :func:`unimportable_module` fixture's stub file ahead of ``site-packages`` on
+``PYTHONPATH``. The degradation is reached a second way and held here too: an *installed* but
+unimportable binding passes the availability probe, so consensus asks it and it answers
+``status: "error"``, with only :func:`qrcheck.decode.opencv._load_cv2` replaced.
 
-For that reason every stubbed invocation runs **in this interpreter**, through
-``run_cli(..., in_process=True)``: the fixture's default path starts a real child process, and a
-child does not inherit a ``sys.modules`` entry, so the stub would be invisible there and the
-assertions below would prove nothing. The in-process path calls the same
-:func:`qrcheck.cli.main.main` the console script calls, so the exit status under test is still the
-product's own.
-
-The degradation is reached a second way, and that way is held here too: a binding that is
-*installed* but cannot be imported -- a shadowing ``cv2.py`` on ``PYTHONPATH``, a wheel whose native
-library will not load -- passes the availability probe, so consensus asks it and it answers with
-``status: "error"``. Nothing is uninstalled in that case either: the one function whose resolution
-is replaced is :func:`qrcheck.decode.opencv._load_cv2`, and ``monkeypatch`` restores it.
-
-No test here skips for an absent decoder: every supported platform has a wheel (AAP §0.2.3), so a
-genuinely missing one means the environment is broken and must surface as a loud failure naming the
-distribution and ``requirements.lock``, never as a skip. There is no ``xfail``, no retry and no
-``pytest-mock`` (AAP §0.4.3, §0.5.6); no threshold is restated (§0.12); every run is bounded by a
-``--checks``/``--class`` selection over the twelve ``otp`` records, so the module finishes in
-seconds and carries no ``e2e`` marker; and every artefact lands under the test's ``tmp_path`` with a
-fresh report root per test, so a leaked file cannot satisfy another test's absence assertion.
+No test here skips for an absent decoder: every supported platform has a wheel (AAP §0.2.3), so
+a genuinely missing one means a broken environment and must surface as a loud failure naming the
+distribution and ``requirements.lock``. There is no ``xfail``, no retry and no ``pytest-mock``
+(AAP §0.4.3, §0.5.6); no threshold is restated (§0.12); every run is bounded by a
+``--checks``/``--class`` selection over the twelve ``otp`` records, so the module carries no
+``e2e`` marker; and every artefact lands under the test's ``tmp_path`` with a fresh report root
+per test.
 """
 
 from __future__ import annotations
@@ -66,13 +56,10 @@ from qrcheck.decode import (
 )
 from qrcheck.report import HTML_FILENAME, SUMMARY_FILENAME
 
-# ---------------------------------------------------------------------------
-# The names the mechanism turns on
-#
-# The importable module names key a ``sys.modules`` entry; the distribution names are how
-# AAP §0.7.2 writes the dependencies a reader has to install, and they are what the diagnostics
-# below assert. Different vocabularies for the same two packages, so both are named here.
-# ---------------------------------------------------------------------------
+# The names the mechanism turns on. The importable module names key a ``sys.modules`` entry; the
+# distribution names are how AAP §0.7.2 writes the dependencies a reader has to install, and
+# they are what the diagnostics below assert. Different vocabularies for the same two packages,
+# so both are named here.
 
 #: The primary decoder's importable module, which a blocked ``sys.modules`` entry hides.
 PRIMARY_MODULE: Final[str] = "zxingcpp"
@@ -121,14 +108,11 @@ DOCTOR_DEPENDENCY_KEYS: Final[frozenset[str]] = frozenset(
 DEGRADATION_CLASS: Final[str] = "banner-single-decoder"
 DEGRADATION_LABEL: Final[str] = "degrad"
 
-# ---------------------------------------------------------------------------
-# The selections every run in this module is bounded by
-#
-# One corpus class and one check per run keeps the module in the fast job while still
-# exercising the real encode, the real decoders and the real report writers. ``otp`` holds
-# twelve ASCII records at AAP §0.8.1's case matrix, and both decoders read them, which is
-# what makes the single-decoder and two-decoder runs comparable.
-# ---------------------------------------------------------------------------
+# The selections every run in this module is bounded by: one corpus class and one check per run
+# keeps the module in the fast job while still exercising the real encode, the real decoders and
+# the real report writers. ``otp`` holds twelve ASCII records at AAP §0.8.1's case matrix and
+# both decoders read them, which is what makes the single-decoder and two-decoder runs
+# comparable.
 
 #: The configuration file's name, beside the report root under ``tmp_path``.
 CONFIG_FILE_NAME: Final[str] = "qrcheck.toml"
@@ -172,6 +156,10 @@ DIAGNOSTIC_CHARS: Final[int] = 800
 #: Distinguishes "absent from ``sys.modules``" from "present and blocked", which is the
 #: difference between a module this session never imported and a stub that outlived its test.
 PRESENT: Final[object] = object()
+
+#: The two fragments that mark a framework fault rather than an environment one. AAP §0.7.2 makes
+#: an unusable decoder exit 2 with a named dependency, so neither may appear in its diagnostic.
+INTERNAL_FAULT_MARKERS: Final[tuple[str, ...]] = ("internal error", "Traceback")
 
 
 @dataclass(frozen=True, slots=True)
@@ -414,6 +402,69 @@ def test_run_refuses_to_start_without_the_primary_decoder(
             f"run --checks {selection} wrote {HTML_FILENAME} while refusing to start; "
             f"{diagnostic(result)}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Row 3 again, against the state a broken install really has: present but unimportable
+# ---------------------------------------------------------------------------
+
+
+def test_doctor_and_run_refuse_a_present_but_unimportable_primary_decoder(
+    run_cli: Callable[..., Any],
+    write_config: Callable[..., Path],
+    unimportable_module: Callable[[str], Path],
+    tmp_path: Path,
+) -> None:
+    """A decoder installed yet impossible to import blocks, exactly as an absent one does.
+
+    ``find_spec`` finds the stub, so a presence-only probe reports the decoder as available
+    while the guarded import fails on every call. Breaks if ``run`` reaches its checks in that
+    state: the review found it exiting 1 with a complete report of twelve ``value_mismatch``
+    failures and ``agreement: secondary_only`` against a conforming target -- one blocking error
+    reported as twelve fabricated generator defects (AAP §0.3.5, §0.6.6 row 3, §0.7.2). Both
+    verbs are asserted here on purpose: they must agree about whether the decoder is usable.
+    """
+    unimportable_module(PRIMARY_MODULE)
+    space = workspace(write_config, tmp_path, target=REFERENCE_TARGET)
+
+    table = run_cli("doctor", config=space.config)
+    assert table.exit_code == EXIT_CONFIG, (
+        f"doctor exited {table.exit_code} with {PRIMARY_DISTRIBUTION} present but unimportable; "
+        f"{diagnostic(table)}"
+    )
+    for expected in (PRIMARY_DISTRIBUTION, platform.python_version(), platform.machine().lower()):
+        assert expected in table.stderr.lower(), (
+            f"the diagnostic does not name {expected!r}; {diagnostic(table)}"
+        )
+
+    result = run_cli(
+        "run",
+        "--adapter",
+        REFERENCE_TARGET,
+        "--checks",
+        ROUNDTRIP_CHECK,
+        "--class",
+        CORPUS_CLASS,
+        config=space.config,
+    )
+    assert result.exit_code == EXIT_CONFIG, (
+        f"run exited {result.exit_code} with {PRIMARY_DISTRIBUTION} present but unimportable; the "
+        f"secondary decoder must never become the authority that fails a conforming target; "
+        f"{diagnostic(result)}"
+    )
+    assert PRIMARY_DISTRIBUTION in result.stderr, (
+        f"the diagnostic does not name {PRIMARY_DISTRIBUTION!r}; {diagnostic(result)}"
+    )
+    for marker in INTERNAL_FAULT_MARKERS:
+        assert marker not in result.stderr, (
+            f"the outcome carries {marker!r}, so a broken install is reported as a framework fault "
+            f"rather than an environment one; {diagnostic(result)}"
+        )
+    assert list(space.report_dir.rglob(SUMMARY_FILENAME)) == [], (
+        f"the run wrote a {SUMMARY_FILENAME} while refusing to start, so a fabricated "
+        f"value_mismatch result exists for a run that must not have happened; "
+        f"{diagnostic(result)}"
+    )
 
 
 # ---------------------------------------------------------------------------

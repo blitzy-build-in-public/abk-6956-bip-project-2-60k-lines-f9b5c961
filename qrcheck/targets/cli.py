@@ -1,141 +1,58 @@
-"""The ``cli`` adapter: an out-of-process QR generator driven as an argv-only subprocess.
+"""The ``cli`` adapter: an out-of-process generator driven as an argv-only subprocess.
 
-A ``type = "cli"`` target is a program the framework runs once per request.  This
-module owns everything about that exchange: how the command line is assembled from
-configuration, where the artefact is expected, how a non-zero exit is interpreted,
-and how the target's own metadata is read.  It is the working counterpart of
-``examples/cli_target.py``, which ``tests/integration/test_cli_adapter.py``
-executes, so the two files state one contract that ``docs/targets.md`` quotes.
+A ``type = "cli"`` target is a program run once per request.  This module owns the command
+line, where the artefact is expected, how a non-zero exit is interpreted and how the target's
+metadata is read; ``examples/cli_target.py``, executed by
+``tests/integration/test_cli_adapter.py``, is the working counterpart of the contract
+``docs/targets.md`` quotes.
 
-Invocation, and why there is never a shell
-------------------------------------------
-``command`` is untrusted configuration and the payload is untrusted corpus data,
-so the command line is built as a list of strings and handed to
-``subprocess.run(argv, shell=False, ...)``.  No shell is ever interposed: the
-argument vector is a list rather than a command string, there is no pre-exec
-hook, and no shell-interpreting call appears anywhere in this module.  A payload
-or a configured argument carrying ``;``, ``$(...)`` or a quote is therefore one
-literal argv word.  The child inherits the framework's environment and working
-directory and nothing else, and ``timeout_s`` goes straight to
-``subprocess.run(timeout=...)``, which kills the child rather than leaving it
-running.
+``command`` is untrusted configuration and the payload untrusted corpus data, so the line is
+built as a list of strings and handed to ``subprocess.run(argv, shell=False,
+timeout=timeout_s)``: no shell is ever interposed, so ``;``, ``$(...)`` or a quote in a
+payload or an argument is one literal argv word, and the timeout kills the child instead of
+leaving it running.
 
-``payload_arg`` -- the two permitted shapes
--------------------------------------------
-1. **A placeholder template.**  Every ``{...}`` occurrence is substituted from the
-   request.  The names are the HTTP adapter's ``request_template`` vocabulary, so
-   one mental model covers both transports, plus the bare ``{}`` meaning "the
-   payload here":
+``payload_arg`` takes one of two shapes.  A placeholder template substitutes ``{}`` (the
+payload as UTF-8, a ``TargetContractError`` when it is not strictly decodable),
+``{payload_b64}``, ``{payload_utf8}``, ``{ec_level}``, ``{format}``, ``{size}``, ``{margin}``,
+``{fg}`` and ``{bg}`` -- the HTTP adapter's ``request_template`` vocabulary, so one mental
+model covers both transports -- and an unknown placeholder is refused with ``ValueError``
+naming ``targets.<name>.payload_arg``.  A template starting with ``-`` and carrying no
+placeholder is passed as one argv word with the raw payload bytes on the child's stdin
+(``--payload-b64=-``, or a valueless flag such as ``--payload-stdin``); the two-word
+spelling is a shell convention this adapter cannot produce.  Neither template can carry a
+version pin, a mask pin or an overlay, so such a request is refused with
+``TargetUnsupported`` before any I/O and the affected check reports a skip.  Anything else is
+a configuration fault refused with ``ValueError`` naming the key.
 
-   ==================  ========================================================
-   ``{}``              the payload as UTF-8 text; a ``TargetContractError`` when
-                       the payload is not strictly UTF-8-decodable, so a binary
-                       payload is refused instead of silently mangled
-   ``{payload_b64}``   the payload, base64-encoded: the binary-safe form
-   ``{payload_utf8}``  the payload as UTF-8 text, with the same strictness
-   ``{ec_level}``      ``L``/``M``/``Q``/``H``
-   ``{format}``        ``png``/``svg``
-   ``{size}``          ``module_size_px``, empty when the request pins none
-   ``{margin}``        ``quiet_zone_modules``, empty when the request pins none
-   ``{fg}``/``{bg}``   ``#rrggbb`` from the request's colour tuples
-   ==================  ========================================================
+A placeholder-bearing ``output_arg`` receives the path of a file the framework creates in a
+directory made by ``tempfile.mkdtemp(prefix="qrcheck-")``; the ``symbol.png``/``symbol.svg``
+extension states the requested format, and the prefix is a product-wide contract because
+``CL-ARTIFACTS`` compares ``tempfile.gettempdir()`` before and after a run for names carrying
+it.  The directory is removed in a ``finally`` block, so it survives neither a timeout nor a
+non-zero exit nor a contract error.  An empty ``output_arg`` passes no path and expects the
+artefact on stdout, which only a stdout-based ``returns`` can read.
 
-   An unknown placeholder is refused with ``ValueError`` naming
-   ``targets.<name>.payload_arg``: the configuration schema validates a
-   template's shape but not its vocabulary.  ``version`` and ``mask`` pins and
-   the logo overlay are deliberately absent from the vocabulary, which is shared
-   with the HTTP adapter: a target that honours a *static* pin takes it from its
-   configured ``command``, whose words are spliced literally.  Because no
-   placeholder in either template can carry them, a request that pins a version
-   or a mask, or asks for an overlay, is refused with ``TargetUnsupported``
-   before any I/O -- the same refusal the HTTP adapter makes -- so the affected
-   check reports a skip instead of a target-conformance failure.
+``returns`` is ``file_path``, ``bytes_path``, ``raw_bytes`` or ``base64``, decoded through
+:func:`~qrcheck.targets.base.decode_returned_image` and
+:func:`~qrcheck.targets.base.ensure_image_bytes` -- the port's shared helpers, so this
+adapter and the ``library`` adapter accept and refuse exactly the same bodies.  A
+``metadata_map`` beside a stdout-based ``returns`` is refused at construction, since stdout is
+already consumed.
 
-2. **A bare flag.**  A template starting with ``-`` and carrying no placeholder is
-   passed as **one argv word**, and the **raw payload bytes** are written to the
-   child's stdin.  That is how a payload which does not survive an argv word is
-   delivered byte for byte, and because the whole template is a single word it has
-   to be spelled the way the target reads that value from stdin, not as two shell
-   words:
+A non-zero exit is a declared rejection only when the target says so, because the ``IV-*``
+checks pass on a declared rejection and a fabricated one would make them vacuous.  The last
+non-empty line of stderr is tried first, then of stdout, in two spellings: a JSON object with
+a string ``error`` member, whose value becomes the rejection text verbatim, or a line
+beginning with ``rejected:``, whose remainder is the text -- so ``str(TargetRejected(...))``
+is exactly what the target said.
 
-   * the flag=value form, ``--payload-b64=-``, where the target treats the value
-     ``-`` as "read stdin"; ``examples/cli_target.py`` supports exactly this
-     spelling, because its ``--payload-b64`` takes a value;
-   * a flag that takes no value at all, ``--payload-stdin``, where the target
-     reads stdin whenever the flag is given.
+``metadata_map`` projects the target's claims onto ``version``, ``ec``, ``mask`` and ``mode``
+as ``GeneratedSymbol.declared_*``, evidence that no check asserts.
 
-   The two-word spelling ``--payload-b64 -`` is a shell convention this adapter
-   cannot produce: it never appends a word of its own to a bare flag, because the
-   stray ``-`` would be an unexpected positional to a ``store_true`` flag such as
-   ``--payload-stdin``.  Both shapes exist side by side because the vocabulary is
-   shared with the HTTP adapter's ``request_template``, where each name carries
-   the same value: a name means one thing in both transports, and the bare flag is
-   what delivers a payload no argv word can hold.
-
-Anything else is a configuration fault the schema should have caught, and is
-refused with ``ValueError`` naming the key.  A command line reads
-``command``, then the payload argument, then the output argument.
-
-``output_arg``, the temporary directory, and why its name matters
------------------------------------------------------------------
-A placeholder-bearing ``output_arg`` receives the path of a file the framework
-creates for the target to write: ``symbol.png`` or ``symbol.svg`` inside a
-directory made by ``tempfile.mkdtemp(prefix="qrcheck-")``.  The extension states
-the format the request asked for, which is how a target learns it when its
-configuration has no ``{format}`` placeholder of its own.  That prefix is a
-**product-wide contract**, not a local convention -- ``CL-ARTIFACTS`` snapshots
-``tempfile.gettempdir()`` for names carrying it before and after a run and
-asserts the two snapshots are equal, so a leaked directory would fail a check
-that has nothing to do with this file.  The directory is removed in a ``finally``
-block, so it survives neither a timeout nor a non-zero exit nor a contract error.
-An empty ``output_arg`` passes no path and expects the artefact on stdout, which
-only a stdout-based ``returns`` can read.
-
-``returns``
------------
-``file_path``   the file the framework named through ``output_arg``
-``bytes_path``  the same file, or -- when no ``output_arg`` is configured -- the
-                path the target reports on the last non-empty line of its stdout
-``raw_bytes``   the artefact itself on stdout
-``base64``      base64 text on stdout
-
-Decoding goes through the port's shared
-:func:`~qrcheck.targets.base.decode_returned_image` and the result through
-:func:`~qrcheck.targets.base.ensure_image_bytes`, so this adapter and the
-``library`` adapter accept and refuse exactly the same bodies.  Because a
-stdout-based ``returns`` consumes stdout, a ``metadata_map`` configured beside one
-is refused at construction.
-
-The declared-rejection encoding
--------------------------------
-A non-zero exit is a **declared rejection** only when the target says so; every
-other non-zero exit is a contract error, because the ``IV-*`` checks pass on a
-declared rejection and a fabricated one would make them vacuous.  Two spellings
-are accepted, checked in this order, each on the last non-empty line of stderr
-first and of stdout second:
-
-1. a JSON object with a string member ``error`` -- ``{"error": "payload too
-   long"}`` -- whose value becomes the rejection text **verbatim**;
-2. a line beginning with ``rejected:`` -- ``rejected: contrast below floor`` --
-   whose remainder, without the whitespace separating it from the prefix, is the
-   text.
-
-``str(TargetRejected(...))`` is therefore exactly what the target said, which is
-what the ``IV-*`` checks record in ``decoded.rejection``.
-
-Metadata
---------
-When ``metadata_map`` is configured the target reports its claims as one JSON
-object on stdout, and :func:`~qrcheck.targets.base.apply_metadata_map` projects
-them onto ``version``, ``ec``, ``mask`` and ``mode``.  Those values become
-``GeneratedSymbol.declared_*`` and are evidence only: no check asserts them.
-
-Layering
---------
-This module imports the standard library, :mod:`qrcheck.config.models` and
-:mod:`qrcheck.targets.base` only -- no decoder, no image library, no check, no
-report and no registry, which is the property ``tests/unit/test_layering.py``
-holds for the whole ``targets`` package.
+Layering: the standard library, :mod:`qrcheck.config.models` and :mod:`qrcheck.targets.base`
+only -- no decoder, image library, check, report or registry -- the property
+``tests/unit/test_layering.py`` holds for the whole ``targets`` package.
 """
 
 from __future__ import annotations

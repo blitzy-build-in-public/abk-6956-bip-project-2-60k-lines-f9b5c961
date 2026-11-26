@@ -1,32 +1,27 @@
 """The ``summary.json`` schema, its ordering and its exact volatile-field inventory.
 
-AAP §0.6.1 gate 6 names this module as the gate that holds ``summary.json``, the artefact a CI
-consumer, a trend line and a triage script all parse. Every document asserted here is written by
-:func:`qrcheck.report.json_report.write_summary` -- or, for the canonical text form itself, by
-:func:`qrcheck.report.json_report.write_canonical_json` -- from a
-:class:`~qrcheck.report.model.RunResult` built by the shared factories, so nothing is transcribed
-from a run's output and no second formatter can drift in (AAP §0.3.4, §0.5.3, §0.5.4, §0.5.5).
+AAP §0.6.1 gate 6 names this module as the gate holding ``summary.json``, the artefact a CI
+consumer, a trend line and a triage script all parse. Every document is written by
+:func:`qrcheck.report.json_report.write_summary` or, for the canonical text form, by
+:func:`~qrcheck.report.json_report.write_canonical_json`, from a
+:class:`~qrcheck.report.model.RunResult` built by the shared factories, so nothing is
+transcribed from a run's output (AAP §0.3.4, §0.5.3, §0.5.4, §0.5.5). Pinned: the nine
+top-level keys by **set equality**; ``counts`` as four separate integers, since folding
+``skipped`` into ``passed`` would satisfy every other assertion here while breaking the
+exit-code rule; ten per-result fields with a passing case's ``reason`` ``null``; ``results[]``
+ordered by ``(check_id, case_id)`` even though the fixture run is deliberately scrambled, so
+both writers present one order by construction; ``evidence_dir`` ``null`` for a pass and a
+relative posix path otherwise, because an absolute path names the clone a run happened in; the
+canonical text form with keys sorted at every depth, two-space indentation, literal UTF-8, LF
+endings and exactly one trailing newline, a value ``json`` cannot carry raising instead of being
+coerced; the volatile inventory of exactly ``started_at``, ``finished_at`` and each
+``results[].duration_ms``, read from :func:`tests.conftest.mask_volatile`'s behaviour rather
+than assumed; and ``run_id`` as a content hash stable for one input and different when the
+selection, the EC level, the seed or the corpus changes.
 
-Pinned: the nine top-level keys by **set equality**, because a field this module does not know
-about is either a deliberate schema addition or an invented one; ``counts`` as four separate
-integers, because a tally that folded ``skipped`` into ``passed`` would satisfy every other
-assertion here while breaking the exit-code rule that reads only ``failed`` and ``error``; exactly
-ten per-result fields and the vocabulary inside them, with a passing case's ``reason`` ``null``;
-``results[]`` ordered by ``(check_id, case_id)`` even though the fixture run is built from a
-deliberately scrambled sequence, so ``summary.json`` and ``junit.xml`` present one order by
-construction rather than by two writers agreeing by hand; ``evidence_dir`` ``null`` for a pass and
-a relative posix path rooted at the evidence directory name for anything else, because an absolute
-path names the clone a run happened in; the canonical text form, with keys sorted at every depth,
-two-space indentation, literal UTF-8, LF line endings and exactly one trailing newline, a value
-``json`` cannot carry raising instead of being coerced; the volatile-field inventory of exactly
-``started_at``, ``finished_at`` and each ``results[].duration_ms``, read from
-:func:`tests.conftest.mask_volatile`'s behaviour rather than assumed, because a field that quietly
-became volatile would change what "deterministic" means; and ``run_id`` as a content hash whose
-derivation is stable for one input and differs when the selection, the EC level, the seed or the
-corpus changes.
-
-Every artefact is written under the per-test report root, never the repository's ``reports/``;
-nothing here reads a clock, the network, the environment or a directory this module did not create.
+Every artefact is written under the per-test report root, never the repository's ``reports/``,
+and nothing here reads a clock, the network, the environment or a directory this module did not
+create.
 """
 
 import dataclasses

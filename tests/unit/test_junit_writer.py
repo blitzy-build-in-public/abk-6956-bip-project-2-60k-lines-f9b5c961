@@ -1,33 +1,31 @@
 """The JUnit writer's ``xunit2`` shape, its one-child-per-status rule and its hygiene.
 
-AAP §0.6.1 gate 6 names this module as the gate that holds ``junit.xml``, the one artefact CI
-stores as evidence and gates a merge on. Every document is written by
-:func:`qrcheck.report.junit.write_junit` from a :class:`~qrcheck.report.model.RunResult` built by
-the shared factories, and the single comparison that needs the neighbouring artefact is made
-against a ``summary.json`` written from that same run, so no ordering rule is re-implemented (AAP
-§0.3.4, §0.5.3, §0.5.4).
-
-Pinned: one ``testsuites`` root holding exactly one ``testsuite name="qrcheck"``; ``tests``,
-``failures``, ``errors`` and ``skipped`` equal to the run's four integers with ``time`` present, so
-a skipped case can never be counted as a pass in the artefact CI reads and a run with no result
-still produces a well-formed document; one ``testcase`` per result in ``summary.json`` order, so
-neither writer may re-sort independently; ``name`` as ``<CHECK-ID>[<case-id>]``, ``classname`` as
-``qrcheck.<family>`` with the family read from :mod:`qrcheck.registry.check` rather than guessed
-from the identifier's prefix (an unregistered identifier degrades to ``qrcheck.unknown``) and
-``time`` with exactly three decimals, because a raw float renders as ``1.25`` or ``1e-05`` and
-breaks the parsers that assume seconds with millisecond precision; exactly one child element per
-skipped, failed or errored status, carrying the machine-readable reason and, for a failure, the
+AAP §0.6.1 gate 6 names this module as the gate holding ``junit.xml``, the artefact CI stores
+as evidence and gates a merge on. Every document is written by
+:func:`qrcheck.report.junit.write_junit` from a :class:`~qrcheck.report.model.RunResult` built
+by the shared factories, and the one comparison that needs the neighbouring artefact is made
+against a ``summary.json`` written from that same run, so no ordering rule is re-implemented
+(AAP §0.3.4, §0.5.3, §0.5.4). Pinned: one ``testsuites`` root holding exactly one ``testsuite
+name="qrcheck"``, with ``tests``, ``failures``, ``errors`` and ``skipped`` equal to the run's
+four integers so a skipped case can never be counted as a pass in the artefact CI reads, and a
+run with no result still producing a well-formed document; one ``testcase`` per result in
+``summary.json`` order, so neither writer may re-sort independently; ``name`` as
+``<CHECK-ID>[<case-id>]``, ``classname`` as ``qrcheck.<family>`` with the family read from
+:mod:`qrcheck.registry.check` rather than guessed from the identifier's prefix, and ``time``
+with exactly three decimals, because a raw float renders as ``1.25`` or ``1e-05`` and breaks the
+parsers that assume seconds with millisecond precision; exactly one child element per skipped,
+failed or errored status, carrying the machine-readable reason and, for a failure, the
 decoded-versus-expected detail; the deliberate absences -- no ``hostname``, no ``timestamp``, no
-``file``/``line`` and nothing outside a small allow-list, asserted by walking every element and
-attribute name -- because a wall-clock reading makes two identical runs differ (AAP §0.5.5); and
-byte-identical documents for two runs that differ only in their durations and timestamps once the
+``file``/``line``, nothing outside a small allow-list, asserted by walking every element and
+attribute name -- because a wall-clock reading makes two identical runs differ (AAP §0.5.5);
+and byte-identical documents for two runs that differ only in durations and timestamps once the
 ``time`` attributes are masked.
 
 XML 1.0 safety is held here too: the corpus carries embedded NULs and a target is untrusted, and
-``ElementTree`` escapes markup but emits a control character raw, so only the writer's own filter
-keeps a hostile case identifier, payload or traceback parseable. Every file is written under the
-``report_dir`` fixture; nothing here reads a clock, the network, the environment or a directory
-this module did not create.
+``ElementTree`` escapes markup but emits a control character raw, so only the writer's own
+filter keeps a hostile case identifier, payload or traceback parseable. Every file is written
+under the ``report_dir`` fixture; nothing here reads a clock, the network, the environment or a
+directory this module did not create.
 """
 
 import json

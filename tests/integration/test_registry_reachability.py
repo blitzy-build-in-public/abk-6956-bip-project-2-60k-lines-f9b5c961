@@ -1,40 +1,24 @@
 """Registry reachability: the checks that exist are the checks a real run executes.
 
-The product's MUST is that every check implements the same contract and is discoverable from the
-registry, and that no check is importable-only or callable solely from a test (AAP §0.1.2,
-§0.3.4). ``qrcheck/registry/check.py`` is the single owner of check identity, ``qrcheck list``
-publishes it, and a run's ``summary.json`` records what actually executed; this module holds all
-three against each other, which is AAP §0.4.1 and §0.6.1 #8 -- a check registered but never run, a
-check run but never registered, a listing that omits one, or an identifier renamed, dropped or
-doubled each fails here, by name.
+The product's MUST is that every check implements one contract, is discoverable from the
+registry, and is never importable-only or callable solely from a test (AAP §0.1.2, §0.3.4).
+``qrcheck/registry/check.py`` owns check identity, ``qrcheck list`` publishes it and
+``summary.json`` records what executed; the three are held against each other, so a check
+registered but never run, one run but never registered, a listing that omits one, or an
+identifier renamed, dropped or doubled fails here by name (AAP §0.4.1, §0.6.1 #8). The
+registry must hold exactly the twenty-one identifiers, asserted on non-emptiness and count
+before any set comparison so an empty registry cannot satisfy an equality vacuously; the nine
+families must partition them; a fresh interpreter importing ``qrcheck.checks`` must register all
+twenty-one, which no test-only import path can fake; and each built-in target's expected failing
+set must validate against the registry (AAP §0.4.3).
 
-The cases: the registry holds exactly the twenty-one declared identifiers, asserted on
-non-emptiness and on the count *before* any set comparison, because an empty registry would
-satisfy an executed-set equality against an empty result set vacuously; the registered set
-equals the ``check_id`` set the reference run recorded, with "registered but never ran" and
-"ran but is not registered" reported as two separate lists, and every registered check holding
-at least one ``passed`` result rather than only a skip or an error (AAP §0.4.1's fourth
-clause); the identifiers are the literal twenty-one, one entry each and an iteration order
-ascending by identifier; ``qrcheck list --json`` publishes every one of them with the five
-declared keys and the requirement sets the registry declares; the nine families partition the
-twenty-one identifiers, compared as a partition so a renamed vocabulary still passes while a
-split or merged family fails; every entry carries the six fields of ``CheckContract`` with the
-declared types; importing ``qrcheck.checks`` in a fresh interpreter registers all twenty-one,
-the property no test-only import path can fake; and the built-in targets' expected failing
-sets validate against the registry, so deleting an expectation or a check breaks a test rather
-than shrinking what the acceptance gate compares (AAP §0.4.3).
-
-The executed-set half reads the session-scoped ``reference_report`` fixture, so the whole
-suite is paid for once per session however many modules ask for it (AAP §0.6.1 #9); the
-listing half is a ``qrcheck list --json`` invocation, which registers the checks and prints
-them without running one. The marker is ``e2e`` because of that suite, so ``-m "not e2e"``
-deselects this module from the fast job (AAP §0.6.4).
-
-Nothing here skips, xfails, retries or mocks (AAP §0.4.3, §0.5.6), no assertion reads a clock -- a
-``list`` invocation is never timed -- every collection is compared in sorted order, and every
-message names the check identifier it failed on. The only file this module writes is the
-configuration the listing is invoked with, under ``tmp_path``; the repository's own ``reports/`` is
-never touched, because runtime artefacts are not committed deliverables (AAP §0.11.1). """
+The executed half reads the session-scoped ``reference_report`` fixture, paid for once per
+session (AAP §0.6.1 #9) and the reason the marker is ``e2e`` (AAP §0.6.4); the listing half
+invokes ``qrcheck list --json``, which registers and prints without running a check. Nothing
+here skips, xfails, retries or mocks (AAP §0.4.3, §0.5.6), no assertion reads a clock, and the
+only file written is the listing's configuration under ``tmp_path`` -- never the repository's
+own ``reports/`` (AAP §0.11.1).
+"""
 
 from __future__ import annotations
 

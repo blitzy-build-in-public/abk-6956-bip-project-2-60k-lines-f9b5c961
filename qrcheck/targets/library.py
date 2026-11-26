@@ -1,101 +1,66 @@
 """The ``library`` adapter: an in-process import-and-call target.
 
-A ``type = "library"`` target is a QR generator the framework calls as a plain
-Python function in its own interpreter.  Everything this module knows about that
-generator arrives through the ``[targets.<name>]`` table -- the import path, the
-mapping from framework fields to the callable's keyword arguments, how the
-returned value carries the artefact, and how the callable's own metadata is read
--- so the adapter names no generator library and imports none.  That is the
-strongest form of the rule that no vendor library is hard-coded anywhere in the
-package: the adapter drives whatever callable the configuration names, so
-pointing the framework at a different generator is a configuration table rather
-than a code change.
+A ``type = "library"`` target is a generator the framework calls as a plain Python function in
+its own interpreter.  Everything about it arrives through the ``[targets.<name>]`` table -- the
+import path, the mapping from framework fields to keyword arguments, how the returned value
+carries the artefact, and how its metadata is read -- so the adapter names no generator library
+and imports none, which is the strongest form of the rule that no vendor library is hard-coded
+anywhere in the package.
 
-The four configuration keys
-----------------------------
-``callable``
-    ``"module:attribute"``.  The attribute may be a dotted path
-    (``"module:Factory.build"``), in which case every segment is walked.  The
-    module is resolved **lazily**, on the first :meth:`LibraryAdapter.generate`,
-    so constructing an adapter costs nothing and ``qrcheck doctor``'s single
-    probe generate -- not the constructor -- is what proves the path exists.  A
-    missing module or a missing attribute raises :class:`TargetUnavailable`,
-    which is the one trigger that error has; any other exception the module's own
-    import body raises is a defect in the target module rather than a missing
-    import path, so it is left unconverted and propagates to the runner, which
-    records it as a framework defect -- an ``error`` result with its traceback --
-    instead of misattributing it to an unreachable target.
-``kwargs_map``
-    Framework field name -> the callable's keyword-argument name.  The framework
-    field vocabulary is exactly the field list of :class:`GenerateRequest`
-    (``payload``, ``ec_level``, ``output_format``, ``module_size_px``,
-    ``quiet_zone_modules``, ``foreground_rgb``, ``background_rgb``,
-    ``logo_overlay_path``, ``version``, ``mask``), read here from the dataclass
-    itself rather than restated.  **Only mapped fields are passed**, so a target
-    receives exactly the arguments its configuration declares and an unmapped
-    field is never inferred: a generator that takes no version pin simply maps
-    none.
-``returns``
-    How the returned value carries the artefact, decoded by the one shared
-    implementation in :func:`qrcheck.targets.base.decode_returned_image`:
-    ``raw_bytes`` (the bytes themselves), ``base64`` (base64 text),
-    ``bytes_path`` (a path the target chose) or ``file_path`` (a path the target
-    wrote).  A ``library`` target has no framework-supplied output path in the
-    request vocabulary, so both path kinds read the path the callable returns.
-``metadata_map``
-    Optional.  Framework metadata field (``version``, ``ec``, ``mask``, ``mode``)
-    -> the key or dotted path carrying it in the metadata the callable returns.
-    Declaring it changes the callable's return shape, as described next.
+``callable`` is ``"module:attribute"``, the attribute possibly a dotted path
+(``"module:Factory.build"``) whose segments are each walked.  The module is resolved **lazily**,
+on the first :meth:`LibraryAdapter.generate`, so constructing an adapter costs nothing and it is
+``qrcheck doctor``'s single probe generate, not the constructor, that proves the path exists.  A
+missing module or a missing attribute raises :class:`TargetUnavailable`, the one trigger that
+error has; any other exception the module's own import body raises is a defect in the target
+module rather than a missing import path, so it is left unconverted and propagates to the
+runner, which records an ``error`` result with its traceback instead of misattributing it to an
+unreachable target.
 
-Return shape
-------------
-Without ``metadata_map`` the callable returns the image value itself, and the
-adapter derives the artefact bytes from it through ``returns``.
+``kwargs_map`` maps a framework field name to the callable's keyword-argument name, the framework
+field vocabulary being exactly the field list of :class:`GenerateRequest` read from the dataclass
+itself rather than restated.  **Only mapped fields are passed**, so a target receives exactly the
+arguments its configuration declares and an unmapped field is never inferred: a generator that
+takes no version pin simply maps none.
 
-With ``metadata_map`` the callable returns the 2-tuple
-``(image_value, metadata_mapping)``, where ``metadata_mapping`` is any mapping --
-typically a dict keyed by the names the configuration gives.  This is the only
-channel a ``library`` target has for declaring which version, error-correction
-level, mask and mode it used, and every value it carries is **evidence only,
-never the assertion**: ``SY-EC-MATCH`` reads the level from the decoder and from
-the symbol's format information, ``SY-MASK`` from the format information and
-``SY-VERSION-MIN`` from the sampled module count, so a target that misreports
-its metadata is recorded as having misreported it rather than believed.  A
-return value of any other shape raises :class:`TargetContractError`.
+``returns`` says how the returned value carries the artefact, decoded by the one shared
+implementation in :func:`qrcheck.targets.base.decode_returned_image`: ``raw_bytes``, ``base64``,
+``bytes_path`` or ``file_path``.  A ``library`` target has no framework-supplied output path in
+the request vocabulary, so both path kinds read the path the callable returns.
 
-The rejection channel
----------------------
-A target the framework does not own declares a client-side refusal by raising an
-exception whose text begins with ``rejected:``; the remainder, with the
-separating whitespace removed, becomes the message of
-:class:`TargetRejected` verbatim.  That is what lets a configured target satisfy
-``IV-EMPTY`` and ``IV-BAD-OPTION`` -- which require a declared rejection of a
-request the framework considers valid -- instead of appearing to crash.  Any
-other exception from the callable becomes :class:`TargetContractError` carrying
-``"<ExceptionType>: <text>"``, so a target bug is reported as a target bug.
+``metadata_map`` is optional and maps a framework metadata field (``version``, ``ec``, ``mask``,
+``mode``) to the key or dotted path carrying it.  Declaring it changes the return shape: without
+it the callable returns the image value itself, and with it the 2-tuple
+``(image_value, metadata_mapping)``, which is the only channel a ``library`` target has for
+declaring which version, level, mask and mode it used.  Every value it carries is **evidence
+only, never the assertion** -- ``SY-EC-MATCH`` reads the level from the decoder and from the
+format information, ``SY-MASK`` from the format information, ``SY-VERSION-MIN`` from the sampled
+module count -- so a target that misreports its metadata is recorded as having misreported it
+rather than believed.  A return value of any other shape raises :class:`TargetContractError`.
 
-``timeout_s`` is enforced with a daemon-thread watchdog
--------------------------------------------------------
-The configured ``targets.<name>.timeout_s`` is a real ceiling on the call, not a
-recorded number: :func:`_call_with_watchdog` invokes the callable once on a
-daemon thread and waits at most that many seconds for it, and no answer by then
-raises :class:`TargetTimeout` naming the configured timeout, the callable and the
-adapter -- the same treatment the ``cli`` adapter gives the key with
-``subprocess.run(timeout=...)`` and the ``http`` adapter with ``httpx.Timeout``.
-A call inside this interpreter has no process boundary, socket or pipe to
-interrupt, so a timed-out call **keeps running in the background with its result
-discarded**: the framework never joins it again, and because the thread is a
-daemon it cannot hold the process open.  The watchdog is one thread per call
-inside one still-sequential pass; it adds no component, no check runs
-concurrently, and nothing about a run's ordering or determinism changes.
+A target the framework does not own declares a client-side refusal by raising an exception whose
+text begins with ``rejected:``, and the remainder, with the separating whitespace removed,
+becomes the message of :class:`TargetRejected` verbatim.  That is what lets a configured target
+satisfy ``IV-EMPTY`` and ``IV-BAD-OPTION`` -- which require a declared rejection of a request the
+framework considers valid -- instead of appearing to crash.  Any other exception from the
+callable becomes :class:`TargetContractError` carrying ``"<ExceptionType>: <text>"``, so a target
+bug is reported as a target bug.
 
-What this module imports
-------------------------
-The standard library, :mod:`qrcheck.config.models` for the record it is handed,
-and the shared helpers of :mod:`qrcheck.targets.base`.  No image library, no
-decoder and no generator library, and nothing from ``qrcheck.checks``,
-``qrcheck.report``, ``qrcheck.decode`` or ``qrcheck.registry``: the adapter sits
-at the port and knows only the port's vocabulary.
+The configured ``targets.<name>.timeout_s`` is a real ceiling on the call, not a recorded
+number: :func:`_call_with_watchdog` invokes the callable once on a daemon thread and waits at
+most that many seconds for it, and no answer by then raises :class:`TargetTimeout` naming the
+configured timeout, the callable and the adapter -- the same treatment ``cli`` gives the key with
+``subprocess.run(timeout=...)`` and ``http`` with ``httpx.Timeout``.  A call inside this
+interpreter has no process boundary, socket or pipe to interrupt, so a timed-out call **keeps
+running in the background with its result discarded**: the framework never joins it again, and
+being a daemon thread it cannot hold the process open.  One thread per call inside one
+still-sequential pass adds no component, no check runs concurrently, and nothing about a run's
+ordering or determinism changes.
+
+Imports: the standard library, :mod:`qrcheck.config.models` for the record it is handed, and the
+shared helpers of :mod:`qrcheck.targets.base` -- no image library, no decoder and no generator
+library, and nothing from ``qrcheck.checks``, ``qrcheck.report``, ``qrcheck.decode`` or
+``qrcheck.registry``: the adapter sits at the port and knows only the port's vocabulary.
 """
 
 from __future__ import annotations

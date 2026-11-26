@@ -1,51 +1,37 @@
 """The ``cli`` adapter against its shipped example target, over a real process boundary.
 
-This module is the integration gate for AAP §0.3.3's ``cli`` target contract -- an out-of-process
-generator driven by ``command``, ``payload_arg``, ``output_arg``, ``returns`` and ``metadata_map``
--- and for AAP §0.9.2's rule that ``examples/cli_target.py`` is load-bearing: the example's
-documented configuration is executed here, so it either keeps working or CI fails. Nothing is
-mocked: every case spawns the example as a subprocess or runs ``python -m qrcheck`` as one, and the
-decoders that judge the artefact are the pinned real ones.
+The integration gate for AAP §0.3.3's ``cli`` contract -- ``command``, ``payload_arg``,
+``output_arg``, ``returns`` and ``metadata_map`` -- and for AAP §0.9.2's rule that
+``examples/cli_target.py`` is load-bearing: the example's documented configuration executes
+here, so it either keeps working or CI fails. Nothing is mocked -- every case spawns the example
+or ``python -m qrcheck`` as a subprocess and judges the artefact with the pinned real decoders.
 
-The eight cases: a legal request produces a PNG that decodes back to the requested bytes at the
-version the capacity tables prescribe, with ``close()`` safe to call twice; shell metacharacters
-reach the target byte for byte, the behavioural proof of the argv-only, ``shell = False`` control
-of AAP §0.3.2; a declared rejection becomes ``TargetRejected`` carrying the target's own text
-verbatim; a non-zero exit with no rejection is ``TargetContractError``, which keeps the rejection
-trigger "exactly one" rather than "any failure"; a target outliving ``timeout_s`` is killed and
-reported as ``TargetTimeout`` naming the configured timeout; a command that cannot be spawned is
-``TargetUnavailable``, never an escaped ``OSError``; a bounded run drives every ``otp`` record
-through adapter, decoders and writers together; and an stdout-based ``returns`` on this example is
-refused as a contract error.
+The eight cases: a legal request yielding a PNG that decodes back to the requested bytes at the
+capacity tables' version, with ``close()`` safe twice; shell metacharacters reaching the target
+byte for byte, the behavioural proof of the argv-only ``shell = False`` control (AAP §0.3.2); a
+declared rejection becoming ``TargetRejected`` carrying the target's own text; a non-zero exit
+with no rejection as ``TargetContractError``, which keeps that trigger "exactly one"; an
+over-time target killed and reported ``TargetTimeout`` naming the timeout; an unspawnable
+command as ``TargetUnavailable``, never an escaped ``OSError``; a bounded run driving every
+``otp`` record through adapter, decoders and writers; and an stdout-based ``returns`` refused as
+a contract error.
 
-Test 8's scope: the example writes its symbol to the path it is given through ``--output`` and
-nothing on stdout when it succeeds, so ``returns = "file_path"`` is the one delivery mode this
-module can exercise end to end. The other three -- ``bytes_path``, ``raw_bytes`` and ``base64`` --
-are decoded by :func:`qrcheck.targets.base.decode_returned_image` and held at unit level by
-``tests/unit/test_targets_transport.py``; no second example script is invented here to widen that
-coverage, because it would document a shape the shipped example does not have.
+Only ``returns = "file_path"`` can be exercised end to end, because the example writes its
+symbol to ``--output`` and nothing to stdout; ``bytes_path``, ``raw_bytes`` and ``base64`` are
+held at unit level by ``tests/unit/test_targets_transport.py`` rather than by a second example
+invented here. ``CliAdapter.generate`` gates every optional field the caller actually set, so a
+request pinning ``module_size_px`` or ``quiet_zone_modules`` needs the matching declared
+capability: the example's templates carry neither and its canonical table declares only ``png``,
+which is why case 1 supplies both as static words of its own ``command`` and declares the two
+capabilities it honours.
 
-The capability the request may and may not ask for: ``CliAdapter.generate`` gates every optional
-field the caller actually set, so a request that pins ``module_size_px`` or ``quiet_zone_modules``
-needs the matching declared capability. The example's templates carry neither, which is why its
-canonical table declares only ``png``; case 1 therefore supplies both values as static words of its
-own ``command`` and declares the two capabilities it genuinely honours there.
-
-Determinism: every case spawns its target by absolute path taken from ``cli_target.script``, so no
-case depends on the working directory, and every artefact lands under ``tmp_path``. No case asserts
-a duration -- case 5 finishing at all is the evidence that the timeout fired, because AAP §0.5.5
-keeps wall-clock assertions out of everything but the ``PF-*`` checks -- and every adapter is
-closed on the way out of its ``with`` block. The process table is never inspected, because another
-checkout on the same host may run the same example at that moment, which would make such an
-assertion a statement about the host rather than about this module.
-
-The module carries no ``e2e`` marker: it is bounded by ``--checks`` and ``--class``, needs no
-full-corpus run, and belongs in the fast CI job (AAP §0.6.4). A missing example script is a failure
-and never a skip, which is why the ``cli_target`` fixture fails when it cannot find one.
-
-The binding constraints are AAP §0.12's ``MUST``/``MUST NOT`` list and §0.4.3's prohibition on
-skipping, ``xfail``-ing, retrying or threshold-relaxing a case to make it pass; no user rules exist
-for this project.
+Every case spawns its target by the absolute path in ``cli_target.script`` and writes under
+``tmp_path``, no duration is asserted (AAP §0.5.5 keeps wall-clock assertions to the ``PF-*``
+checks), every adapter is closed by its ``with`` block, and the process table is never inspected
+because another checkout on this host may run the same example. No ``e2e`` marker: the module is
+bounded by ``--checks``/``--class`` and belongs in the fast job (AAP §0.6.4), and a missing
+example script fails rather than skips. AAP §0.12's ``MUST``/``MUST NOT`` list and §0.4.3's
+ban on skipping, ``xfail``, retry and threshold relaxation bind every case.
 """
 
 from __future__ import annotations

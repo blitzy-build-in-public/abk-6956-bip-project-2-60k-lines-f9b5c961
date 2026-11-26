@@ -2,34 +2,31 @@
 
 Nothing here is a test -- no ``test_*`` function, no ``Test*`` class, no marker -- and a fixture
 whose precondition cannot be met calls :func:`pytest.fail` rather than skip, because a skip in
-this layer would hide the gate the module consuming it exists to hold.
-
-* :func:`run_cli` runs the product as a **real process** (``python -m qrcheck``), so a test
-  asserts the status a shell would see.
-* :func:`reference_report`, :func:`defective_report` and :func:`boundary_runs` are
-  **session-scoped**, which keeps the five-run sequence of AAP §0.6.1 #9 inside its 600 s
-  ceiling; a function-scoped run fixture would multiply it by the tests that asked for it.
-* :func:`report_roots` hands out **two distinct** report roots, because ``evidence/`` is laid
-  out under one ``report_dir`` and a shared root would let the second run overwrite the first
-  run's failures, making the nine expected ones unattributable (AAP IM-8).
-* :func:`http_target_server` starts the loopback example server on an ephemeral port and
-  :func:`cli_target` names the subprocess example, so both configurable adapters are driven
-  over their real transports.
-* :func:`write_config` writes a complete, schema-valid document from caller values and the
-  schema's declared defaults only -- no threshold is restated here (AAP §0.12) -- with
-  **absolute** paths, because the loader resolves a relative path against the document's own
-  directory and these documents live under ``tmp_path``.
+this layer would hide the gate the module consuming it exists to hold. :func:`run_cli` runs the
+product as a **real process** (``python -m qrcheck``), so a test asserts the status a shell
+would see; :func:`reference_report`, :func:`defective_report` and :func:`boundary_runs` are
+**session-scoped**, which keeps the five-run sequence of AAP §0.6.1 #9 inside its 600 s
+ceiling; :func:`report_roots` hands out **two distinct** roots, because ``evidence/`` is laid
+out under one ``report_dir`` and a shared root would let the second run overwrite the first
+run's failures, making the nine expected ones unattributable (AAP IM-8);
+:func:`http_target_server` starts the loopback example server on an ephemeral port and
+:func:`cli_target` names the subprocess example, so both configurable adapters are driven over
+their real transports; and :func:`write_config` renders a complete, schema-valid document from
+caller values and the schema's declared defaults only -- no threshold is restated here (AAP
+§0.12) -- with **absolute** paths, because the loader resolves a relative path against the
+document's own directory.
 
 Every document is rendered in sorted key order, so two calls with the same arguments produce
-identical bytes. No clock, ``hash()``, ``id()`` or filesystem order reaches a document, the
-only socket opened is the loopback example server, and every artefact lands under ``tmp_path``
-or ``tmp_path_factory``; the repository's own ``reports/`` is never touched (AAP §0.11.1).
+identical bytes. No clock, ``hash()``, ``id()`` or filesystem order reaches a document, the only
+socket opened is the loopback example server, and every artefact lands under ``tmp_path`` or
+``tmp_path_factory`` -- the repository's own ``reports/`` is never touched (AAP §0.11.1).
 """
 
 from __future__ import annotations
 
 import contextlib
 import json
+import os
 import queue
 import re
 import subprocess
@@ -192,13 +189,9 @@ def report_roots(tmp_path: Path) -> Mapping[str, Path]:
     return MappingProxyType(roots)
 
 
-# ---------------------------------------------------------------------------
-# Generating a configuration document
-#
-# ``tomllib`` reads TOML but cannot write it, and no TOML-writing dependency may be added
-# (AAP §0.7.1), so the document is rendered here by a serialiser whose only promise is
-# determinism: sorted keys, LF endings, one trailing newline.
-# ---------------------------------------------------------------------------
+# Generating a configuration document. ``tomllib`` reads TOML but cannot write it and no
+# TOML-writing dependency may be added (AAP §0.7.1), so the document is rendered here by a
+# serialiser whose only promise is determinism: sorted keys, LF endings, one trailing newline.
 
 #: A key TOML may spell bare; anything else -- a target name with a space in it, say -- is
 #: quoted, so a caller cannot generate a document that fails to parse.
@@ -352,13 +345,10 @@ def write_config() -> Callable[..., Path]:
     return write
 
 
-# ---------------------------------------------------------------------------
-# Running the command line
-#
-# Two paths and one result type: the default is the real process boundary, which makes an
-# exit-status assertion an assertion about what a shell would see; the in-process path calls
-# the same ``main``, so a test that invokes the command line repeatedly pays for one interpreter.
-# ---------------------------------------------------------------------------
+# Running the command line: two paths and one result type. The default is the real process
+# boundary, which makes an exit-status assertion an assertion about what a shell would see; the
+# in-process path calls the same ``main``, so a test that invokes the command line repeatedly
+# pays for one interpreter.
 
 
 @dataclass(frozen=True, slots=True)
@@ -499,15 +489,11 @@ def run_cli() -> Callable[..., CliResult]:
     return run_cli
 
 
-# ---------------------------------------------------------------------------
-# The whole-suite runs
-#
-# One run per built-in target, plus the boundary subset at each of the three remaining
-# error-correction levels, each paid for exactly once per session. The exit code is
-# handed to the test rather than asserted here: ``test_reference_run.py`` expects 0 and
-# ``test_defective_run.py`` expects 1, and a fixture that asserted either would hide the
+# The whole-suite runs: one per built-in target, plus the boundary subset at each of the three
+# remaining error-correction levels, each paid for exactly once per session. The exit code is
+# handed to the test rather than asserted here -- ``test_reference_run.py`` expects 0 and
+# ``test_defective_run.py`` expects 1 -- because a fixture that asserted either would hide the
 # other's condition.
-# ---------------------------------------------------------------------------
 
 
 def _run_suite_and_load(
@@ -662,14 +648,10 @@ def cli_target() -> CliTarget:
     )
 
 
-# ---------------------------------------------------------------------------
-# The loopback example server
-#
-# One process, one socket, one line of stdout. The line is the whole handshake: the server
-# binds an ephemeral port and prints it before it serves, so an unread or late line is the
-# only way this fixture can hang -- and a hang is a defect, so every read is guarded and
-# every failure stops the child and names what it did.
-# ---------------------------------------------------------------------------
+# The loopback example server. One process, one socket, one line of stdout, and that line is the
+# whole handshake: the server binds an ephemeral port and prints it before serving, so an unread
+# or late line is the only way this fixture can hang -- and a hang is a defect, so every read is
+# guarded and every failure stops the child and names what it did.
 
 
 @dataclass(slots=True)
@@ -823,3 +805,35 @@ def http_target_server(repo_root: Path) -> Iterator[HttpTargetServer]:
         yield server
     finally:
         server.stop()
+
+
+@pytest.fixture
+def unimportable_module(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> Callable[[str], Path]:
+    """Return a callable that makes one module present yet unimportable for one test.
+
+    The state a ``None`` entry in ``sys.modules`` cannot produce and a broken installation really
+    has: ``importlib.util.find_spec`` finds the module and answers "present" while importing it
+    raises :exc:`ImportError`. Because the shadowing lives on a child process's own ``sys.path``, it
+    reaches this fixture's default out-of-process path, and the distribution metadata still reports
+    its version -- what a presence-only check wrongly trusts.
+    """
+
+    def shadow(module: str) -> Path:
+        """Write the stub for ``module``, prepend its directory to ``PYTHONPATH``, return it."""
+        stub_dir = tmp_path / "stub"
+        stub_dir.mkdir(exist_ok=True)
+        (stub_dir / f"{module}.py").write_text(
+            f'raise ImportError("{module} deliberately hidden by the test stub")\n',
+            encoding="utf-8",
+            newline="\n",
+        )
+        existing = os.environ.get("PYTHONPATH", "")
+        monkeypatch.setenv(
+            "PYTHONPATH",
+            f"{stub_dir}{os.pathsep}{existing}" if existing else str(stub_dir),
+        )
+        return stub_dir
+
+    return shadow

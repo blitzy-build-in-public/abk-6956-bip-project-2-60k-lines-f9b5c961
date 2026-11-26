@@ -1,100 +1,63 @@
 """Mode-family checks: ``MD-MODE-OPTIMAL`` and ``MD-CHARSET``.
 
-Plan item served: the check-family table of AAP §0.8.1 (``checks/mode.py`` owns
-``MD-MODE-OPTIMAL`` and ``MD-CHARSET``), that section's case-matrix rows of 60 and 74
-cases, and the ``MD-CHARSET`` coverage mapping of §0.8.2.
+AAP §0.8.1's check-family table and its case-matrix rows of 60 and 74 cases, and §0.8.2's
+``MD-CHARSET`` coverage mapping.
 
-No project rules exist for this product: the review-rules source returns no user rules
-and AAP §0.12 records the same, so the binding constraints here are the request's own
-MUST/MUST NOT list and this package's invariants, honoured as if they were rules.
+Neither pinned decoder reports an encoding mode: zxing-cpp 2.2.0 exposes the error level and no
+segment metadata, and OpenCV exposes nothing beyond the payload and the corner quadrangle.  A
+check that claimed to observe the mode would be reporting a guess, and the target's own
+``declared_mode`` is evidence only.  Mode optimality is proven indirectly, through the version the
+payload forces: a payload that fits the numeric charset occupies a strictly smaller symbol in
+numeric mode than in byte mode at the same level, so an encoder that used the wider mode is
+visible as a version above the payload's own-charset minimum, which is what this family asserts.
 
-Why mode optimality is proven through the version, and never through a mode reading
------------------------------------------------------------------------------
-Neither pinned decoder reports an encoding mode: zxing-cpp 2.2.0 exposes the error
-level and no segment metadata, and OpenCV exposes nothing beyond the payload and the
-corner quadrangle.  A check that claimed to observe the mode would therefore be
-reporting a guess, and the target's own ``declared_mode`` is evidence only, never the
-assertion.  Mode optimality is instead proven indirectly, through the version the
-payload forces: a payload that fits the numeric charset occupies a strictly smaller
-symbol in numeric mode than it would in byte mode at the same error-correction level,
-so an encoder that used the wider mode is visible as a version above the payload's
-own-charset minimum -- and that is exactly what this family asserts.
-
-``MD-MODE-OPTIMAL`` -- 60 cases, one encode and one decode each
----------------------------------------------------------------
-The case set is the 24 discriminating boundary records (all 12 ``boundary-numeric``
-and all 12 ``boundary-alphanumeric``, in ``id`` order) plus a 36-record byte-mode
-sample chosen by the rule declared in :data:`MODE_OPTIMAL_BYTE_SAMPLE_SIZE`.  The
-boundary records are the discriminating half because their payloads sit at a capacity
-boundary, where the numeric or alphanumeric minimum is strictly below the byte-mode
-minimum; the byte-mode sample states the complementary property, that no larger
-symbol than the payload's byte-mode minimum was used.
-
-The assertion is an upper bound on the decoded version rather than equality with the
+``MD-MODE-OPTIMAL`` runs 60 cases, one encode and one decode each: the 24 discriminating boundary
+records (all 12 ``boundary-numeric`` and all 12 ``boundary-alphanumeric``, in ``id`` order), whose
+payloads sit at a capacity boundary where the numeric or alphanumeric minimum is strictly below
+the byte-mode minimum, plus a byte-mode sample of :data:`MODE_OPTIMAL_BYTE_SAMPLE_SIZE` records
+that states the complementary property -- no larger symbol than the payload's byte-mode minimum
+was used.  The assertion is an upper bound on the decoded version rather than equality with the
 mode minimum; the inline comment at :func:`execute_mode_optimal` states why, and
-:data:`EXPECTED_ENCODES` records the case count the counting-stub test holds this
-check to.
+:data:`EXPECTED_ENCODES` records the case count the counting-stub test holds this check to.
 
-``MD-CHARSET`` -- 74 cases, one encode and one decode each
------------------------------------------------------------
-The case set is the six charset coverages of AAP §0.8.2, resolved through
-:data:`CHARSET_COVERAGE_CLASSES`:
+``MD-CHARSET`` runs 74 cases, one encode and one decode each, from the six coverage groups of
+AAP §0.8.2 resolved through :data:`CHARSET_COVERAGE_CLASSES`: ``ascii`` from
+``boundary-alphanumeric`` and ``otp``, ``utf8-multibyte``, ``emoji``, ``right-to-left`` from
+``rtl``, ``embedded-nul`` from ``nul-byte``, and ``four-byte-code-points`` from ``emoji`` plus
+the ``utf8-multibyte`` records whose code points are U+10000 and above -- the predicate, not the
+class, decides (see :func:`coverages_for_record`).  That resolves to ``boundary-alphanumeric``
+12, ``emoji`` 12, ``nul-byte`` 6, ``otp`` 12, ``rtl`` 8 and ``utf8-multibyte`` 24.
+:func:`qrcheck.checks.support.records_by_class` validates every class name against
+``qrcheck.corpus.builder.CLASS_NAMES``, that vocabulary's one owner, so a typo in the mapping
+fails loudly at case-build time instead of silently selecting nothing.  Each case asserts
+byte-exact preservation of the requested payload, and the evidence records both payload digests
+and the first divergence offset, which makes the truncating defect's symptom attributable rather
+than merely visible.
 
-=====================================  ==========================================
-coverage                               corpus classes supplying it
-=====================================  ==========================================
-``ascii``                              ``boundary-alphanumeric``, ``otp``
-``utf8-multibyte``                     ``utf8-multibyte``
-``emoji``                              ``emoji``
-``right-to-left``                      ``rtl``
-``embedded-nul``                       ``nul-byte``
-``four-byte-code-points``              ``emoji``, plus the ``utf8-multibyte``
-                                       records whose code points are U+10000 and
-                                       above (the predicate, not the class,
-                                       decides; see :func:`coverages_for_record`)
-=====================================  ==========================================
+``MD-MODE-OPTIMAL`` emits ``value_mismatch`` when the symbol is larger than the payload's
+own-charset minimum and ``sampling_failed`` when the module grid could not be recovered at all.
+``MD-CHARSET`` emits ``value_mismatch`` and, of its own verdicts, nothing else: it compares
+payload bytes rather than geometry, so a symbol whose grid could not be sampled still yields the
+primary decoder's payload or none at all, and "none at all" is a payload mismatch.
 
-The class list therefore resolves to ``boundary-alphanumeric`` 12, ``emoji`` 12,
-``nul-byte`` 6, ``otp`` 12, ``rtl`` 8 and ``utf8-multibyte`` 24: 74 cases.  The
-corpus class vocabulary has one owner, ``qrcheck.corpus.builder.CLASS_NAMES``, which
-:func:`qrcheck.checks.support.records_by_class` validates every name against, so a
-typo in the mapping fails loudly at case-build time instead of silently selecting
-nothing.  Each case asserts byte-exact preservation of the requested payload; the
-evidence records both payload digests and the first divergence offset, which is what
-makes the truncating defect's symptom attributable rather than merely visible.
+Per-case adapter errors are not classified here.  Both checks route every one through
+:func:`qrcheck.checks.support.case_status_for_error`, the product's only translation of an
+adapter failure into a status: a declared rejection or an unusable artefact becomes a failure
+(``target_rejected``, ``contract_error``), an unsupported capability a skip
+(``unsupported_capability``), and target loss (``TargetUnavailable``, ``TargetTimeout``) is
+re-raised unchanged for the runner's one-error-result-per-check policy.
 
-Reasons emitted
----------------
-``MD-MODE-OPTIMAL`` emits ``value_mismatch`` when the symbol is larger than the
-payload's own-charset minimum, and ``sampling_failed`` when the module grid could not
-be recovered at all.  ``MD-CHARSET`` emits ``value_mismatch`` and, of its own verdicts,
-nothing else: it compares payload bytes rather than geometry, so a sampling failure is
-not a cause it can report -- a symbol whose grid could not be sampled still yields the
-primary decoder's payload, or none at all, and "none at all" is a payload mismatch.
+Determinism: nothing here reads a clock for an assertion, a random source, ``hash()`` or
+``id()``; iteration is by corpus record ``id`` ascending and every mapping is sorted before it
+reaches a result, while ``duration_ms`` is measured and recorded, never compared.  The module
+writes no file: evidence is persisted through
+:func:`qrcheck.checks.support.record_evidence`, and only for a case that did not pass.
 
-Per-case adapter errors are not classified here.  Both checks route every one of them
-through :func:`qrcheck.checks.support.case_status_for_error`, the product's only
-translation of an adapter failure into a status: a declared rejection or an unusable
-artefact becomes a failure (``target_rejected``, ``contract_error``), an unsupported
-capability becomes a skip (``unsupported_capability``) -- the belt-and-braces path
-behind capability resolution -- and target loss (``TargetUnavailable``,
-``TargetTimeout``) is re-raised unchanged for the runner's one-error-result-per-check
-policy.
-
-Determinism and scope
----------------------
-Nothing here reads a clock for an assertion, a random source, ``hash()`` or ``id()``;
-iteration is by corpus record ``id`` in ascending order and every mapping this module
-builds is sorted before it reaches a result.  A case's ``duration_ms`` is measured and
-recorded, never compared.  The module writes no file: evidence is persisted through
-:func:`qrcheck.checks.support.record_evidence`, and only for a case that did not pass,
-because a passing case has nothing to inspect.
-
-It imports no image library, no encoder and no concrete adapter -- only the shared
-check support, the registry's contract, the result model, the capacity tables, and from
-the port its capability vocabulary and its error base class, which is what lets an
-adapter failure reach the shared translation without naming a single error type here --
-so it can run against a stub adapter with no decoder, no network and no symbol in sight.
+It imports no image library, no encoder and no concrete adapter -- only the shared check support,
+the registry's contract, the result model, the capacity tables, and from the port its capability
+vocabulary and error base class, which lets an adapter failure reach the shared translation
+without naming a single error type here -- so it runs against a stub adapter with no decoder, no
+network and no symbol in sight.
 """
 
 from __future__ import annotations

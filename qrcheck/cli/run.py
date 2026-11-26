@@ -24,8 +24,12 @@ report directory is left empty:
 * ``--adapter`` names no declared ``[targets.<name>]`` table, ``--ec`` is outside ``L``,
   ``M``, ``Q``, ``H``, or the seed is negative;
 * ``--checks`` matches no registered check (``SelectionError``, which echoes the selector);
-* a run prerequisite fails -- the blocking primary decoder is absent, the corpus cannot be
-  read, or the ``--class`` filter leaves no record (``RunPrerequisiteError``).
+* a pinned runtime dependency cannot be imported -- the primary decoder, ``segno``,
+  ``numpy``, ``Pillow``, ``httpx`` or ``click``. For an ``http`` target it surfaces when the
+  adapter is built, where ``httpx`` loads; the runner's pre-flight refuses the same way
+  otherwise, before it reads the corpus;
+* a run prerequisite fails -- the corpus cannot be read, or the ``--class`` filter leaves no
+  record (``RunPrerequisiteError``).
 
 Every fault found during or after the run is reported differently, because a report then
 exists or can exist, and exit code 3 outranks 1, which outranks 0. One or more ``failed``
@@ -68,6 +72,7 @@ import click
 from qrcheck.checks import load_families
 from qrcheck.cli.exit import EXIT_CONFIG, EXIT_INTERNAL, exit_code_for
 from qrcheck.config import ConfigError, load_config
+from qrcheck.dependencies import blocking_problem
 from qrcheck.registry import REGISTRY, SelectionError, parse_selection, select
 from qrcheck.report import write_all_reports
 from qrcheck.report.json_report import dumps_canonical
@@ -248,7 +253,9 @@ def run(
 
     # -- 7. the adapter, and the run -----------------------------------------
     # ADAPTER_TYPES is the only factory table, and a lookup imports the one adapter module
-    # for this target kind: no concrete adapter is named in this file.
+    # for this target kind: no concrete adapter is named in this file. That import is also
+    # where the kind's own library loads -- ``httpx`` for an ``http`` target -- so an
+    # unusable pinned distribution surfaces here too.
     #
     # Construction sits inside the exit-2 mapping, never above it. A constructor refuses a
     # configuration that is wrong on its own terms but whose shape alone the schema can
@@ -260,11 +267,22 @@ def run(
     # ``str(error)`` already reads "<dotted key>: <message>". A ``TargetError`` raised this
     # early is the pre-flight availability fault, which carries that same code wherever it
     # is found: an adapter that could not be built leaves no run to describe.
+    #
+    # An ``ImportError`` or ``OSError`` from that same import is the environment fault of AAP
+    # §0.7.2 instead -- exit 2 naming the distribution and ``requirements.lock``, through the
+    # product's one dependency probe -- and not the exit-3 internal error the re-raise leaves
+    # to ``qrcheck.cli.main`` for a fault no dependency explains.
     adapter_obj: Adapter | None = None
     try:
         adapter_obj = ADAPTER_TYPES[str(target.type)](target, name=name)
     except (ConfigError, TargetError, ValueError) as error:
         click.echo(f"{_DIAGNOSTIC_PREFIX}configuration error: {error}", err=True)
+        return EXIT_CONFIG
+    except (ImportError, OSError):
+        problem = blocking_problem()
+        if problem is None:
+            raise
+        click.echo(f"{_DIAGNOSTIC_PREFIX}{problem.message}", err=True)
         return EXIT_CONFIG
     try:
         run_result = run_suite(

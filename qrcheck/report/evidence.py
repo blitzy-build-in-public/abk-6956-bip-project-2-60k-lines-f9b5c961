@@ -1,94 +1,74 @@
 """The persistence policy for per-case evidence: who gets a directory, and what goes in it.
 
-``qrcheck.runner`` hands every case's outcome to :class:`EvidenceStore`, and this module is
-the only place that decides *whether* evidence reaches the filesystem. That decision is a
-policy, not an optimisation: a full run is a few thousand cases (AAP §0.8.1 case matrix),
-so persisting a directory per case would write tens of thousands of files, while a passing
-case whose bytes are reproducible from ``(adapter, seed, case_id)`` has nothing to inspect.
-Only ``failed``, ``error`` and ``skipped`` results are persisted (AAP §0.3.4). A skipped
-result is persisted because its machine-readable reason is the only record of why a check
-never ran, and a skip must never be mistaken for a pass.
+``qrcheck.runner`` hands every case's outcome to :class:`EvidenceStore`, and this module alone
+decides *whether* evidence reaches the filesystem.  That decision is a policy, not an
+optimisation: a full run is a few thousand cases (AAP §0.8.1 case matrix), so a directory per case
+would write tens of thousands of files, while a passing case whose bytes are reproducible from
+``(adapter, seed, case_id)`` has nothing to inspect.  Only ``failed``, ``error`` and ``skipped``
+results are persisted (AAP §0.3.4) -- a skip because its machine-readable reason is the only
+record of why a check never ran, and a skip must never be mistaken for a pass.
 
-The layout and the artefact names are **not** defined here. :mod:`qrcheck.evidence.naming`
-owns ``<report_dir>/evidence/<check-id>/<failure-id>/``, the closed artefact set and path
-sanitization, and this module names a file only by importing those constants and builders
-(AAP §0.8.1, "Single owner of each cross-cutting concern"). The failure ID is derived
-inside :func:`qrcheck.evidence.naming.case_evidence_dir` from
-:func:`qrcheck.report.model.failure_id`, its only definition, so the directory a case is
-filed under cannot disagree with the identifier ``summary.json`` records for it.
+The layout and the artefact names are **not** defined here.  :mod:`qrcheck.evidence.naming` owns
+``<report_dir>/evidence/<check-id>/<failure-id>/``, the closed artefact set and path sanitization,
+and this module names a file only by importing those constants and builders (AAP §0.8.1, "Single
+owner of each cross-cutting concern").  The failure ID is derived inside
+:func:`qrcheck.evidence.naming.case_evidence_dir` from
+:func:`qrcheck.report.model.failure_id`, its only definition, so the directory a case is filed
+under cannot disagree with the identifier ``summary.json`` records for it.
 
-The closed artefact set, in the order this module writes it (AAP §0.3.4):
+The closed artefact set, in the order this module writes it (AAP §0.3.4): ``request.json`` (the
+case's identity envelope plus its request projection), ``decoded.json``, ``symbol.png`` or
+``symbol.svg`` byte for byte as received, ``symbol-repeat.png`` for ``DT-DETERMINISTIC``'s second
+call of the same request, ``damage-<kind>-<seed>.png`` named so it is re-derivable, and
+``logo.png``.  Nothing else may ever be written -- no manifest, index, README or per-directory
+metadata -- because a second kind of name inside an evidence directory would break the closed set
+the HTML writer and ``CL-ARTIFACTS`` inspect against.
 
-=============================  ====================================================
-``request.json``               the case's identity envelope plus its request projection
-``decoded.json``               the decoded-or-error evidence, persisted verbatim
-``symbol.png`` / ``symbol.svg``  the target's artefact, byte for byte as received
-``symbol-repeat.png``          ``DT-DETERMINISTIC``'s second call of the same request
-``damage-<kind>-<seed>.png``   one damaged variant, named so that it is re-derivable
-``logo.png``                   the overlay bitmap the target composited onto the symbol
-=============================  ====================================================
+What is persisted is the caller's projection, never a re-derivation of it: ``request`` carries the
+``GenerateRequest`` fields plus the case's resolved parameters (damage kind and thresholds, the
+quiet-zone and contrast requests) and the ``out_of_contract`` marker
+``qrcheck/checks/support.py`` sets for the ``IV-*`` probes, and ``decoded`` carries
+``per_decoder``, ``polarity_applied``, ``agreement``, the EC-level pair, ``version``, ``mask``,
+``matrix_sha256`` and the check-specific measurements, or the traceback of an error result.  Both
+mappings are written verbatim; validating their shape here would turn a legitimate error result,
+whose ``decoded`` holds only a traceback, into a framework failure.
 
-Nothing else may ever be written: no manifest, no index, no README and no per-directory
-metadata. A second kind of name inside an evidence directory would break the closed set
-that the HTML writer and ``CL-ARTIFACTS`` inspect against.
+Guarantees:
 
-What is persisted is the caller's projection, never a re-derivation of it. ``request``
-already carries the ``GenerateRequest`` fields plus the case's resolved parameters (the
-damage kind and its resolved thresholds, the quiet-zone request, the contrast request) and
-the ``out_of_contract`` marker ``qrcheck/checks/support.py`` sets for the ``IV-*`` probes;
-``decoded`` already carries ``per_decoder`` (each outcome's ``status`` and ``polarity``),
-``polarity_applied``, ``agreement``, the EC-level pair, ``version``, ``mask``,
-``matrix_sha256`` and the check-specific measurements, or the traceback of an error result.
-Both mappings are written verbatim. Validating their shape here would turn a legitimate
-error result - whose ``decoded`` holds only a traceback - into a framework failure.
-
-Guarantees
-----------
 * **Byte form.** Both JSON artefacts are serialised by
   :func:`qrcheck.report.json_report.dumps_canonical` and written by
-  :func:`qrcheck.report.json_report.write_canonical_text`: sorted keys, two-space indent,
-  UTF-8 with one trailing newline. Neither carries a timestamp, a duration, a hostname or
-  an absolute path, which is what makes ``request.json`` and ``decoded.json`` byte-identical
-  for the same case and seed (AAP §0.5.4). Nothing here adds a field of its own that could
-  break that, and the result's own ``duration_ms`` stays on the result, never in evidence.
-* **Deterministic overwrite.** Writing the same case twice leaves the same files with the
-  same bytes in the same place: the directory is created with ``exist_ok=True`` and the
-  files are written directly. Nothing is appended, deleted or renamed, and no temporary
-  file exists at any moment - a temporary file inside ``report_dir`` is exactly what
-  ``CL-ARTIFACTS`` looks for.
-* **Validation before I/O.** Every artefact name, every artefact's bytes, and both JSON
-  bodies are resolved before the case directory is created: the texts are serialised and
-  encoded, and each image byte string is captured, first. A malformed case therefore raises
-  with no evidence directory at all - not even one holding ``request.json`` alone - and the
-  only exception that can follow the directory's creation is an :exc:`OSError` from the
-  filesystem itself.
+  :func:`qrcheck.report.json_report.write_canonical_text` -- sorted keys, two-space indent, UTF-8
+  with one trailing newline -- and neither carries a timestamp, a duration, a hostname or an
+  absolute path, which is what makes ``request.json`` and ``decoded.json`` byte-identical for the
+  same case and seed (AAP §0.5.4).  Nothing here adds a field of its own, and the result's
+  ``duration_ms`` stays on the result, never in evidence.
+* **Deterministic overwrite.** Writing the same case twice leaves the same files with the same
+  bytes in the same place: the directory is created with ``exist_ok=True`` and the files are
+  written directly.  Nothing is appended, deleted or renamed, and no temporary file exists at any
+  moment -- a temporary file inside ``report_dir`` is exactly what ``CL-ARTIFACTS`` looks for.
+* **Validation before I/O.** Every artefact name, every artefact's bytes and both JSON bodies are
+  resolved before the case directory is created, so a malformed case raises with no evidence
+  directory at all -- not even one holding ``request.json`` alone -- and the only exception that
+  can follow the directory's creation is an :exc:`OSError` from the filesystem.
 * **No adapter or decoder dependency.** ``symbol`` and ``repeat_symbol`` are duck-typed on
-  ``image_bytes: bytes`` and ``output_format: str`` (``"png"`` or ``"svg"``, the
-  :class:`qrcheck.targets.base.GeneratedSymbol` shape) and that type is imported for type
-  checking only. A runtime import would make the report package depend on the adapter layer,
-  which the layering rule forbids, and would pull Pillow, numpy and zxing into a
-  configuration-only process.
+  ``image_bytes: bytes`` and ``output_format: str`` (the
+  :class:`qrcheck.targets.base.GeneratedSymbol` shape), imported for type checking only: a runtime
+  import would make the report package depend on the adapter layer, which the layering rule
+  forbids, and pull Pillow, numpy and zxing into a configuration-only process.
 
-Failure modes
--------------
-Four, none of them retried and none logged (AAP §0.5.6). The first three are caller defects
-and are raised before anything is written:
-
-* :exc:`ValueError` from this module or from :mod:`qrcheck.evidence.naming` when the
-  artefact request itself is malformed - an unknown symbol format, a non-PNG repetition, an
-  undeclared damage kind - or from :func:`qrcheck.report.json_report.dumps_canonical` when a
-  persisted mapping holds a non-finite float (``nan``, ``inf`` or ``-inf``), which JSON
-  defines no token for. Each message names the offending value or the artefact at fault.
-* :exc:`TypeError` when a persisted mapping holds a value the canonical writer cannot
-  serialise, or a supplied artefact's ``image_bytes`` is not bytes-like. Both fail here
-  rather than being stringified into a plausible-looking artefact, and the message names
-  the artefact at fault.
-* :exc:`UnicodeEncodeError` when a persisted mapping holds a character UTF-8 cannot encode,
-  such as the lone surrogate an HTTP target's JSON metadata can carry in. It is the same
-  class of caller defect and is likewise raised before the directory exists.
-* :exc:`OSError` (including :exc:`PermissionError`) from the filesystem, propagated
-  untouched. ``qrcheck.cli.run`` is the single place that turns an unwritable ``report_dir``
-  into exit code 3.
+Four failure modes, none retried and none logged (AAP §0.5.6); the first three are caller defects
+raised before anything is written.  :exc:`ValueError` from this module or
+:mod:`qrcheck.evidence.naming` when the artefact request itself is malformed -- an unknown symbol
+format, a non-PNG repetition, an undeclared damage kind -- or from
+:func:`qrcheck.report.json_report.dumps_canonical` when a persisted mapping holds a non-finite
+float (``nan``, ``inf`` or ``-inf``), which JSON defines no token for; each message names the
+offending value or artefact.  :exc:`TypeError` when a persisted mapping holds a value the
+canonical writer cannot serialise, or a supplied artefact's ``image_bytes`` is not bytes-like:
+both fail here rather than being stringified into a plausible-looking artefact.
+:exc:`UnicodeEncodeError` when a persisted mapping holds a character UTF-8 cannot encode, such as
+the lone surrogate an HTTP target's JSON metadata can carry in.  :exc:`OSError` (including
+:exc:`PermissionError`) from the filesystem is propagated untouched, and ``qrcheck.cli.run`` is
+the single place that turns an unwritable ``report_dir`` into exit code 3.
 """
 
 from __future__ import annotations

@@ -1,80 +1,61 @@
 """Module-grid sampling: the module count, the grid and the version, from pixels.
 
-No decoder in this product reports a version. The pinned ``zxing-cpp`` 2.2.0
-exposes ``ec_level`` but neither version nor mask, and the secondary decoder
-exposes no metadata at all -- yet ``SY-VERSION-MIN``, ``SY-EC-MATCH``,
-``SY-MASK``, ``SY-MATRIX-EQUIV`` and the measured quiet zone all need the module
-grid. So the grid is recovered here, from the symbol itself, and the version is
-read off the grid's dimension:
+No decoder in this product reports a version: the pinned ``zxing-cpp`` 2.2.0 exposes ``ec_level``
+but neither version nor mask, and the secondary decoder exposes no metadata at all -- yet
+``SY-VERSION-MIN``, ``SY-EC-MATCH``, ``SY-MASK``, ``SY-MATRIX-EQUIV`` and the measured quiet zone
+all need the module grid.  So the grid is recovered here, from the symbol itself, and the version
+is read off the grid's dimension: ISO/IEC 18004 §7.1 fixes a Model 2 symbol at **``4V + 17``**
+modules per side for Version 1-40, and :func:`version_from_dimension` inverts that rule and is the
+product's **only** version source -- nothing else may derive a version from a decoder, a target's
+metadata or a capacity table.
 
-* ISO/IEC 18004 §7.1 fixes a Model 2 symbol's dimension at **``4V + 17``**
-  modules per side for Version 1-40 -- 21 modules for Version 1, 177 for
-  Version 40. :func:`version_from_dimension` inverts that rule and is the
-  product's **only** version source: nothing else may derive a version from a
-  decoder, a target's metadata or a capacity table.
+Three acceptance paths, and nothing else.  **Primary**: the authoritative decoder's corner
+quadrangle in source-image pixels is projected onto an ``N x N`` grid by a planar homography
+(:func:`_square_to_quad`), the module pitch is measured from the symbol's top-left finder pattern,
+the count is snapped to a legal ``4V + 17`` and the snap is confirmed against the timing patterns.
+**Fallback**: when that fails and the secondary decoder supplied its rectified
+``straight_qrcode``, the same pitch/snap/confirm procedure runs on that image, which needs no
+homography because the decoder has already rectified it, and the result is labelled
+``source="straight_qrcode"``.  **Failure**: when both fail,
+:class:`~qrcheck.decode.base.SampledMatrix` carries ``matrix=None`` and
+``reason="sampling_failed"``, which lets a check report that reason instead of a wrong verdict.
 
-Three acceptance paths, and nothing else:
+Neither guard may be relaxed.  A shifted grid produces a *wrong verdict* in ``SY-MASK``,
+``SY-EC-MATCH``, ``SY-MATRIX-EQUIV``, ``SY-VERSION-MIN`` and the measured quiet zone, so a pitch
+that is off is rejected twice over: the implied pitch of the snapped count must lie within 20% of
+the measured pitch, and the sampled timing patterns must show exactly ``N - 16`` alternating
+transitions on both axes.  A quad that overshoots the symbol is therefore *refused* rather than
+re-anchored from the rectified image's dark extent, because silently recovering it would turn a
+wrong measurement into a confident one.
 
-1. **Primary** -- the authoritative decoder's corner quadrangle in source-image
-   pixels is projected onto an ``N x N`` grid by a planar homography
-   (:func:`_square_to_quad`), the module pitch is measured from the symbol's
-   top-left finder pattern, the count is snapped to a legal ``4V + 17`` and the
-   snap is confirmed against the timing patterns.
-2. **Fallback** -- when the primary path fails and the secondary decoder
-   supplied its rectified ``straight_qrcode`` image, the same pitch/snap/confirm
-   procedure runs on that image, which needs no homography because the decoder
-   has already rectified it. The result is labelled ``source="straight_qrcode"``.
-3. **Failure** -- when both fail, :class:`~qrcheck.decode.base.SampledMatrix`
-   carries ``matrix=None`` and ``reason="sampling_failed"``, which lets a check
-   report that reason instead of a wrong verdict.
+**Only the standard library and numpy** are imported.  The secondary decoder's absence is a
+supported degradation (a run proceeds in single-decoder mode), so grid sampling must not depend on
+``cv2``: the homography is solved as the 8x8 direct-linear-transform system with
+:func:`numpy.linalg.solve` and sampled by inverse mapping.  ``Pillow`` is absent too -- the
+consensus layer hands over arrays -- so this module never opens an image file, reads
+configuration, writes an artefact, logs or prints.  It is deterministic: no randomness, no clock,
+no ``hash()``, no dictionary or filesystem ordering, so identical input arrays yield a
+byte-identical grid and therefore an identical :func:`~qrcheck.decode.base.matrix_sha256` digest.
+And a failure is a value, never an exception, on target-derived data: every refusal is reported
+through ``accepted=False`` on :class:`~qrcheck.decode.base.ModuleCountEstimate` with one of
+``position_unusable``, ``low_contrast``, ``finder_unreadable``, ``pitch_mismatch``,
+``timing_mismatch`` or ``fallback_unusable``, and through ``reason="sampling_failed"`` on
+:class:`~qrcheck.decode.base.SampledMatrix`.  Only an array that violates this module's own input
+contract -- not ``numpy.uint8``, not ``H x W`` or ``H x W x 3`` -- raises ``ValueError``, because
+that is a producer defect rather than evidence about a target.
 
-Neither guard may be relaxed. A shifted grid produces a *wrong verdict* in
-``SY-MASK``, ``SY-EC-MATCH``, ``SY-MATRIX-EQUIV``, ``SY-VERSION-MIN`` and the
-measured quiet zone, so a pitch that is off is rejected twice over: the implied
-pitch of the snapped count must lie within 20% of the measured pitch, and the
-sampled timing patterns must show exactly ``N - 16`` alternating transitions on
-both axes. A quad that overshoots the symbol is therefore *refused* rather than
-re-anchored from the rectified image's dark extent -- silently recovering it
-would turn a wrong measurement into a confident one.
-
-Constraints this module keeps:
-
-* **Only the standard library and numpy.** The secondary decoder's absence is a
-  supported degradation (a run proceeds in single-decoder mode), so grid
-  sampling must not depend on ``cv2``: the homography is solved as the 8x8
-  direct-linear-transform system with :func:`numpy.linalg.solve` and sampled by
-  inverse mapping. ``Pillow`` is absent too -- the consensus layer hands over
-  arrays, so this module never opens an image file, reads configuration, writes
-  an artefact, logs or prints.
-* **Determinism.** No randomness, no clock, no ``hash()``, no dictionary or
-  filesystem ordering: identical input arrays yield a byte-identical grid and
-  therefore an identical :func:`~qrcheck.decode.base.matrix_sha256` digest.
-* **A failure is a value, never an exception, on target-derived data.** Every
-  refusal is reported through ``accepted=False`` on
-  :class:`~qrcheck.decode.base.ModuleCountEstimate` with one of the reasons
-  ``position_unusable``, ``low_contrast``, ``finder_unreadable``,
-  ``pitch_mismatch``, ``timing_mismatch`` or ``fallback_unusable``, and through
-  ``reason="sampling_failed"`` on
-  :class:`~qrcheck.decode.base.SampledMatrix`. Only an array that violates this
-  module's own input contract -- not ``numpy.uint8``, not ``H x W`` or
-  ``H x W x 3`` -- raises ``ValueError``, because that is a producer defect
-  rather than evidence about a target.
-
-The sampled region is the symbol's own area, *excluding* the 4-module quiet zone
-(ISO/IEC 18004 §7.3.6): a corner quadrangle bounds the symbol, not its quiet
-zone, so quiet-zone measurement is the owning check's business, done from the
-returned grid's dark bounding box. Consequence of that split: a check that needs
-the measured quiet zone fails with ``sampling_failed`` rather than with a wrong
+The sampled region is the symbol's own area, *excluding* the 4-module quiet zone (ISO/IEC 18004
+§7.3.6): a corner quadrangle bounds the symbol, not its quiet zone, so quiet-zone measurement is
+the owning check's business, done from the returned grid's dark bounding box.  A check that needs
+the measured quiet zone therefore fails with ``sampling_failed`` rather than with a wrong
 measurement when no grid can be recovered.
 
-The estimate's numbers exist for diagnosis. The evidence artefact set of the plan
-is closed, so the rectified luminance can never become a file of its own; the
-square is measured on every path, but it is attached to
-:attr:`~qrcheck.decode.base.SampledMatrix.rectified_luma` only when the caller asks
-for it with ``sample_matrix(..., keep_rectified=True)``. It is a full-size
-``float64`` array costing 8 bytes per pixel -- about 1.3 MB for a 400 px symbol --
-and it lives as long as the result does, so a consumer that renders it pays for it
-and every other caller releases the square with the case.
+The estimate's numbers exist for diagnosis.  The evidence artefact set of the plan is closed, so
+the rectified luminance can never become a file of its own: the square is measured on every path
+but attached to :attr:`~qrcheck.decode.base.SampledMatrix.rectified_luma` only when the caller asks
+for it with ``sample_matrix(..., keep_rectified=True)``, because it is a full-size ``float64``
+array costing 8 bytes per pixel -- about 1.3 MB for a 400 px symbol -- and lives as long as the
+result does.
 """
 
 from __future__ import annotations

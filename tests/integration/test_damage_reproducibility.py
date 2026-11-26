@@ -1,75 +1,30 @@
-"""`DM-SEEDED`'s integration proof: the recorded seed regenerates the damaged image.
+"""``DM-SEEDED``'s integration proof: the recorded seed regenerates the damaged image.
 
-Three promises of the AAP are held here, each as a condition that can fail rather than as
-a property the product is trusted to keep:
+Three AAP promises are held here as conditions that can fail (AAP §0.6.1 #4, §0.5.2, §0.5.4):
+over the whole 8-record by 7-kind matrix rather than a sample, a damaged image regenerated from the
+seed recorded beside its result is byte-identical with the same decode outcome; that recorded seed
+equals what :func:`qrcheck.config.seeding.derive_seed` derives from ``(run seed, check ID, case ID,
+kind)``, here and in a fresh process with a different ``PYTHONHASHSEED``; and
+``damage-<kind>-<seed>.png`` names the derived seed and holds the transform's own bytes.
 
-* **AAP §0.6.1 #4** — "a damaged image regenerated from the recorded seed is not
-  byte-identical, or the decode outcome differs". The measured values are
-  ``results[].seed`` and ``decoded.damage[]`` in ``summary.json``, and this module reads
-  both, case by case, over the whole 8-record by 7-kind matrix (56 cases, never a sample).
-* **AAP §0.5.2** — one derivation point. A damaged variant is reproducible from
-  ``(run seed, check ID, case ID, kind)`` alone, so the seed recorded beside a result has
-  to equal what :func:`qrcheck.config.seeding.derive_seed` derives from those four parts,
-  in this process and in a fresh one whose ``PYTHONHASHSEED`` differs.
-* **AAP §0.5.4** — ``damage-<kind>-<seed>.png`` is byte-identical inside the pinned lock,
-  so the filename's decimal seed is the derived seed and the file's bytes are the bytes
-  the transform produced.
+The transforms are private to ``qrcheck/checks/damage.py`` and a second copy here would be the
+duplicate owner the AAP forbids, so this module observes the public seam only: both checks run
+through :func:`qrcheck.runner.run_suite`, :func:`qrcheck.checks.damage.recall_variant` returns the
+bytes that reach disk, ``decoded["damage"]`` records the kind, seed and thresholds actually applied,
+and ``DM-SEEDED``'s own recomputation is the in-product proof of reproducibility.
 
-How each promise is observed, given that the damage transforms are private
---------------------------------------------------------------------------
-``qrcheck/checks/damage.py`` exposes no public entry point for applying one damage kind to
-one image: the transforms are ``_damaged_pixels`` and the seven private kind helpers behind
-it. Re-implementing any of them here would create the second copy of the transform that
-the AAP's "single owner of each cross-cutting concern" rule forbids, and would let the copy
-agree with itself while the product drifted. This module therefore observes the module
-through its **public** seam only, which turns out to be sufficient:
+A clean run writes no evidence (AAP §0.3.4), so
+:func:`test_on_disk_damage_artefacts_match_their_names_and_re_derivation` runs a bounded
+``run --checks DM-RESILIENCE`` whose ``[checks.damage]`` values are strictly harsher than the
+committed defaults. That probe exists only to produce artefacts, can only increase the damage, and
+claims nothing about ``DM-RESILIENCE``'s verdict at default settings, which belongs to
+``test_reference_run.py``; tightening a probe is not the relaxation AAP §0.4.3 forbids.
 
-* both checks run through :func:`qrcheck.runner.run_suite`, so every case is a real case;
-* :func:`qrcheck.checks.damage.recall_variant` hands back the exact PNG bytes
-  ``DM-RESILIENCE`` produced for one ``(record, kind)`` — the bytes that are written to
-  ``damage-<kind>-<seed>.png`` and the bytes ``DM-SEEDED`` re-derives and compares;
-* ``decoded["damage"]`` records, per case, the kind, the derived seed and the threshold
-  values actually applied, so the evidence is auditable without consulting the module;
-* and ``DM-SEEDED`` *is* the product's own second application of the same transform to the
-  same symbol with the same seed, so its digest pair (``decoded["variant"]``) is the
-  in-product proof that the seeded re-application reproduced the variant exactly.
-
-Where the module has no seam, the gap is stated rather than papered over: an assertion
-that would need ``_damaged_pixels`` is expressed instead as "two independent runs of the
-check, with the same run seed, produce identical variant bytes, and the two recomputations
-the product itself performs agree".
-
-Why a stricter-only probe exists
---------------------------------
-A clean reference run writes **no** evidence: a passing case records ``evidence_dir =
-null`` and the store creates no directory (AAP §0.3.4), so the artefact half of criterion
-4 — the file names on disk and the bytes inside them — cannot be observed from it.
-:func:`test_on_disk_damage_artefacts_match_their_names_and_re_derivation` therefore runs
-its own bounded ``run --checks DM-RESILIENCE`` against a configuration whose
-``[checks.damage]`` values are **strictly harsher** than the committed defaults: a larger
-occlusion budget, a heavier blur, a smaller JPEG quality, a stronger noise field, a larger
-rotation and perspective and a smaller downscale. That probe exists **only to produce
-artefacts**. It can only ever increase the damage, so it cannot mask a product defect, and
-no assertion in this module claims anything about ``DM-RESILIENCE``'s verdict on the
-reference target at default settings — that is ``test_reference_run.py``'s job. Loosening
-a threshold would be a relaxation the AAP §0.4.3 forbids; tightening one for a probe is
-not.
-
-What this module never does
----------------------------
-No ``skip``, no ``xfail``, no retry and no ``pytest-mock`` (AAP §0.4.3, §0.5.6): a missing
-projection or a missing artefact is reported as a failing assertion naming the case. No
-threshold literal is restated — every ``[checks.damage]`` value is read from the
-configuration the generated document resolves to, and the only literals are the seven
-declared damage-kind names, the 8/56 shape of the case matrix and the seed parts
-``derive_seed`` requires. Nothing compares a duration, reads a clock or emits an absolute
-path, every directory walk is sorted before use, and every artefact this module causes
-lands under ``tmp_path`` with one report root per run.
-
-Marker
-------
-``e2e``, because the whole matrix needs a run of ``DM-RESILIENCE`` and ``DM-SEEDED``. The
-fast unit job deselects it with ``-m "not e2e"`` and CI runs it in the slow job.
+No ``skip``, ``xfail``, retry or ``pytest-mock`` (AAP §0.4.3, §0.5.6): a missing projection or
+artefact fails as an assertion naming its case. No threshold literal is restated, nothing compares a
+duration or reads a clock, every walk is sorted, and every artefact lands under ``tmp_path`` with
+one report root per run. Marker ``e2e``: the matrix needs a full
+``DM-RESILIENCE``/``DM-SEEDED`` run.
 """
 
 from __future__ import annotations
@@ -104,13 +59,9 @@ from qrcheck.targets.base import Adapter, Capability, GenerateRequest, Generated
 pytestmark = pytest.mark.e2e
 
 
-# ---------------------------------------------------------------------------
-# Fixed values
-#
-# Only shapes, names and the seed parts the contract fixes. Every threshold the damage
-# transforms read comes from the configuration a run resolves, so retuning ``qrcheck.toml``
-# cannot leave a stale number here.
-# ---------------------------------------------------------------------------
+# Fixed values: only shapes, names and the seed parts the contract fixes. Every threshold the
+# damage transforms read comes from the configuration a run resolves, so retuning
+# ``qrcheck.toml`` cannot leave a stale number here.
 
 #: The conforming built-in target every run in this module drives.
 _REFERENCE: Final[str] = "reference"
@@ -159,13 +110,13 @@ _CASE_ID_PATTERN = re.compile(r"^corpus:(?P<record>[^@]+)@(?P<kind>[^@]+)$")
 #: filename can be compared with the derived one.
 _DAMAGE_NAME_PATTERN = re.compile(r"^damage-(?P<kind>[a-z]+)-(?P<seed>[0-9]+)\.png$")
 
-#: The ``[checks.damage]`` overrides of the stricter-only artefact probe. Every one of them
-#: is at least as harsh as the committed default, and the probe's first assertion checks
-#: that direction rather than trusting this comment: a larger occlusion budget (margin 0), a
-#: heavier blur, a smaller JPEG quality, a stronger noise field, a larger rotation and
-#: perspective and a smaller downscale. They are probe parameters rather than product
-#: thresholds, and the schema still bounds them (margin >= 0, quality >= 1, rotation <= 45,
-#: perspective <= 30, downscale > 0).
+#: The ``[checks.damage]`` overrides of the stricter-only artefact probe. Every one of them is at
+#: least as harsh as the committed default -- a larger occlusion budget (margin 0), a heavier
+#: blur, a smaller JPEG quality, a stronger noise field, a larger rotation and perspective and a
+#: smaller downscale -- and the probe's first assertion checks that direction rather than
+#: trusting this comment. They are probe parameters rather than product thresholds, and the
+#: schema still bounds them (margin >= 0, quality >= 1, rotation <= 45, perspective <= 30,
+#: downscale > 0).
 _HARSHER_DAMAGE: Final[Mapping[str, Any]] = MappingProxyType(
     {
         "occlusion_margin": 0.0,
@@ -213,14 +164,11 @@ _LIMIT_KEYS: Final[Mapping[str, str]] = MappingProxyType(
 
 
 
-# ---------------------------------------------------------------------------
-# The counting port wrapper
-#
-# DM-SEEDED's central claim is that it never asks the target for a symbol, and the only
-# honest way to assert "zero" at integration level is to count. The wrapper delegates to a
-# real built-in adapter rather than a stub, so every case it wraps still produces real data,
-# and it satisfies the port itself, so the count it reports is a count of the port's calls.
-# ---------------------------------------------------------------------------
+# The counting port wrapper. ``DM-SEEDED``'s central claim is that it never asks the target for
+# a symbol, and the only honest way to assert "zero" at integration level is to count. The
+# wrapper delegates to a real built-in adapter rather than a stub, so every case it wraps still
+# produces real data, and it satisfies the port itself, so what it reports is a count of the
+# port's own calls.
 
 
 class _CountingAdapter:
@@ -260,13 +208,10 @@ class _CountingAdapter:
         self._inner.close()
 
 
-# ---------------------------------------------------------------------------
-# One in-process run pair, captured as plain data
-#
-# Everything a test needs is copied out of the run as soon as the run ends: the memo the
-# damage family keeps is run-scoped mutable state that a later run replaces, so a test that
-# reached back into it would be asserting on whichever run happened to go last.
-# ---------------------------------------------------------------------------
+# One in-process run pair, captured as plain data. Everything a test needs is copied out of the
+# run as soon as it ends, because the memo the damage family keeps is run-scoped mutable state
+# that a later run replaces: a test reaching back into it would assert on whichever run happened
+# to go last.
 
 
 @dataclass(frozen=True, slots=True)
@@ -877,16 +822,13 @@ def test_dm_resilience_encodes_one_symbol_per_record(damage_runs: _DamageRun) ->
 
 
 
-# ---------------------------------------------------------------------------
-# Test 7 - the artefacts on disk carry the derived seed and the recorded bytes
-#
-# A clean reference run writes no evidence at all, so this test makes its own: a bounded
-# `run --checks DM-RESILIENCE` whose [checks.damage] values are strictly harsher than the
-# committed defaults. It exists to produce files, and the only claim it makes is about the
-# names and bytes of those files -- never about DM-RESILIENCE's verdict at the defaults,
-# which is test_reference_run.py's gate. Tightening a threshold for a probe is not the
-# relaxation AAP §0.4.3 forbids.
-# ---------------------------------------------------------------------------
+# Test 7 - the artefacts on disk carry the derived seed and the recorded bytes. A clean
+# reference run writes no evidence, so this test makes its own: a bounded ``run --checks
+# DM-RESILIENCE`` whose ``[checks.damage]`` values are strictly harsher than the committed
+# defaults. It exists to produce files, and claims only that their names and bytes match the
+# derivation -- never that ``DM-RESILIENCE`` passes at the defaults, which is
+# ``test_reference_run.py``'s gate; tightening a probe is not the relaxation AAP §0.4.3
+# forbids.
 
 
 def _read_summary(report_root: Path) -> dict[str, Any]:

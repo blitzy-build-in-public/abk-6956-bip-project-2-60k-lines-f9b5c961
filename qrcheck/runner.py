@@ -1,85 +1,66 @@
 """Orchestration of exactly one sequential run, and nothing else.
 
-:func:`run_suite` is the single public entry point of the product's execution layer.  It
-asserts nothing, builds no request, encodes nothing, decodes nothing, writes no report and
-decides no exit code.  What it does is the sequence AAP §0.3.2 fixes for it:
+:func:`run_suite` is the single public entry point of the product's execution layer.  It asserts
+nothing, builds no request, encodes nothing, decodes nothing, writes no report and decides no exit
+code; it performs the sequence AAP §0.3.2 fixes for it: capture the run's start time once; probe
+what the host provides -- both reference decoders and the SVG rasterizer, with **zero** target
+invocations -- and refuse to start when the blocking primary decoder is unusable or any other
+pinned dependency cannot be imported; load the committed corpus and apply the ``--class`` filter,
+refusing to start when the filter leaves nothing; build the one
+:class:`~qrcheck.registry.check.RunContext` the checks of this run share; resolve the ``--checks``
+selection against the target's declared capabilities, so every check is decided runnable or skipped
+*before* the first case runs; walk the runnable checks in check-identifier order and each check's
+cases in case-identifier order, containing every per-case fault; apply the
+one-error-result-per-check policy when the target is lost; and accumulate one
+:class:`~qrcheck.report.model.RunResult` before closing the adapter.
 
-1. capture the run's start time, once;
-2. probe what the host provides -- both reference decoders and the SVG rasterizer -- with
-   **zero** target invocations, and refuse to start when the blocking primary decoder is
-   absent;
-3. load the committed corpus and apply the ``--class`` filter, refusing to start when the
-   filter leaves nothing;
-4. build the one :class:`~qrcheck.registry.check.RunContext` the checks of this run share;
-5. resolve the ``--checks`` selection against the target's declared capabilities, so every
-   check is decided runnable or skipped *before* the first case runs;
-6. walk the runnable checks in check-identifier order and each check's cases in
-   case-identifier order, containing every per-case fault;
-7. apply the one-error-result-per-check policy when the target is lost;
-8. accumulate one :class:`~qrcheck.report.model.RunResult` and close the adapter.
+What this module deliberately does not own.  **Exit codes**: ``qrcheck.cli.exit`` is the only place
+a code is decided, from the returned model's tallies, and nothing here prints, calls ``sys.exit`` or
+maps a count.  **Reports**: ``qrcheck.cli.run`` calls ``qrcheck.report.write_all_reports`` after
+:func:`run_suite` returns, and nothing here serialises a result.  **Evidence layout**: every check
+persists its own case evidence through :func:`qrcheck.checks.support.record_evidence`, which routes
+to the single store in :mod:`qrcheck.report.evidence`; this module creates that store, hands it to
+the check layer on the context, and records evidence itself only for the results **it** builds,
+because re-recording a check's result here would overwrite ``request.json`` with a body that lacks
+the ``out_of_contract`` marker and the resolved case parameters the check added.  **Adapter-error
+translation**: ``TargetRejected``, ``TargetContractError`` and ``TargetUnsupported`` become case
+outcomes inside the check layer (:func:`qrcheck.checks.support.case_status_for_error`), and the
+capability gate was already decided by ``qrcheck.registry.resolve``.  **Retries**: there is no
+retry, re-run, quarantine or ``xfail`` path here and there must never be one, because each check's
+declared adapter-invocation count is asserted against a single pass, so a retry would surface as
+that count plus one (AAP §0.4.3, §0.5.6).
 
-What this module deliberately does not own
-------------------------------------------
-* **Exit codes.** ``qrcheck.cli.exit`` is the only place a code is decided, from the
-  returned model's tallies.  Nothing here prints, calls ``sys.exit`` or maps a count.
-* **Reports.** ``qrcheck.cli.run`` calls ``qrcheck.report.write_all_reports`` after
-  :func:`run_suite` returns.  Nothing here serialises a result.
-* **Evidence layout.** Every check persists its own case evidence through
-  :func:`qrcheck.checks.support.record_evidence`, which routes to the single store in
-  :mod:`qrcheck.report.evidence`; this module creates that store, hands it to the check
-  layer on the context, and records evidence itself only for the results **it** builds.
-  Re-recording a check's result here would overwrite ``request.json`` with a body that
-  lacks the ``out_of_contract`` marker and the resolved case parameters the check added.
-* **Adapter-error translation.** ``TargetRejected``, ``TargetContractError`` and
-  ``TargetUnsupported`` become case outcomes inside the check layer
-  (:func:`qrcheck.checks.support.case_status_for_error`).  This module never repeats that
-  translation, and it re-implements no capability gate: ``qrcheck.registry.resolve``
-  decided runnability already.
-* **Retries.** There is no retry, re-run, quarantine or ``xfail`` path here, and there
-  must never be one: each check's declared adapter-invocation count is asserted against a
-  single pass, so a retry would surface as that count plus one (AAP §0.4.3, §0.5.6).
+This module raises **none** of the five adapter errors itself; that closed vocabulary belongs to
+:mod:`qrcheck.targets`.  It produces exactly four kinds of outcome.  :class:`RunPrerequisiteError`
+for a fault found before any case runs, after which the command ends with exit code 2 and writes no
+report, raised for exactly four conditions: the blocking primary decoder (``zxing-cpp``) is
+unusable, another pinned runtime dependency cannot be imported, the configured corpus file cannot be
+read or is malformed, or the ``--class`` filter leaves zero records -- the message always naming the
+offending dependency, path or glob.  An ``error`` result, created here and only here, either
+because an exception escaped a case's ``execute`` (contained, with its traceback, and the run
+continues: AAP §0.6.6 row 11) or because the target was lost.  A ``skipped`` result, built by
+:func:`qrcheck.registry.resolve.skip_case_results`, one per check the target's capabilities or the
+host's dependencies cannot serve, counted separately and never folded into ``passed``.  And a
+``passed`` or ``failed`` result, produced by a check and accumulated verbatim.
 
-Failure vocabulary
-------------------
-This module raises **none** of the five adapter errors itself; that closed vocabulary
-belongs to :mod:`qrcheck.targets`.  It produces exactly four kinds of outcome:
-
-* :class:`RunPrerequisiteError` -- a fault found before any case runs, so the command ends
-  with exit code 2 and writes no report.  Raised for exactly three conditions: the
-  blocking primary decoder (``zxing-cpp``) is absent, the configured corpus file cannot be
-  read or is malformed, and the ``--class`` filter leaves zero records.  The message always
-  names the offending dependency, path or glob.
-* an ``error`` result -- created here and only here.  Either an exception escaped a case's
-  ``execute`` (contained, with its traceback, and the run continues: AAP §0.6.6 row 11), or
-  the target was lost.  Both carry :class:`~qrcheck.report.model.Reason` values from the
-  model's closed vocabulary.
-* a ``skipped`` result -- built by :func:`qrcheck.registry.resolve.skip_case_results`, one
-  per check the target's capabilities or the host's dependencies cannot serve.  Counted
-  separately, never folded into ``passed``.
-* a ``passed`` or ``failed`` result -- produced by a check and accumulated verbatim.
-
-Target loss is a run-level condition, not a per-case one
---------------------------------------------------------
+Target loss is a run-level condition, not a per-case one:
 :class:`~qrcheck.targets.base.TargetUnavailable` and
-:class:`~qrcheck.targets.base.TargetTimeout` propagate out of a check unchanged, because
-only this layer can tell one dead target from one defective symbol.  On the first such
-error the check that met it receives exactly **one** ``error`` result filed under
-``synthetic:target``, its remaining cases are abandoned, and every later check that
-requires a capability of the target receives its own single ``synthetic:target`` error
-without the target being called again.  Checks that declare no capability requirement are
-target-independent (§0.3.4 marks ``PF-DECODE`` and ``CL-ARTIFACTS`` so), and they still
-run, so the report describes what was measurable rather than only what broke.
+:class:`~qrcheck.targets.base.TargetTimeout` propagate out of a check unchanged, because only this
+layer can tell one dead target from one defective symbol.  On the first such error the check that
+met it receives exactly **one** ``error`` result filed under ``synthetic:target``, its remaining
+cases are abandoned, and every later check that requires a capability of the target receives its
+own single ``synthetic:target`` error without the target being called again.  Checks that declare
+no capability requirement are target-independent (§0.3.4 marks ``PF-DECODE`` and ``CL-ARTIFACTS``
+so) and still run, so the report describes what was measurable rather than only what broke.
 
-Determinism
------------
-The walk order is check identifier then case identifier; the results are sorted by that
-pair before they leave; ``run_id`` is a content hash over the target name, the seed, the
-EC level, the selected check identifiers and a digest of the filtered corpus, so a
-``--class`` run has a different identity from a whole-corpus one.  Nothing here reads
-``hash()``, ``id()``, the environment, a locale, a set's iteration order or a filesystem
-listing, and the only wall-clock readings are the two run timestamps and the
-``time.perf_counter`` deltas that become ``duration_ms`` -- the fields AAP §0.5.4 excludes
-from every determinism comparison because the model requires them.
+Determinism: the walk order is check identifier then case identifier, and the results are sorted by
+that pair before they leave; ``run_id`` is a content hash over the target name, the seed, the EC
+level, the selected check identifiers and a digest of the filtered corpus, so a ``--class`` run has
+a different identity from a whole-corpus one.  Nothing here reads ``hash()``, ``id()``, the
+environment, a locale, a set's iteration order or a filesystem listing, and the only wall-clock
+readings are the two run timestamps and the ``time.perf_counter`` deltas that become
+``duration_ms`` -- the fields AAP §0.5.4 excludes from every determinism comparison because the
+model requires them.
 """
 
 from __future__ import annotations
@@ -104,6 +85,11 @@ from qrcheck.config.models import Config
 from qrcheck.corpus.builder import CorpusRecord
 from qrcheck.corpus.io import filter_by_class, load_corpus
 from qrcheck.decode import decoder_availability
+from qrcheck.dependencies import (
+    PRIMARY_DECODER_MODULE,
+    blocking_problem,
+    import_problem,
+)
 from qrcheck.loc import count_lines
 from qrcheck.registry.check import (
     DEPENDENCY_PRIMARY_DECODER,
@@ -155,11 +141,13 @@ class RunPrerequisiteError(Exception):
     """A run cannot start, so its command ends with exit code 2 and writes no report.
 
     The carrier for every fault this layer detects **before** the first case runs, and the
-    only exception :func:`run_suite` raises of its own.  Three conditions use it:
+    only exception :func:`run_suite` raises of its own.  Four conditions use it:
 
-    * the blocking primary decoder (``zxing-cpp``) is not installed -- every round-trip
+    * the blocking primary decoder (``zxing-cpp``) is not usable -- every round-trip
       assertion is decoded with it, so ``RT-ROUNDTRIP`` must never be silently skipped in
       its place (AAP §0.6.6 row 3, §0.7.2);
+    * another pinned runtime dependency cannot be imported -- a broken installation is an
+      environment error, exit 2 naming the distribution and ``requirements.lock`` (§0.7.2);
     * the configured corpus file cannot be read, or holds a line that is not a valid
       record (AAP §0.3.4 ``corpus_path``, §0.6.6 row 2);
     * the ``--class`` filters leave zero corpus records, so the run would describe an empty
@@ -215,8 +203,9 @@ def run_suite(
         exit 3.
 
     Raises:
-        RunPrerequisiteError: The primary decoder is absent, the corpus file cannot be read
-            or is malformed, or the ``--class`` filter leaves no record.
+        RunPrerequisiteError: The primary decoder is unusable, another pinned runtime
+            dependency cannot be imported, the corpus file cannot be read or is malformed, or
+            the ``--class`` filter leaves no record.
         SelectionError: The ``--checks`` selector matches no check (raised by
             :func:`qrcheck.registry.selection.select`), which is exit code 2 upstream.
         OSError: The report directory cannot take the evidence of a case this layer reports,
@@ -228,6 +217,9 @@ def run_suite(
     load_families()
     availability = _probe_availability(config)
     _require_primary_decoder(availability)
+    # Before the corpus is read and long before an evidence store or a report exists: a broken
+    # installation is an exit-2 environment error, not thirty fabricated generator defects.
+    _require_blocking_dependencies()
     corpus = _filtered_corpus(config, selection)
     # Bound before the walk so that a target lost, or a check that failed, cannot change the
     # identity of the run that reports it.
@@ -316,42 +308,79 @@ def _probe_availability(config: Config) -> dict[str, bool]:
 
 
 def _require_primary_decoder(availability: Mapping[str, bool]) -> None:
-    """Refuse the run when the blocking primary decoder is absent.
+    """Refuse the run when the blocking primary decoder is not usable.
 
     ``zxing-cpp`` is the authority for every round-trip assertion, so a run without it would
     either fail every decode-dependent check for the wrong reason or, worse, let the checks
     be skipped and the run look green.  It is therefore a pre-execution fault, decided before
     any case runs and before a report exists (AAP §0.6.6 row 3, §0.7.2).
 
+    Two states are refused, because :func:`qrcheck.decode.decoder_availability` locates the module
+    with ``importlib.util.find_spec`` and never imports it, and so cannot see the second: the
+    binding is absent, and the binding is present but fails to import.  Without the second check the
+    run would start, every decode would fail, and the secondary decoder would silently become the
+    authority that reports a conforming target as defective.  The load is confirmed through
+    :func:`qrcheck.dependencies.import_problem`, the probe ``qrcheck doctor`` uses.
+
     Args:
         availability: The probe result from :func:`_probe_availability`.
 
     Raises:
-        RunPrerequisiteError: The primary decoder was not found.  The message names
-            ``zxing-cpp``, the interpreter version and the platform tag.
+        RunPrerequisiteError: The primary decoder is absent or cannot be imported.  The message
+            names ``zxing-cpp``, the reason, the interpreter version and the platform tag.
     """
-    if availability.get(DEPENDENCY_PRIMARY_DECODER, False):
+    if not availability.get(DEPENDENCY_PRIMARY_DECODER, False):
+        problem: str | None = f"the {PRIMARY_DECODER_MODULE} module is not importable"
+    else:
+        problem = import_problem(PRIMARY_DECODER_MODULE)
+    if problem is None:
         return
-    raise RunPrerequisiteError(_primary_decoder_message())
+    raise RunPrerequisiteError(_primary_decoder_message(problem))
 
 
-def _primary_decoder_message() -> str:
-    """Return the blocking diagnostic for an absent primary decoder.
+def _require_blocking_dependencies() -> None:
+    """Refuse the run when any pinned runtime dependency cannot be imported.
 
-    It names the distribution a reader has to install, the interpreter and the platform tag
-    the wheel would have to match, and -- for the one platform zxing-cpp 2.2.0 does not
-    publish, Linux arm -- that the platform itself is the obstruction rather than a broken
-    installation (AAP §0.7.1, §0.7.2).
+    ``segno`` is the oracle and ``numpy``, ``Pillow``, ``httpx`` and ``click`` are imported at the
+    point of use, so an unusable one is a broken installation rather than a user's choice: it is
+    declared in ``requirements.lock``. AAP §0.7.2 makes that an exit-2 environment error naming the
+    distribution, decided before execution -- so before the corpus is read and before any evidence,
+    result or report can exist.
+
+    Raises:
+        RunPrerequisiteError: One of :data:`qrcheck.dependencies.CORE_DEPENDENCIES` is not installed
+            or its module does not import. The message is the probe's own diagnostic.
+    """
+    problem = blocking_problem()
+    if problem is None:
+        return
+    raise RunPrerequisiteError(problem.message)
+
+
+def _primary_decoder_message(detail: str | None = None) -> str:
+    """Return the blocking diagnostic for an unusable primary decoder.
+
+    It names the distribution a reader has to install, the reason it is unusable, the interpreter
+    and the platform tag the wheel would have to match, and -- for the one platform zxing-cpp 2.2.0
+    does not publish, Linux arm -- that the platform itself is the obstruction
+    (AAP §0.7.1, §0.7.2).
+
+    Args:
+        detail: Why the decoder is unusable, as the presence probe or the guarded import worded it.
+            ``None`` renders the absent-module wording.
 
     Returns:
         The one-line diagnostic ``qrcheck run`` prints on stderr before exiting 2.
     """
     interpreter = f"CPython {platform.python_version()}"
     tag = sysconfig.get_platform()
+    problem = (
+        f"the {PRIMARY_DECODER_MODULE} module is not importable" if detail is None else detail
+    )
     message = (
-        f"the primary reference decoder zxing-cpp is not installed for {interpreter} on "
-        f"{tag}; every round-trip assertion is decoded with it, so the run cannot start and "
-        f"RT-ROUNDTRIP is never silently skipped -- install zxing-cpp==2.2.0 from "
+        f"the primary reference decoder zxing-cpp cannot be used for {interpreter} on {tag} "
+        f"because {problem}; every round-trip assertion is decoded with it, so the run cannot "
+        f"start and RT-ROUNDTRIP is never silently skipped -- install zxing-cpp==2.2.0 from "
         f"requirements.lock"
     )
     return message + _platform_note(tag)

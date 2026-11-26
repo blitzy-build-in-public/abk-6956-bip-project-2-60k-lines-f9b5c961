@@ -1,31 +1,28 @@
 """The run-level target-loss policy: one error result per affected check, never per case.
 
-AAP §0.3.4 fixes what a consumer reports when a target is unreachable or times out -- "``error``
-result, ``case_id`` ``synthetic:target``, message naming the transport failure; one such result per
-affected check, not per corpus record" -- and §0.6.6 row 6 names this module as that gate. The
-defect it exists to prevent is quadratic noise: ``RT-ROUNDTRIP`` alone has one case per corpus
-record, so a policy applied per case would turn one dead target into two hundred and forty
-identical errors that inflate ``counts.error`` to a number no reader can attribute.
+AAP §0.3.4 fixes what a consumer reports when a target is unreachable or times out -- an
+``error`` result with ``case_id`` ``synthetic:target`` whose message names the transport
+failure, one such result per affected check rather than per corpus record -- and §0.6.6 row 6
+names this module as that gate. The defect it prevents is quadratic noise: ``RT-ROUNDTRIP``
+alone has one case per corpus record, so a per-case policy would turn one dead target into two
+hundred and forty identical errors. Five properties are pinned: **exactly one error per affected
+check**, counted from the selection's own capability requirements rather than typed; **the
+diagnostic names the cause**, the transport failure the adapter raised or the ``timeout_s`` the
+resolved configuration declares, read from :class:`~qrcheck.config.models.Config`; **the run
+continues**, the executed identifiers equal to the selected set, with ``CL-ARTIFACTS`` and
+``PF-DECODE`` still passing because they need no target, and ``--fail-fast`` stopping further
+checks while still returning a complete model; **the exit code becomes 3** through
+:func:`qrcheck.cli.exit.exit_code_for`, the single owner of that vocabulary; and
+**``TargetRejected`` keeps per-case granularity**, because a declared rejection answers one
+request rather than losing the target -- every case becomes its own ``target_rejected`` failure,
+``counts.error`` stays zero and the exit code is 1. Holding both policies here is what keeps a
+refactor from merging them.
 
-Five properties are pinned: **exactly one error per affected check**, asserted as a count computed
-from the selection's own capability requirements rather than typed; **the diagnostic names the
-cause** -- the transport failure the adapter raised, or the ``timeout_s`` the resolved
-configuration declares, read from :class:`~qrcheck.config.models.Config` rather than from a
-literal; **the run continues**, with the set of check identifiers present equal to the selected
-set, ``CL-ARTIFACTS`` and ``PF-DECODE`` still passing because they need no target, and
-``--fail-fast`` asserted as the one policy that stops launching further checks while still
-returning a complete model; **the exit code becomes 3** through
-:func:`qrcheck.cli.exit.exit_code_for`, the single owner of that vocabulary, whose precedence truth
-table is asserted beside it; and **``TargetRejected`` keeps per-case granularity**, because a
-declared rejection is a legitimate answer to one request rather than a lost target -- every corpus
-case becomes its own ``target_rejected`` failure, ``counts.error`` stays at zero and the exit code
-is 1. Asserting both policies in one module is what keeps a future refactor from merging them.
-
-Every run is driven by a protocol-conforming stub adapter and a stubbed decode seam, so no decoder
-version, no PNG bytes and no clock influence an assertion, and the performance sample counts and
-warm-up are lowered to their schema minima -- read from :data:`qrcheck.config.schema.SCHEMA`, never
-restated -- so ``PF-DECODE`` costs milliseconds instead of two hundred decodes of a
-five-hundred-pixel image. The module re-implements neither policy: ``qrcheck.runner`` owns them and
+Every run is driven by a protocol-conforming stub adapter and a stubbed decode seam, so no
+decoder version, PNG bytes or clock influences an assertion, and the performance sample counts
+and warm-up are lowered to their schema minima, read from :data:`qrcheck.config.schema.SCHEMA`
+and never restated, so ``PF-DECODE`` costs milliseconds instead of two hundred decodes of a
+five-hundred-pixel image. Neither policy is re-implemented: ``qrcheck.runner`` owns them and
 ``qrcheck.checks.support`` propagates ``TargetUnavailable`` and ``TargetTimeout`` upward on
 purpose, so a check that swallowed either would surface here as a missing error rather than as a
 passing case.

@@ -1,28 +1,27 @@
 """The process contract: one test per exit code, and the precedence between them.
 
-AAP §0.3.4 fixes four statuses and one order: ``0`` when the run completed with no ``failed`` and
-no ``error`` result, a ``skipped`` result never changing the outcome; ``1`` for at least one
+AAP §0.3.4 fixes four statuses and one order: ``0`` when the run completed with no ``failed``
+and no ``error`` result, a ``skipped`` result never changing the outcome; ``1`` for at least one
 ``failed`` and none errored; ``2`` for a configuration, selection, corpus-filter, corpus-file,
 primary-decoder or target-availability fault decided **before any check runs**, so no report is
-written and the diagnostic names the key, selector, filter, dependency or path to fix; ``3`` for an
-``error`` result, an unwritable ``report_dir`` or an unhandled framework exception. Precedence is
-``2`` before execution and, during and after a run, ``3`` outranks ``1`` which outranks ``0`` -- so
-exit code 2 never competes with a result, which is why :func:`qrcheck.cli.exit.exit_code_for`
-cannot return it and the tests below assert that property directly.
+written and the diagnostic names the key, selector, filter, dependency or path to fix; ``3`` for
+an ``error`` result, an unwritable ``report_dir`` or an unhandled framework exception.
+Precedence is ``2`` before execution and, during and after a run, ``3`` outranking ``1``
+outranking ``0``, so exit code 2 never competes with a result -- which is why
+:func:`qrcheck.cli.exit.exit_code_for` cannot return it and the tests below assert that property
+directly. Every expected status is an ``EXIT_*`` constant rather than a bare integer, because
+the vocabulary is decided in :mod:`qrcheck.cli.exit` alone, and the two properties the constants
+cannot express -- precedence, and "2 is decided before a run exists" -- are asserted as
+inequalities and as the absence of :data:`~qrcheck.cli.exit.EXIT_CONFIG` from the produced set.
 
-Every expected status is an ``EXIT_*`` constant, never a bare integer, because the vocabulary is
-decided in :mod:`qrcheck.cli.exit` alone. The two properties the constants cannot express --
-precedence, and "2 is decided before a run exists" -- are asserted as inequalities and as the
-absence of :data:`~qrcheck.cli.exit.EXIT_CONFIG` from the produced set.
-
-The command line is driven through the real click group (``invoke_cli``), so option parsing, the
-exit-code plumbing of ``qrcheck/cli/{main,run,doctor,corpus,loc}.py``, the runner, the evidence
-store and the three writers are the production objects; only the three boundaries that would
-otherwise need a real generator, a real image or a real defect are doubled -- the target factory
-table ``qrcheck/cli/run.py`` indexes, the decode layer through ``patch_decode``, and, in the two
+The command line is driven through the real click group, so option parsing, the exit-code
+plumbing of ``qrcheck/cli/{main,run,doctor,corpus,loc}.py``, the runner, the evidence store and
+the three writers are the production objects; only the three boundaries that would otherwise
+need a real generator, a real image or a real defect are doubled -- the target factory table
+``qrcheck/cli/run.py`` indexes, the decode layer through ``patch_decode``, and, in the two
 internal-error tests, one registered check's case generator, because "a case raised" is a state
-nothing in the product can be asked to raise on demand. A target lost *during* a run is
-``tests/unit/test_runner_target_loss.py``'s gate. Nothing is skipped, ``xfail``-ed or retried, no
+nothing in the product can be asked to raise on demand. A target lost *during* a run belongs to
+``tests/unit/test_runner_target_loss.py``. Nothing is skipped, ``xfail``-ed or retried, no
 threshold is restated, and every artefact stays under the test's ``tmp_path``.
 """
 
@@ -448,6 +447,33 @@ def test_main_returns_the_exit_code_as_an_integer(capsys: pytest.CaptureFixture[
     assert isinstance(code, int) and not isinstance(code, bool)
     assert code == EXIT_OK
     assert "RT-ROUNDTRIP" in capsys.readouterr().out
+
+
+def test_main_answers_three_when_the_dependency_probe_itself_raises(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A fault inside the import arm's probe cannot escape ``main``, which owes a code for it.
+
+    Nothing encloses ``main``, so a probe raising while a broken import was being diagnosed cost
+    the process its exit code: it died at 1 with a bare traceback.
+    """
+
+    def raise_probe_fault() -> None:
+        raise RuntimeError("the dependency probe itself failed")
+
+    def raise_import_error() -> None:
+        raise ImportError("a pinned dependency is hidden")
+
+    monkeypatch.setattr("qrcheck.dependencies.blocking_problem", raise_probe_fault)
+    entry = importlib.import_module("qrcheck.cli.main")  # the dotted form names the function
+    monkeypatch.setattr(entry, "_register_commands", raise_import_error)
+
+    code = main(["list"])
+
+    stderr = capsys.readouterr().err
+    assert code == EXIT_INTERNAL, "the probe's own fault cost main its exit code"
+    assert "internal error: RuntimeError: the dependency probe itself failed" in stderr
+    assert "Traceback" in stderr
 
 
 # --------------------------------------------------------------------------- #

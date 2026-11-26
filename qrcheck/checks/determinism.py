@@ -1,99 +1,56 @@
 """Determinism: one identical request, asked twice, must come back as one identical symbol.
 
-Plan item served (AAP §0.8.1, the component-to-check-family table and the case-matrix row
-for ``DT-DETERMINISTIC``, and §0.4.5, "defects observable only indirectly"): this module
-owns the product's only check of *reproducibility*. A symbol may be valid, in range and
-decodable in each of two calls and still be a different symbol, so the defect is invisible
-unless a pair of calls is compared -- which is exactly what this check does and the only
-thing it does.
+AAP §0.8.1's component-to-check-family table and case-matrix row for ``DT-DETERMINISTIC``, and
+§0.4.5's "defects observable only indirectly".  A symbol may be valid, in range and decodable in
+each of two calls and still be a different symbol, so the defect is invisible unless a pair of
+calls is compared -- which is the only thing this check does.
 
-No project rules exist for this product: the review-rules source returns no user rules and
-AAP §0.12 records the same, so the binding constraints are the AAP's own MUST/MUST NOT
-list, honoured here as if they were rules. Two of them shape this file: nothing under
-``qrcheck/checks/`` imports a concrete adapter (this module reaches the port's
-:class:`~qrcheck.targets.base.Capability` and its error vocabulary, and no adapter), and
-an adapter raises only the five declared error types, none of which this module converts
-into a different one.
+Two invocations of the **identical** request must agree on all three of the artefact's image
+bytes (``symbol_sha256`` per call), the sampled module matrix (``matrix_sha256``) and the mask
+read out of the symbol's 15-bit format information.  All three, because each catches something
+the others cannot: a byte comparison alone would pass a target whose writer is deterministic
+while the symbol it wrote was not, and would fail one whose writer embeds a chunk a symbol need
+not repeat; the mask is the one value an encoder chooses freely per call, which is what
+``non_deterministic_mask`` changes and a single symbol can never reveal; the matrix digest is the
+structural statement the format information corroborates semantically.
 
-What the check asserts
-----------------------
-Two invocations of the **identical** request must agree on all three of
+Reasons emitted, and nothing else: ``Reason.VALUE_MISMATCH`` when at least one component that
+*could* be measured differs between the two calls -- ``decoded["divergent"]`` names which and
+``decoded["comparison"]`` carries the per-component verdict, with both calls' full projections
+beside it -- and ``Reason.SAMPLING_FAILED`` when nothing diverged but at least one component
+could not be measured because the module grid could not be recovered, whose ``sampling`` entry
+carries the estimate's own reason; that case fails rather than passing on the components that
+were readable, because "identical" cannot be claimed over a component nobody read, and a proven
+divergence always wins over this reason.  ``TargetRejected``, ``TargetContractError`` and
+``TargetUnsupported`` go through :func:`qrcheck.checks.support.case_status_for_error`, the
+product's single translation, and ``TargetUnavailable``/``TargetTimeout`` propagate unchanged
+because the one-error-result-per-check target-loss policy belongs to :mod:`qrcheck.runner`.  No
+other reason is constructed here and no ``error`` result is ever built -- that status is the
+runner's alone.
 
-* the artefact's image bytes, compared as ``symbol_sha256`` per call;
-* the sampled module matrix, compared as :attr:`~qrcheck.decode.base.DecodeResult.matrix_sha256`;
-* the mask read out of the symbol's 15-bit format information,
-  :attr:`~qrcheck.decode.base.DecodeResult.mask`.
+Exactly two invocations per case, and never a third: six declared payloads asked for twice is
+**12 encodes and 12 decodes** per full run, which :data:`EXPECTED_ENCODES` declares and
+``tests/unit/test_checks_negative.py`` asserts against a counting stub (AAP §0.4.3, §0.5.6).  A
+third confirming call, a retry loop or a "re-ask until stable" would register as the declared
+count plus one and destroy the only property this check proves -- that the framework asks once
+and believes the answer.  The second call is never skipped because the first one looked wrong: a
+check that fails intermittently is a framework defect to fix, never one to suppress.
 
-All three, because each catches something the others cannot. A byte comparison alone
-would pass a target whose writer is deterministic while the symbol it wrote was not, and
-would fail a target whose writer embeds a chunk a symbol need not repeat. The mask is the
-one value an encoder chooses freely per call -- it is what
-:mod:`qrcheck.targets.defective`'s ``non_deterministic_mask`` injection changes, and a
-single symbol can never reveal it. The matrix digest is the structural statement the
-format information corroborates semantically.
+Request construction and validation (:func:`qrcheck.checks.support.build`, itself a delegation to
+the port's builder), the generation and decode path, the result vocabulary, the evidence layout
+and every threshold belong to other modules: this check asserts no duration, no size and no
+limit, so it reads no configuration at all.  The one artefact name it chooses is the second
+symbol, which reaches disk as ``symbol-repeat.png`` through ``repeat_symbol``.
 
-Reasons emitted, and nothing else
----------------------------------
-``Reason.VALUE_MISMATCH``
-    At least one component that *could* be measured differs between the two calls.
-    ``decoded["divergent"]`` names which; ``decoded["comparison"]`` carries the
-    per-component verdict, and both calls' full projections travel beside it, so evidence
-    says which of the three diverged rather than only that something did.
-``Reason.SAMPLING_FAILED``
-    Nothing diverged, but at least one component could not be measured: a call's matrix or
-    mask is absent because the module grid could not be recovered, and that call's
-    ``sampling`` entry carries the estimate's own reason. The case fails rather than
-    passing on the components that were readable, because "identical" cannot be claimed
-    over a component nobody read. A proven divergence always wins over this reason, so an
-    unmeasurable component never masks a real defect.
+Nothing here is random, so nothing derives a seed: the payloads are module constants, the case
+order is ascending by case identifier, and the run seed is recorded on each result only so a case
+can be replayed against the same run.  No clock value reaches an assertion -- the two calls'
+duration is recorded and that is all it is for -- and every digest is ``sha256``.
 
-``TargetRejected``, ``TargetContractError`` and ``TargetUnsupported`` go through
-:func:`qrcheck.checks.support.case_status_for_error`, the product's single translation, so
-this check reports for them exactly what every other check reports.
-``TargetUnavailable`` and ``TargetTimeout`` propagate unchanged: the
-one-error-result-per-check target-loss policy belongs to :mod:`qrcheck.runner`, which can
-only apply it if it is the layer that sees the failure. No other reason is constructed
-here, and no ``error`` result is ever built -- that status is the runner's alone.
-
-Exactly two invocations per case, and never a third
----------------------------------------------------
-Six declared payloads, each asked for twice: **12 encodes and 12 decodes** per full run,
-which :data:`EXPECTED_ENCODES` declares and ``tests/unit/test_checks_negative.py``
-asserts against a counting stub (AAP §0.4.3, §0.5.6). The multiple per case is **2**, and
-it is not negotiable: a third confirming call, a retry loop or a "re-ask until stable"
-would register as the declared count plus one, fail that test, and destroy the only
-property this check proves -- that the framework asks once and believes the answer. There
-is no retry, no re-run, no quarantine and no relaxed threshold anywhere in this module,
-and the second call is never skipped because the first one looked wrong: a QR check that
-fails intermittently is a framework defect to fix, never one to suppress.
-
-What this module must never own, and therefore never restates
--------------------------------------------------------------
-Request construction and validation (:func:`qrcheck.checks.support.build`, itself a
-delegation to the port's builder), the generation and decode path
-(:func:`~qrcheck.checks.support.generate` and :func:`~qrcheck.checks.support.decode`), the
-result vocabulary and the record shape (:mod:`qrcheck.report.model`), the evidence layout
-and its closed artefact set (:mod:`qrcheck.report.evidence` through
-:func:`qrcheck.checks.support.record_evidence`), and every threshold -- this check asserts
-no duration, no size and no limit, so it reads no configuration at all and carries no
-numeric tolerance. The one artefact name it is responsible for choosing is the second
-symbol, which reaches disk as ``symbol-repeat.png`` through ``repeat_symbol`` and exists
-for this check alone.
-
-Determinism and cost
---------------------
-Nothing here is random, so nothing here derives a seed: the payloads are module constants,
-the case order is ascending by case identifier, and the run seed is recorded on each result
-only so a case can be replayed against the same run. No clock value reaches an assertion --
-the two calls' duration is recorded, and that is all it is for. No ``hash()``, ``id()``,
-``random`` or wall-clock reading decides anything, and every digest is ``sha256``.
-
-Import cost is a contract this module keeps: it imports the standard library, the check
-registry, the result model and :mod:`qrcheck.checks.support`, and it does **not** import
-:mod:`qrcheck.decode` at run time -- that package loads ``numpy``, and ``qrcheck list``
-must not pay for a native image stack to print twenty-one check titles. The decode types
-are therefore imported for their annotations only, which is the convention
-:mod:`qrcheck.checks.support` already follows.
+It imports the standard library, the check registry, the result model and
+:mod:`qrcheck.checks.support`, and does **not** import :mod:`qrcheck.decode` at run time: that
+package loads ``numpy``, and ``qrcheck list`` must not pay for a native image stack to print
+twenty-one check titles, so the decode types are imported for their annotations only.
 """
 
 from __future__ import annotations

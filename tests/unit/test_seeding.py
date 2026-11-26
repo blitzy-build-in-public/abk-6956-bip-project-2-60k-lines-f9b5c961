@@ -1,19 +1,18 @@
 """Determinism proofs for ``qrcheck/config/seeding.py``, the only seed-derivation point.
 
-``derive_seed`` turns a run seed into the seed of one draw -- a corpus payload, an occluder
-placement, an additive-noise pattern, a logo bitmap -- and two properties make a run reproducible
-from the ``seed`` its report records: the derivation is a stated formula, recomputed here from
-:func:`hashlib.sha256` over the same ``"|"``-joined, UTF-8-encoded parts, so a change to it fails
-here instead of silently re-seeding every derived draw; and it reads no ambient process state,
-returning the same values under two different ``PYTHONHASHSEED`` values, while no module under
-``qrcheck/`` reaches for ``random``, ``hash()``, ``id()``, ``os.urandom`` or the wall clock.
+``derive_seed`` turns a run seed into the seed of one draw, and two properties make a run
+reproducible from the ``seed`` its report records: the derivation is a stated formula,
+recomputed here from :func:`hashlib.sha256` over the same ``"|"``-joined, UTF-8-encoded parts,
+so a change to it fails here instead of silently re-seeding every derived draw; and it reads no
+ambient process state, returning the same values under two different ``PYTHONHASHSEED`` values,
+while no module under ``qrcheck/`` reaches for ``random``, ``hash()``, ``id()``, ``os.urandom``
+or the wall clock. An integer part and its decimal string derive the same seed, because every
+part is stringified with ``str()``.
 
-Two properties of the definition are asserted rather than assumed: an integer part and its decimal
-string derive the same seed, because every part is stringified with ``str()`` inside the function;
-and the parts are joined without escaping, so ``("a", "b")`` and ``("a|b")`` collide -- a
-documented limitation rather than a defect, because the product's call sites pass identifiers
-(check IDs, ``corpus:<record-id>`` case IDs, class names, damage-kind tokens, ``"logo"``) that
-cannot contain ``"|"``, and escaping would change every derived seed and therefore every committed
+The parts are joined without escaping, so ``("a", "b")`` and ``("a|b")`` collide -- a documented
+limitation rather than a defect, because the call sites pass identifiers (check IDs,
+``corpus:<record-id>`` case IDs, class names, damage-kind tokens) that cannot contain ``"|"``,
+and escaping would change every derived seed and therefore every committed
 ``damage-<kind>-<seed>.png`` name. Every value lies in ``0 <= seed < 2**64``, the range
 ``numpy.random.PCG64`` accepts directly.
 """

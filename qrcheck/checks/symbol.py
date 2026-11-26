@@ -1,156 +1,56 @@
-"""SY-* checks: what the symbol itself says about its version, level and mask.
+"""The four ``SY-*`` checks: what the symbol itself says about version, level and mask.
 
-The four checks here assert what the *symbol* carries, never what the target claims about
-it.  ``SY-VERSION-MIN`` reads the version off the sampled module grid, ``SY-EC-MATCH``
-reads the error-correction level from two independent sources, ``SY-MASK`` reads the mask
-out of the 15-bit format information, and ``SY-MATRIX-EQUIV`` compares the whole sampled
-grid against the golden encoder at the one set of parameters where such a comparison is
-legitimate.  The target's own ``declared_version``, ``declared_ec`` and ``declared_mask``
-are evidence only and are never read by this module: a target that lies about its metadata
-is recorded as having lied rather than believed.
+``SY-VERSION-MIN`` reads the version off the sampled grid (``N = 4V + 17``) and compares it
+with the smallest version that holds the payload at the requested level -- an oracle minimum
+for an unpinned request, the pin when one is given.  ``SY-EC-MATCH`` requires the primary
+decoder's ``ec_level`` and the level decoded from the symbol's own format information to
+agree with each other and with the request.  ``SY-MASK`` requires the format information's
+mask to be legal, ``0..7``, and to equal a pinned mask.  ``SY-MATRIX-EQUIV`` compares the
+sampled grid module for module with the oracle at a pinned version, level and mask, and
+requires its dimension to be exactly ``4V + 17``.  AAP §0.8.1 fixes the case matrix: the
+three corpus-wide checks over all 240 records and eight synthetic pinned cases, 728 encodes
+and 728 primary decodes in total, one adapter call and one decode per case, which is the
+count :data:`EXPECTED_ENCODES` declares for the invocation-count gate.
 
-Family and case matrix (AAP §0.8.1)
------------------------------------
-===========================  =================================  =====  =======  =======
-Check                        Case source                          Cases  Encodes  Decodes
-===========================  =================================  =====  =======  =======
-``SY-VERSION-MIN``           all 240 corpus records                 240      240      240
-``SY-EC-MATCH``              all 240 corpus records                 240      240      240
-``SY-MASK``                  all 240 corpus records                 240      240      240
-``SY-MATRIX-EQUIV``          8 synthetic pinned cases                 8        8        8
-===========================  =================================  =====  =======  =======
+Reasons emitted: ``sampling_failed`` when no grid or format information could be recovered (an
+absent reading is a failure, never a pass), ``value_mismatch`` when a measurement contradicts
+the request, and ``format_info_disagreement`` when the two EC readings disagree with each
+other.  The target's ``declared_version``, ``declared_ec`` and ``declared_mask`` are evidence
+only and never reach a status: a target that lies about its metadata is recorded as having
+lied rather than believed.
 
-Every case invokes the adapter exactly once and decodes the artefact it returned exactly
-once -- 728 encodes and 728 primary decodes for the four checks together, which is the
-``encodes``/``decodes`` column of the plan's case matrix and the count
-:data:`EXPECTED_ENCODES` declares for the invocation-count gate.  No case retries, and
-nothing in this module calls the target a second time for the same case.
+The golden encoder is used strictly as an oracle (AAP §0.3.5): every call passes
+``boost_error=False``, because segno's default spends spare capacity on a higher level than
+the request names and would fail a conforming target (IM-2), and every call uses
+``segno.make_qr`` rather than ``segno.make``, which would return a Micro QR symbol with no
+``4V + 17`` dimension on exactly the short payloads a corpus is full of.  Nothing here asserts
+matrix equality, a mask or a version for an unpinned request, since mask selection is
+encoder-defined; no duration, which is ``PF-*``'s business; and no payload bytes, which
+``RT-ROUNDTRIP`` owns.
 
-What each check asserts, and the reasons it can emit
-----------------------------------------------------
-``SY-VERSION-MIN``
-    The version recovered from the sampled grid dimension (``N = 4V + 17``) equals the
-    smallest version that holds the payload at the requested level.  The oracle minimum
-    governs an unpinned request; a version pin replaces it, because a target that declares
-    the ``version_pin`` capability is expected to honour one.  Fails with
-    ``sampling_failed`` when no grid could be recovered and ``value_mismatch`` when the
-    version differs from the expectation.  This is the smallest-symbol assertion: a
-    generator that always emits Version 40 would pass ``RT-ROUNDTRIP`` and fail here.
-``SY-EC-MATCH``
-    Both independent readings of the error-correction level -- the primary decoder's
-    ``ec_level`` metadata and the level decoded from the symbol's own format information --
-    equal the requested level.  Fails with ``format_info_disagreement`` when the two
-    sources disagree with *each other*, with ``value_mismatch`` when they agree and differ
-    from the request, and with ``sampling_failed`` when either reading is absent (an
-    absent source is a failure, never a pass).
-``SY-MASK``
-    The mask read from the format information is a legal mask, and equals the pinned mask
-    when the request pinned one.  Fails with ``sampling_failed`` when the format
-    information could not be read and ``value_mismatch`` when the mask is outside ``0..7``
-    or contradicts a pin.
-``SY-MATRIX-EQUIV``
-    At a pinned version, error level and mask, the sampled grid equals the golden
-    encoder's matrix module for module, and its dimension is exactly ``4V + 17`` while
-    ``version_from_dimension`` reads back the pinned version.  Fails with
-    ``sampling_failed`` when no grid could be recovered and ``value_mismatch`` when the
-    dimension, the version read off it, or any module differs -- the first differing
-    ``(row, column)`` is recorded so a reader can see the defect.
+Against the ``defective`` target (AAP §0.4.2) three checks of this family fail --
+``SY-EC-MATCH``, ``SY-VERSION-MIN`` and ``SY-MATRIX-EQUIV`` -- and ``SY-MASK`` keeps passing,
+because D4 honours an explicit pin and an unpinned mask is legal whatever it is.  No assertion
+here is weakened, skipped, retried or relaxed to accommodate that target.
 
-The oracle discipline: two segno defaults would corrupt every expectation
------------------------------------------------------------------------
-The golden encoder is used strictly as an oracle, and both of its convenient defaults are
-disabled at every call site of this module:
+Imports: :mod:`qrcheck.checks.support`, the registry and result-model vocabulary, the
+decoded-evidence types, and from ``qrcheck.targets`` only :mod:`qrcheck.targets.base` -- no
+concrete adapter, decoder, image library, transport client or configuration reader, which
+``tests/unit/test_layering.py`` holds for every module under ``qrcheck/checks/``.  The only
+third-party import is ``segno``: grids are compared and hashed through
+:func:`~qrcheck.decode.matrix_sha256`, so no name from the array stack appears here.
 
-* ``boost_error`` defaults to ``True`` and spends spare capacity on a **higher** error
-  level without changing the version, so an oracle built with the default would expect a
-  level the target was never asked for and would fail a conforming target (AAP §0.3.5,
-  IM-2).  Every call passes ``boost_error=False``.
-* ``segno.make()`` returns a **Micro QR** symbol whenever the payload fits, and a Micro
-  symbol has no ``4V + 17`` dimension, no Version 1-40 number and a different
-  format-information layout, so every geometry assertion here would be wrong on exactly
-  the short payloads a corpus is full of.  This module therefore calls
-  ``segno.make_qr`` -- Model 2 by construction -- and never ``segno.make``.  The pinned
-  release (1.6.6) gives ``make_qr`` no ``micro`` argument to pass, so the discipline is
-  the function choice itself rather than a keyword.
+Determinism: nothing reads a clock, a random source, ``hash()``, ``id()`` or the filesystem;
+corpus cases arrive in record-``id`` order and the synthetic cases are sorted by ``case_id``
+before they are yielded, so the eight matrix cases are the same eight on every machine.
 
-Both rules are contract, not style: ``tests/unit/test_capacity_oracle.py`` holds the
-capacity tables this module's expectations rest on equal to ``segno.consts`` for Versions
-1-40, and the eight-case matrix set is what proves the render -> sample -> compare path
-end to end.
-
-What this module deliberately never asserts (AAP §0.3.5)
---------------------------------------------------------
-* Matrix equality, a specific mask, or a specific version for an **unpinned** request.
-  Mask selection is encoder-defined, so asserting a mask value for an unpinned request
-  produces false failures against a conforming target; the unpinned mask assertion is the
-  legal range ``0..7``, and matrix comparison happens only inside ``SY-MATRIX-EQUIV``,
-  where the request pins the version, the error level and the mask.
-* Anything the target declares about itself.  ``declared_*`` fields never reach a status.
-* Any duration.  ``duration_ms`` is recorded on every result and asserted by nothing here;
-  timing is ``PF-*``'s business alone.
-* Anything about the payload's bytes.  ``RT-ROUNDTRIP`` owns round-trip fidelity; a check
-  that also compared payloads here would report one defect twice and would blur which
-  assertion failed.
-
-Proving the checks can fail: the defective target
--------------------------------------------------
-``qrcheck/targets/defective.py`` injects five defects, and AAP §0.4.2 fixes exactly nine
-checks that must fail against it.  Three are in this family: ``SY-EC-MATCH`` (D1 encodes
-one level below the request), ``SY-VERSION-MIN`` (at a capacity boundary that downshift
-fits the same payload in a smaller version) and ``SY-MATRIX-EQUIV`` (a pinned level cannot
-produce the requested matrix).  ``SY-MASK`` must keep **passing**: D4 honours an explicit
-pin and still yields a legal mask for an unpinned request, so the mask assertion is
-satisfied.  No check here is weakened, skipped, retried or relaxed to accommodate that
-target, and no assertion was added that would make ``SY-MASK`` fail there: the injections
-and their expected failing set are acceptance criteria in their own right.
-
-No project rules exist for this product: the review-rules source returns no user rules and
-AAP §0.12 records the same, so the binding constraints are the AAP's MUST/MUST NOT list and
-this package's invariants, honoured here as if they were rules.
-
-Layering and import cost
-------------------------
-The check layer sees the port and nothing behind it.  This module imports
-:mod:`qrcheck.checks.support`, the registry's case and context types, the result model's
-vocabulary, the decoded-evidence package (:class:`~qrcheck.decode.DecodeResult`,
-:func:`~qrcheck.decode.matrix_sha256`, :data:`~qrcheck.decode.Matrix`), the module-count
-arithmetic that is the product's only version source, and from ``qrcheck.targets`` only
-:mod:`qrcheck.targets.base` -- the protocol, the capability vocabulary and the three adapter
-errors the per-case translation table names.  Nothing from the corpus is imported at run
-time: the builder's record type is named for the annotations alone, and the 240-record total
-is a declared case count, so no payload generator enters this module's import graph.
-**No concrete adapter is imported**, no decoder, no image library, no transport client and
-no configuration reader: ``tests/unit/test_layering.py`` holds that mechanically for every
-module under ``qrcheck/checks/``.
-
-Third-party imports are exactly ``segno``, used as the oracle only.  ``numpy`` is *not*
-imported here even though the sampled grid is a numpy array: grids are compared and hashed
-through :func:`~qrcheck.decode.matrix_sha256`, which normalises whatever it is given, so no
-name from the array stack appears in this module and no array arithmetic is written here.
-The decoded-evidence package this module imports does load numpy for the decoders; what is
-avoided is a dependency of this module's *logic* on it, not the load itself.  The corpus
-builder is likewise reached for a type only, never for its numpy-bearing payload generators.
-
-Determinism
------------
-Nothing here reads a clock, a random source, ``hash()``, ``id()`` or the filesystem, and
-nothing sorts by anything but a stable identifier: corpus cases are yielded in record-``id``
-order by :func:`qrcheck.checks.support.corpus_cases` and the synthetic cases are sorted by
-``case_id`` before they are yielded.  The mask and payload tables below are declared once,
-in a fixed order, so the eight matrix cases are the same eight on every machine.  Each
-result records the run seed, so a case is reproducible from ``summary.json`` alone.
-
-Evidence
---------
-Evidence is persisted only through :func:`qrcheck.checks.support.record_evidence`, with the
-artefact's bytes so ``symbol.png`` is captured for a failing case and, for the matrix set,
-the oracle's digest and the expected module count are added to ``request.json`` through
-``request_extra``.  ``decoded.json`` receives the whole
-:meth:`qrcheck.decode.DecodeResult.as_dict` projection -- ``per_decoder``, the polarity,
-the agreement, the EC-level pair, the version, the mask and ``matrix_sha256`` -- plus this
-family's measurements, which is the evidence table AAP §0.4.5 requires for the
-``wrong_ec_level`` defect: ``ec_level_decoder``, ``ec_level_format`` and
-``request_ec_level`` side by side.  This module writes no file itself.
+Evidence goes through :func:`qrcheck.checks.support.record_evidence` only, with the artefact's
+bytes so a failing case keeps ``symbol.png``; the matrix set adds the oracle digest and the
+expected module count to ``request.json`` through ``request_extra``, and ``decoded.json``
+receives the whole :meth:`qrcheck.decode.DecodeResult.as_dict` projection plus this family's
+measurements -- ``ec_level_decoder``, ``ec_level_format`` and ``request_ec_level`` side by
+side, the evidence AAP §0.4.5 requires for the ``wrong_ec_level`` defect.  No file is written
+here.
 """
 
 from __future__ import annotations

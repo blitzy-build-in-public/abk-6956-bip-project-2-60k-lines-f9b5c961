@@ -1,28 +1,26 @@
 """The corpus drift gate: rebuild from the committed seed and compare bytes, never rewrite.
 
-``corpus/default.jsonl`` is a committed repository file and the fixed input every corpus-driven case
-is built from, so AAP §0.5.4 promises it is **byte-identical** when regenerated from ``--seed``,
-and the §0.6.4 CI drift step re-runs exactly that regeneration, compares the fresh rendering with
-the committed bytes and fails on any difference *before* anything is replaced. This module is the
-executable form of that step: it drives the real command line, builds into ``tmp_path`` and compares
-**bytes**, so a change to a payload generator, to the class inventory or to the writer's canonical
-form fails here instead of silently redefining the baseline every check reads.
+``corpus/default.jsonl`` is a committed repository file and the fixed input every corpus-driven
+case is built from, so AAP §0.5.4 promises it is **byte-identical** when regenerated from
+``--seed``, and the §0.6.4 CI drift step re-runs exactly that regeneration, compares the fresh
+rendering with the committed bytes and fails on any difference *before* anything is replaced.
+This module is the executable form of that step: it drives the real command line, builds into
+``tmp_path`` and compares **bytes**, so a change to a payload generator, to the class inventory
+or to the writer's canonical form fails here instead of silently redefining the baseline every
+check reads. It asserts the drift gate itself; the committed file held to the canonical form of
+§0.5.3 and §0.5.4 -- UTF-8, LF endings, one trailing newline, sorted keys on every line, the
+240-record 14-class inventory of §0.8.2 with its 40-record boundary subset, one payload field
+per record and capacity arithmetic in every boundary record's ``notes``; the compare-then-fail
+ordering of ``corpus build``, which refuses a differing destination with exit 2 and leaves it
+untouched unless ``--force`` is given; the writer's canonical form in isolation; the seed
+reaching generation in both directions, since a builder that ignored its seed could not produce
+a different file; and the guard that nothing here writes the committed corpus, because a
+rewritten baseline would make the drift check compare a file against itself.
 
-What it asserts: the byte-for-byte drift gate itself; the committed file held to the canonical form
-of §0.5.3 and §0.5.4 -- UTF-8, LF endings, one trailing newline, sorted keys on every line, the
-240-record 14-class inventory of §0.8.2 with its 40-record boundary subset, exactly one payload
-field per record, and capacity arithmetic in every boundary record's ``notes``; the
-compare-then-fail ordering of ``corpus build``, which refuses a differing destination with exit 2
-and leaves it untouched unless ``--force`` is given; the writer's canonical form in isolation,
-through ``load_corpus`` then ``write_corpus``; the seed reaching generation in both directions,
-since a builder that ignored its seed could not produce a different file for a different seed; and
-the guard that nothing here writes the committed corpus, because a rewritten baseline would make the
-§0.6.4 drift check compare a file against itself.
-
-It registers no marker (it belongs to the fast unit job, because it only generates and compares
-text), skips nothing, retries nothing and monkeypatches nothing, and carries no threshold. The seed
-and the class inventory are the plan's own numbers, cited once below; every other value is read from
-the committed file.
+It registers no marker -- it belongs to the fast job, generating and comparing text only -- and
+skips nothing, retries nothing, monkeypatches nothing and carries no threshold. The seed and the
+class inventory are the plan's own numbers, cited once below; every other value is read from the
+committed file.
 """
 
 from __future__ import annotations
@@ -42,13 +40,10 @@ import pytest
 from qrcheck.corpus.builder import CorpusRecord
 from qrcheck.corpus.io import load_corpus, write_corpus
 
-# ---------------------------------------------------------------------------
-# The plan's numbers, written out once
-#
-# AAP §0.3.4 declares the configured default seed and §0.8.2 the corpus inventory. The seed
-# is also the value the §0.6.4 CI drift step rebuilds with, so the two must be the same
-# number: a test using a different seed than CI would disagree with CI about what drift means.
-# ---------------------------------------------------------------------------
+# The plan's numbers, written out once. AAP §0.3.4 declares the configured default seed and
+# §0.8.2 the corpus inventory, and the seed is also the value the §0.6.4 CI drift step
+# rebuilds with, so the two must be the same number: a test using a different seed would
+# disagree with CI about what drift means.
 
 #: The configured default seed (AAP §0.3.4): the seed the committed corpus was built from and the
 #: one the §0.6.4 CI drift step regenerates it with, so a test using another would disagree with CI
@@ -112,13 +107,10 @@ CAPACITY_ARITHMETIC: Final[re.Pattern[str]] = re.compile(
 _DIAGNOSTIC_BYTES: Final[int] = 40
 
 
-# ---------------------------------------------------------------------------
-# Byte comparison and canonical-line helpers
-#
-# A byte-identity assertion whose message says only "not equal" costs the next reader an hour,
-# so every comparison here reports the first differing offset, the line it falls on in each
-# rendering, both lengths and a window of context from each side.
-# ---------------------------------------------------------------------------
+# Byte comparison and canonical-line helpers. A byte-identity assertion whose message says only
+# "not equal" costs the next reader an hour, so every comparison here reports the first
+# differing offset, the line it falls on in each rendering, both lengths and a window of context
+# from each side.
 
 
 def _line_number(data: bytes, offset: int) -> int:
@@ -177,13 +169,9 @@ def _canonical_record(line: str, number: int) -> dict[str, Any]:
     return dict(pairs)
 
 
-# ---------------------------------------------------------------------------
-# Fixtures
-#
-# Every path a test writes to is under ``tmp_path``, and the configuration is generated by the
-# integration layer's writer, so it carries the declared default for everything this module
-# does not choose and no value is restated here.
-# ---------------------------------------------------------------------------
+# Fixtures. Every path a test writes to is under ``tmp_path``, and the configuration is
+# generated by the integration layer's writer, so it carries the declared default for everything
+# this module does not choose and no value is restated here.
 
 
 @pytest.fixture(scope="module")

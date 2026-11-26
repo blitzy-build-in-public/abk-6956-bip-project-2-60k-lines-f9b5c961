@@ -1,44 +1,33 @@
 """One failure ID, one definition: sanitized, bounded and safe as a path segment.
 
 ``qrcheck.report.model.failure_id`` is the product's only derivation of the name a failure is filed
-under, and ``qrcheck.evidence.naming`` calls it instead of re-deriving it, so the identifier
-``summary.json`` records and the last segment of an evidence directory cannot disagree (AAP §0.8.1
-"single owner of each cross-cutting concern", §0.3.4 "Stable identifiers"). Four properties are
-pinned, and each one is load-bearing:
+under and ``qrcheck.evidence.naming`` calls it rather than re-deriving it, so the identifier in
+``summary.json`` and the last segment of an evidence directory cannot disagree (AAP §0.8.1 "single
+owner of each cross-cutting concern", §0.3.4 "Stable identifiers"). The pinned properties:
 
-* **it is a stated formula.** ``<CHECK-ID>__<case_id>__<reason>``, every character outside
-  ``[A-Za-z0-9._-]`` replaced by ``_``, and -- when that text exceeds the bound -- a retained
-  prefix followed by an 8-hex SHA-256 digest. The formula is recomputed in
-  :func:`reference_failure_id` from the plan's own words rather than transcribed from a run, so a
-  change to it fails here instead of silently renaming every evidence directory and every CI trend
-  line;
-* **it is one path segment.** The sanitization is a security control, not a formatting nicety (AAP
-  §0.3.2 security architecture, IM-7): a hostile ``case_id`` such as ``"../../etc/passwd"`` must
-  still land inside the report directory, asserted by resolution rather than by inspecting
-  characters;
-* **it is bounded.** The identifier becomes a directory name, so its whole length -- prefix and
-  digest together, not the prefix alone -- stays within ``qrcheck.report.model.FAILURE_ID_MAX``;
-* **it is a pure function of its three inputs**, stable across processes and ``PYTHONHASHSEED``
+* **a stated formula** -- ``<CHECK-ID>__<case_id>__<reason>`` with every character outside
+  ``[A-Za-z0-9._-]`` replaced by ``_`` and, past the bound, a retained prefix plus an 8-hex SHA-256
+  digest, recomputed in :func:`reference_failure_id` from the plan's words rather than transcribed
+  from a run, so a change fails here instead of renaming every evidence directory and CI trend line;
+* **one path segment** -- sanitization is the security control of AAP §0.3.2 and IM-7: a hostile
+  ``case_id`` such as ``"../../etc/passwd"`` must still resolve inside the report directory;
+* **bounded** -- prefix and digest together stay within ``qrcheck.report.model.FAILURE_ID_MAX``;
+* **pure** -- a function of its three inputs alone, stable across processes and ``PYTHONHASHSEED``
   values, because the directories it names are promised to be byte-stable (AAP §0.5.4).
 
-Two behaviours of :func:`qrcheck.evidence.naming.sanitize` are asserted rather than assumed,
-because they decide whether a component is usable at all: it refuses an empty component and the two
-components that are still dangerous after the character rule (``.`` and ``..``), and it replaces
-one ``_`` per *code point*, so a two-byte ``ü`` and a four-byte emoji each cost one character and
-``MAX_COMPONENT_LENGTH`` counts characters rather than bytes.
+:func:`qrcheck.evidence.naming.sanitize` decides whether a component is usable at all, so its two
+hard behaviours are asserted: it refuses an empty component and the two still dangerous after the
+character rule (``.`` and ``..``), and it replaces one ``_`` per code point, so a two-byte ``ü``
+and a four-byte emoji each cost one character under ``MAX_COMPONENT_LENGTH``.
 
-No threshold from ``qrcheck.toml`` is read here, nothing is skipped, retried or marked, every
-collection is iterated in sorted order, and the only process this module starts is one short child
-interpreter printing identifiers under a chosen ``PYTHONHASHSEED``.
-
-``CaseResult`` and ``RunResult`` themselves are pinned here too, because the identifier above is
-derived from the very fields they validate: both subjects are ``qrcheck/report/model.py``, and
-``tests/unit/`` is the plan's closed 21-module inventory (AAP §0.9.1, §0.11.1). A ``duration_ms``
-is finite and non-negative (``nan`` and ``inf`` are not tokens RFC 8259 defines), ``request``,
-``decoded`` and ``expected`` are Mappings, a string ``decoded[TRACEBACK_KEY]`` has its absolute
-paths folded into a portable form, ``evidence_dir`` is a non-empty relative posix path, a
-``RunResult`` finishes at or after it starts, and one row stands per ``(check_id, case_id)`` pair;
-every rejected record is paired with the record the same construction accepts.
+``CaseResult`` and ``RunResult`` are pinned here too, because the identifier derives from the fields
+they validate: a finite non-negative ``duration_ms`` (``nan`` and ``inf`` are not RFC 8259 tokens),
+Mapping ``request``/``decoded``/``expected``, a ``decoded`` traceback folded to portable paths, a
+non-empty relative posix ``evidence_dir``, a ``RunResult`` finishing at or after it starts, one row
+per ``(check_id, case_id)``, and every rejected record paired with an accepted one. Nothing here
+reads a ``qrcheck.toml`` threshold, skips, retries or marks a case, or iterates an unordered
+collection, and the only process started is one short child interpreter printing identifiers under a
+chosen ``PYTHONHASHSEED``.
 """
 
 import ast

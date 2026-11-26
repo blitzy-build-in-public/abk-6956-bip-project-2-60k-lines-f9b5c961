@@ -1,41 +1,21 @@
 """The consensus contract: two decoders, one authority, and silence that is not a defect.
 
-``qrcheck.decode.consensus`` is the only place that decides what a symbol decoded to, so its rules
-are the product's rather than its own (AAP §0.3.2, "consensus rules (these are contract, not
-implementation detail)"). Each rule is pinned here with stubbed decoders -- no real decoder runs,
-no network is touched, and the only image is a three-pixel PNG built here so the pipeline has
-genuine bytes to open:
+``qrcheck.decode.consensus`` is the only place that decides what a symbol decoded to, so its
+rules are the product's rather than its own (AAP §0.3.2, "consensus rules"). Each is pinned
+with stubbed decoders and a three-pixel PNG built here: disagreement needs two differing
+payloads and keeps both in ``per_decoder``; the primary's ``payload_bytes`` is never replaced by
+the secondary's; silence is never a disagreement (IM-3); an EC-versus-format-information
+conflict keeps its own ``format_info_disagreement``; inversion is the framework's second pass
+(IM-4), whose call counters also prove an ordinary request gets none; ``per_decoder`` order is
+lexicographic; and a payload that is not UTF-8 round-trippable is ``primary_only`` with
+``secondary_comparable`` ``false``, which keeps the forty ``random-bytes`` records from failing
+the reference gate.
 
-* ``disagree`` requires two payloads that differ, and both payloads and both metadata blocks stay
-  in ``per_decoder`` so evidence can show them side by side;
-* ``payload_bytes`` is the primary decoder's payload and a differing secondary payload never
-  replaces it, so a symbol only the secondary could read is ``secondary_only`` with
-  ``payload_bytes`` left ``None`` and ``RT-ROUNDTRIP`` still fails;
-* silence is never a disagreement (IM-3): a decoder that returns no payload is ``undetected``, and
-  each silence case asserts ``!= "disagree"`` explicitly rather than inferring it;
-* the decoder's EC level and the symbol's own format information are never reconciled -- a
-  disagreement between them is ``format_info_disagreement``, and collapsing one into the other here
-  would delete that finding;
-* inversion is the framework's job (IM-4): an inverted request is decoded twice with both decoders,
-  and the call counters below are what make "no second pass for an ordinary request" testable,
-  because an implementation that always inverted would satisfy every payload assertion while
-  doubling the decode cost of a whole run;
-* ``per_decoder`` order is lexicographic, in ``as_dict()`` too, so the evidence bytes never depend
-  on the order the decoders happened to be called;
-* a payload that does not round-trip through UTF-8 is ``primary_only`` with ``secondary_comparable``
-  ``false``, which is what keeps the forty ``random-bytes`` records from failing the conforming
-  reference gate, while a plain ASCII disagreement stays a disagreement with it ``true`` -- and a
-  secondary decoder that said nothing records ``null``, so the evidence separates a secondary answer
-  that could not be compared from one that never existed.
-
-:func:`_install_decoders` monkeypatches the consensus module's ``read_primary`` and
-``read_secondary`` with stubs that answer from a polarity-keyed table and build their outcomes
-through the ``make_decoder_outcome`` fixture, so every field name comes from
-:mod:`qrcheck.decode.base` rather than being re-typed here. The check-level cases drive the two
-real checks, ``RT-ROUNDTRIP`` and ``SY-EC-MATCH``, through the shared ``run_context`` fixture with
-only the decode entry stubbed. Real-symbol decoding belongs to
-``tests/unit/test_matrix_sampling.py`` and ``tests/unit/test_format_info.py``; nothing here reads a
-configuration value.
+:func:`_install_decoders` replaces ``read_primary`` and ``read_secondary`` with polarity-keyed
+stubs built through ``make_decoder_outcome``, so every field name comes from
+:mod:`qrcheck.decode.base`; the check-level cases drive ``RT-ROUNDTRIP`` and ``SY-EC-MATCH``
+through ``run_context`` with only the decode entry stubbed, real-symbol decoding belonging to
+``test_matrix_sampling.py`` and ``test_format_info.py``.
 """
 
 from __future__ import annotations
@@ -89,13 +69,9 @@ __all__ = [
     "test_sym_ec_match_fails_with_format_info_disagreement_and_keeps_both_values",
 ]
 
-# ---------------------------------------------------------------------------
-# Fixed inputs
-#
-# A request parameter and not a configuration threshold: no value in this module is read from
-# ``qrcheck.toml``, and none of the numeric budgets the plan declares -- the p95 ceilings, the
-# throughput floor, the line limit or the damage budgets -- is restated here.
-# ---------------------------------------------------------------------------
+# Fixed inputs: a request parameter and not a configuration threshold. No value in this module
+# is read from ``qrcheck.toml``, and none of the numeric budgets the plan declares -- the p95
+# ceilings, the throughput floor, the line limit or the damage budgets -- is restated here.
 
 #: The error-correction level every request in this module asks for. ``M`` is the level
 #: ``run_context`` defaults the checks to, so a check-level case and a consensus-level case

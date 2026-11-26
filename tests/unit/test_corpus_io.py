@@ -1,26 +1,23 @@
 """Contract test: the corpus's record schema, canonical wire form, inventory and predicates.
 
 ``corpus/default.jsonl`` is a committed repository file and the fixed input every corpus-driven
-check case is built from, so three promises rest on it (AAP §0.8.2, §0.5.3, §0.4.2). The wire
-form is canonical -- one JSON object per line, keys sorted at every depth, ``ensure_ascii=False`` so
-the ``emoji``, ``rtl`` and ``utf8-multibyte`` payloads stay literal UTF-8 instead of ``\\uXXXX``
-escapes, LF line endings and exactly one trailing newline -- which is what makes a regenerated
-corpus byte-comparable with the committed one in ``tests/integration/test_corpus_determinism.py``.
-The inventory is the plan's: ``builder.CLASS_COUNTS`` against the AAP §0.8.2 table, the 240-record
-total and the 40-record boundary subset success criterion 2 runs at EC L, Q and H through ``--class
-'boundary-*'``. And the discriminating predicates hold: the ``truncated_payload`` and
+case is built from, so three promises rest on it (AAP §0.8.2, §0.5.3, §0.4.2): the wire form
+is canonical -- one JSON object per line, keys sorted at every depth, non-ASCII payloads written
+literally rather than as escape sequences, LF endings and exactly one trailing newline -- which
+makes a regenerated corpus byte-comparable with the committed one
+(``tests/integration/test_corpus_determinism.py``); the inventory is the plan's, with
+``builder.CLASS_COUNTS`` against the §0.8.2 table, the 240-record total and the 40-record
+boundary subset; and the discriminating predicates hold, since the ``truncated_payload`` and
 ``wrong_ec_level`` injections are observable only through a payload longer than the 64-byte
-truncation window and a boundary payload whose minimal version differs between EC L and M, so
-without those witnesses the injections would be silently inert while every count assertion still
-passed.
+truncation window and a boundary payload whose minimal version differs between EC L and M,
+without which witnesses they would be silently inert while every count assertion still passed.
 
-Two properties no single-record assertion would catch are asserted as well: ``build_corpus`` runs
-twice with one seed and the results compare equal, because a builder that iterated a ``set`` or
-seeded from ``hash()`` would differ across machines while satisfying every count and schema
-assertion here; and the filter is asked for a class name in the wrong case and for a glob that
-matches nothing, because "no records selected" is the runner's exit-2 condition and this layer must
-report the fact rather than raise it. Nothing here reads a product threshold, opens a socket,
-spawns a process or reads the clock.
+Two properties no single-record assertion would catch are asserted too: ``build_corpus`` run
+twice with one seed compares equal, because a builder iterating a ``set`` or seeding from
+``hash()`` would differ across machines; and the filter is asked for a mis-cased class name and
+for a glob that matches nothing, because "no records selected" is the runner's exit-2 condition
+that this layer must report rather than raise. Nothing here reads a product threshold, opens a
+socket, spawns a process or reads the clock.
 """
 
 from __future__ import annotations
@@ -38,16 +35,11 @@ from qrcheck.corpus import builder, capacity, payloads
 from qrcheck.corpus.builder import CorpusRecord, build_corpus
 from qrcheck.corpus.io import filter_by_class, load_corpus, write_corpus
 
-# ---------------------------------------------------------------------------
-# The plan's inventory, written out once
-#
-# AAP §0.8.2 fixes the corpus inventory: 240 records over 14 classes, of which the three
-# ``boundary-*`` classes are the 40-record subset success criterion 2 runs at EC L, Q and H.
-# This is the one place in the module where a count literal is legitimate -- the plan states
-# the numbers and ``builder.CLASS_COUNTS`` is the source that must match them -- so the table
-# appears here once, with its citation, and every other assertion reads either it or the
-# builder. Anything else in this module is derived, never retyped.
-# ---------------------------------------------------------------------------
+# The plan's inventory, written out once: AAP §0.8.2 fixes 240 records over 14 classes, of
+# which the three ``boundary-*`` classes are the 40-record subset success criterion 2 runs at EC
+# L, Q and H. This is the one place a count literal is legitimate -- the plan states the numbers
+# and ``builder.CLASS_COUNTS`` must match them -- so every other assertion reads this table or
+# the builder.
 
 PLAN_CLASS_COUNTS: Final[dict[str, int]] = {
     "boundary-alphanumeric": 12,
@@ -482,13 +474,10 @@ def test_filter_matching_is_case_sensitive(records: list[CorpusRecord]) -> None:
     assert filter_by_class(records, ("ur*",)) == filter_by_class(records, ("url",))
 
 
-# ---------------------------------------------------------------------------
-# The six MD-CHARSET coverages (AAP §0.8.2 mapping)
-#
-# Each coverage is a predicate over the payload's own decoded bytes, not a class-name lookup:
-# the point is that the corpus carries a payload that really holds the thing the check
-# exercises, so a class that stopped emitting it would fail here.
-# ---------------------------------------------------------------------------
+# The six MD-CHARSET coverages (AAP §0.8.2 mapping). Each coverage is a predicate over the
+# payload's own decoded bytes rather than a class-name lookup: the point is that the corpus
+# carries a payload that really holds the thing the check exercises, so a class that stopped
+# emitting it would fail here.
 
 # The code-point boundaries the coverage predicates read, as half-open intervals. The emoji
 # interval is the range ``qrcheck/corpus/payloads.py`` draws from, whose every member encodes

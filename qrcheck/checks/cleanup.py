@@ -1,82 +1,61 @@
 """``CL-ARTIFACTS``: the run leaves no temporary file and no open handle behind.
 
-Plan item served (AAP §0.8.1, the ``checks/cleanup.py`` -> ``CL-ARTIFACTS`` line and the
-"``CL-ARTIFACTS``'s observation" paragraph): one synthetic case, ``synthetic:cleanup``, that
-observes the framework's own footprint instead of anything a target produced.  AAP §0.8.1
-defines the observation rather than leaving it to this module, and it has two halves:
+AAP §0.8.1's ``checks/cleanup.py`` -> ``CL-ARTIFACTS`` line and the "``CL-ARTIFACTS``'s
+observation" paragraph: one synthetic case, ``synthetic:cleanup``, that observes the framework's
+own footprint instead of anything a target produced.  The observation has two halves.  The
+**temporary-file half** snapshots :func:`tempfile.gettempdir` while this check's cases are
+enumerated and compares it as a set of *names* against a second snapshot taken when the case
+executes: every framework-owned temporary path is created under the product prefix
+:data:`TEMP_PREFIX` -- the subprocess adapter's scratch directory
+(``tempfile.mkdtemp(prefix="qrcheck-")`` in :mod:`qrcheck.targets.cli`) and the logo overlay
+bitmap -- and each is removed in a ``finally``, so an entry that survives its case is exactly what
+AAP §0.8.1 calls "no user-visible temporary files remain".  The **handle half** resolves every
+entry of :func:`fd_directory` (``/proc/self/fd`` on Linux, ``/dev/fd`` on macOS) and compares it
+against ``report_dir``: an entry that resolves under the report root is a file handle the framework
+opened and did not close, and the images :func:`qrcheck.evidence.mux.open_image` registers for the
+life of its context are asserted empty through the accessor that module exposes
+(:func:`mux.open_images`), so an unclosed image is reported here rather than merely documented as
+unobservable.
 
-* **temporary-file half** -- a snapshot of :func:`tempfile.gettempdir` taken while this check's
-  cases are enumerated, compared as a set of *names* against a second snapshot taken when the
-  case executes.  Every framework-owned temporary path is created under the product prefix
-  :data:`TEMP_PREFIX` -- the subprocess adapter's scratch directory
-  (``tempfile.mkdtemp(prefix="qrcheck-")`` in :mod:`qrcheck.targets.cli`) and the logo overlay
-  bitmap -- and each is removed in a ``finally``, so an entry that survives its case is exactly
-  what AAP §0.8.1 calls "no user-visible temporary files remain".
-* **handle half** -- every entry of :func:`fd_directory` (``/proc/self/fd`` on Linux,
-  ``/dev/fd`` on macOS) resolved and compared against ``report_dir``: an entry that resolves
-  under the report root is a file handle the framework opened and did not close.  The images
-  :func:`qrcheck.evidence.mux.open_image` registers for the life of its context are asserted
-  empty as well, through the accessor that module does expose (:func:`mux.open_images`), so an
-  unclosed image is reported here rather than merely documented as unobservable.
+Zero adapter invocations: :data:`EXPECTED_ENCODES` declares ``0``, and the check never calls the
+target, declares no capability requirement and no dependency token.  Together with ``DM-SEEDED``
+and ``PF-DECODE`` it is one of the three checks that invoke no adapter, which is what lets a run
+whose target is unreachable still report it as passing while every target-dependent check reports
+its single error (AAP §0.6.6 row 6, ``tests/unit/test_runner_target_loss.py``).  A dependency token
+is deliberately absent: a token can only turn a check into one ``missing_dependency`` skip for the
+whole run, whereas this check reports its handle half per case as ``unsupported_platform`` while
+its temporary-file half still asserts (AAP §0.8.1).
 
-No project rules exist for this product: the review-rules source returns no user rules and AAP
-§0.12 records the same, so the binding constraints here are the AAP's own MUST/MUST NOT list.
-Three of them shape this file: nothing under ``qrcheck/checks/`` imports a concrete adapter
-(this module imports no adapter at all, not even the port), no check is weakened, skipped or
-retried to make a target pass, and every registered check is reachable both from
-``qrcheck list`` and from a real run.
+The ordering limitation, stated rather than papered over: AAP §0.8.1 describes the snapshot as
+"before and after the run", but a check cannot see the end of a run from inside its own case, since
+checks execute in ascending check-ID order (AAP §0.5.3) and ``CL-ARTIFACTS`` sorts first of the
+twenty-one, so its case runs *before* every other check.  What it therefore observes is the window
+from its own enumeration to its own execution, plus whatever handles happen to be open at that
+moment.  Two consequences are accepted: the temporary-file half proves that start-up
+(configuration load, target resolution, corpus load) and the window up to its own execution left
+nothing behind and can say nothing about checks that have not run yet; and the handle half sees the
+handles open at execution time, which is the moment the framework is holding its configuration,
+corpus and target -- a live handle under ``report_dir`` then is still a defect, because nothing has
+written there yet.  There is no end-of-run hook and no second observation point in another module,
+since a faked one would put a result in the report that no case produced; the run-level end-state
+assertion belongs to the end-to-end test module that drives a whole run and then inspects
+``report_dir``, which is where the "after the run" half of AAP §0.8.1 lives.
 
-Zero adapter invocations
-------------------------
-:data:`EXPECTED_ENCODES` declares ``0``.  The check never calls the target, declares no
-capability requirement and no dependency token.  Together with ``DM-SEEDED`` and ``PF-DECODE``
-it is one of the three checks that invoke no adapter, which is what lets a run whose target is
-unreachable still report it as passing, while every target-dependent check reports its single
-error (AAP §0.6.6 row 6, ``tests/unit/test_runner_target_loss.py``).  A dependency token is
-deliberately absent: a token can only turn a check into one ``missing_dependency`` skip for the
-whole run, whereas this check reports its handle half per case as ``unsupported_platform``
-while its temporary-file half still asserts (AAP §0.8.1).
+Reasons emitted: ``value_mismatch`` for the single ``failed`` verdict, carrying the leaked names,
+the fd paths that resolved under ``report_dir`` and the open images in ``decoded``; and
+``unsupported_platform`` for the single ``skipped`` verdict, emitted only when
+:func:`fd_directory` finds neither platform directory (or cannot list the one it found) *and*
+nothing leaked, so the temporary-file half still asserted.  ``counts.skipped`` is its own integer
+and a skip never counts as a pass.
 
-The ordering limitation, stated rather than papered over
---------------------------------------------------------
-AAP §0.8.1 describes the snapshot as "before and after the run".  A check cannot see the end of
-a run from inside its own case: checks execute in ascending check-ID order (AAP §0.5.3) and
-``CL-ARTIFACTS`` sorts first of the twenty-one, so its case runs *before* every other check.
-What it therefore observes is the window from its own enumeration to its own execution, plus
-whatever handles happen to be open at that moment.  Two consequences are accepted:
-
-* the temporary-file half proves that start-up (configuration load, target resolution, corpus
-  load) and the window up to its own execution left nothing behind; it can say nothing about
-  checks that have not run yet;
-* the handle half sees the handles open at execution time, which is the moment the framework is
-  holding its configuration, corpus and target -- a live handle under ``report_dir`` then is
-  still a defect, because nothing has written there yet.
-
-There is no end-of-run hook and no second observation point in another module: a faked one would
-put a result in the report that no case produced.  The run-level end-state assertion belongs to
-the end-to-end test module that drives a whole run and then inspects ``report_dir``, which is
-where the "after the run" half of AAP §0.8.1 lives.
-
-Reasons emitted
----------------
-* ``value_mismatch`` -- the single ``failed`` verdict, carrying the leaked names, the fd paths
-  that resolved under ``report_dir`` and the open images in ``decoded``;
-* ``unsupported_platform`` -- the single ``skipped`` verdict, emitted only when
-  :func:`fd_directory` finds neither platform directory (or cannot list the one it found) *and*
-  nothing leaked, so the temporary-file half still asserted.  ``counts.skipped`` is its own
-  integer and a skip never counts as a pass.
-
-What this file must never do
-----------------------------
 It observes; it never cleans.  No file or directory is created, deleted or modified, no entry is
 opened or stat'd, and no temporary path is joined onto anything: the temporary half is one
 ``os.listdir`` and set membership over the names it returned.  No clock is read, so
 ``duration_ms`` stays at the factory's zero instead of recording a wall-clock value no assertion
-may use (AAP §0.5.5).  Nothing here calls ``hash()``, ``id()`` or ``random``: every list it
-records is sorted.  There is no bare ``except``, no ``except Exception``, no retry and no
-threshold literal: an fd entry that cannot be resolved is skipped, and an fd directory that
-cannot be listed downgrades the handle half to unsupported rather than failing the run on the
-host's behaviour.
+may use (AAP §0.5.5).  Nothing here calls ``hash()``, ``id()`` or ``random``, and every list it
+records is sorted.  There is no bare or broad ``except``, no retry and no threshold literal: an fd
+entry that cannot be resolved is skipped, and an fd directory that cannot be listed downgrades the
+handle half to unsupported rather than failing the run on the host's behaviour.
 """
 
 from __future__ import annotations

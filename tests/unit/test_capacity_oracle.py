@@ -1,23 +1,22 @@
 """Contract test: the corpus capacity tables are provably segno's own tables.
 
 ``qrcheck/corpus/capacity.py`` derives every boundary payload length in the corpus, so one
-transcription slip there would silently mis-size every boundary record and every capacity assertion
-built on it (IM-6). This module compares the embedded tables with ``segno.consts`` row for row and
-ties the arithmetic to segno's real acceptance boundary by encoding the largest legal payload of
-each mode at sampled versions, asserting segno accepts it and rejects one character more.
-
-:func:`_encode` is the single call site that neutralises the two segno defaults which would make
-the comparison meaningless: ``boost_error=False``, because the default spends spare capacity on a
-higher error level without changing the version, so an oracle built with it reports a different
-level than the one requested and every boundary comparison is wrong; and ``segno.make_qr`` rather
-than bare ``segno.make``, because a short payload becomes a **Micro QR** symbol with no ``4V+17``
-module count and a different format-information layout -- ``make_qr`` is Model 2 by construction
-and takes no ``micro`` argument at all, which ``test_the_model2_entry_point_avoids_micro_symbols``
+transcription slip there would silently mis-size every boundary record and every capacity
+assertion built on it (IM-6). This module compares the embedded tables with ``segno.consts`` row
+for row and ties the arithmetic to segno's real acceptance boundary by encoding the largest
+legal payload of each mode at sampled versions, asserting segno accepts it and rejects one
+character more. :func:`_encode` is the single call site that neutralises the two segno defaults
+which would make the comparison meaningless: ``boost_error=False``, because the default spends
+spare capacity on a higher error level without changing the version, so an oracle built with it
+reports a different level than the one requested; and ``segno.make_qr`` rather than bare
+``segno.make``, because a short payload becomes a **Micro QR** symbol with no ``4V+17`` module
+count and a different format-information layout, ``make_qr`` being Model 2 by construction and
+taking no ``micro`` argument at all, which ``test_the_model2_entry_point_avoids_micro_symbols``
 asserts instead of trusting.
 
-Every expectation is read from ``segno.consts`` at test time; the only literals are ISO/IEC 18004
-facts, named once below with the clause they come from. Nothing here reads a product threshold, and
-no case is skipped, marked or retried.
+Every expectation is read from ``segno.consts`` at test time; the only literals are ISO/IEC
+18004 facts, named once below with the clause they come from. Nothing here reads a product
+threshold, and no case is skipped, marked or retried.
 """
 
 from __future__ import annotations

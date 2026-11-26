@@ -1,28 +1,23 @@
 """The shared fixture surface for the ``qrcheck`` test suite: fixtures only, never tests.
 
-Every module under ``tests/unit/`` and ``tests/integration/`` consumes what is defined here, so no
-test module re-implements a report directory, a configuration record, a stub adapter, a decoded
-result or the offline guard. This module defines no ``test_*`` function, no ``Test*`` class and no
-retry, re-run, quarantine or skip hook: a retry has to surface as the declared adapter-invocation
-count plus one, which is what the counting stub exists to make visible.
-
-* :func:`report_dir` gives a fresh, writable report root per test, and pre-creates no ``evidence/``
-  subtree: ``qrcheck.report.evidence.EvidenceStore`` owns that layout.
-* :func:`config_factory` builds a fully populated :class:`qrcheck.config.models.Config` in memory
-  from the defaults declared in ``qrcheck/config/schema.py``, so no test reads, mutates or depends
-  on the committed ``qrcheck.toml``. Every numeric default a fixture supplies is read from that
-  table or the ``models.DEFAULT_*`` constant it references, so retuning a threshold cannot leave a
-  fixture asserting a stale value.
-* The target stubs (:class:`StubAdapter`, :class:`CountingAdapter`, :class:`RaisingAdapter`)
-  satisfy ``isinstance(stub, Adapter)`` and log every request, which is the evidence of how many
-  times a check called its target (:func:`make_run_context` also builds the ``RunContext`` a
-  check's ``cases(ctx)`` is called with, from the committed and freshly built corpora).
-* The builders and the masking comparator are module-level functions *and* fixtures of the same
-  name, so a test may request them by name or import the function directly; both paths reach one
-  implementation, and the duplicate declaration is a name binding, not a second definition.
-* :func:`mask_volatile` masks exactly the three volatile fields of the result model, and the
-  autouse :func:`no_outbound_network` guard makes any outbound socket connect fail loudly,
-  enforcing the product's fully-offline MUST.
+Every module under ``tests/unit/`` and ``tests/integration/`` consumes what is defined here, so
+none re-implements a report directory, a configuration record, a stub adapter, a decoded result
+or the offline guard. This module defines no ``test_*`` function, no ``Test*`` class and no
+retry, re-run, quarantine or skip hook: a retry has to surface as the declared
+adapter-invocation count plus one, which is what the counting stub exists to make visible.
+:func:`report_dir` gives a fresh writable report root per test and pre-creates no ``evidence/``
+subtree, which ``qrcheck.report.evidence.EvidenceStore`` owns; :func:`config_factory` builds a
+fully populated :class:`qrcheck.config.models.Config` in memory from the defaults declared in
+``qrcheck/config/schema.py``, so no test reads, mutates or depends on the committed
+``qrcheck.toml`` and retuning a threshold cannot leave a fixture asserting a stale value; the
+target stubs (:class:`StubAdapter`, :class:`CountingAdapter`, :class:`RaisingAdapter`) satisfy
+``isinstance(stub, Adapter)`` and log every request, which is the evidence of how often a check
+called its target, and :func:`make_run_context` builds the ``RunContext`` a check's
+``cases(ctx)`` receives; the builders and the masking comparator are module-level functions
+*and* fixtures of the same name, so either access path reaches one implementation; and
+:func:`mask_volatile` masks exactly the three volatile fields of the result model while the
+autouse :func:`no_outbound_network` guard makes any outbound socket connect fail loudly,
+enforcing the fully-offline MUST.
 """
 
 from __future__ import annotations
@@ -44,12 +39,13 @@ import numpy
 import pytest
 from click.testing import CliRunner
 
-# Every local import below names a single owner of what a fixture hands out. Three carry a reason
-# the code cannot show: ``qrcheck.report.evidence`` supplies the ``EvidenceStore`` that
-# ``RunContext.evidence`` is typed as (AAP §0.8.1); ``qrcheck.decode`` is imported only to capture
-# the *real* ``decode_symbol``, which :func:`patch_decode` replaces, so :func:`real_decode` keeps
-# the original callable reachable beside the stub; and ``click.testing.CliRunner`` is the harness
-# the exit-code conditions are driven through (AAP §0.6.1 #7, §0.6.6 rows 1, 2, 10, 11).
+# Every local import below names a single owner of what a fixture hands out. Three carry a
+# reason the code cannot show: ``qrcheck.report.evidence`` supplies the ``EvidenceStore`` that
+# ``RunContext.evidence`` is typed as (AAP §0.8.1); ``qrcheck.decode`` is imported only to
+# capture the *real* ``decode_symbol``, which :func:`patch_decode` replaces, so
+# :func:`real_decode` keeps the original callable reachable beside the stub; and
+# ``click.testing.CliRunner`` is the harness the exit-code conditions are driven through (AAP
+# §0.6.1 #7, §0.6.6 rows 1, 2, 10, 11).
 from qrcheck.config import models, schema
 from qrcheck.corpus.builder import CorpusRecord, build_corpus
 from qrcheck.corpus.io import filter_by_class, load_corpus
@@ -114,13 +110,9 @@ __all__ = [
     "unwritable_report_dir",
 ]
 
-# ---------------------------------------------------------------------------
-# Locations and fixed values
-#
-# The repository root is needed for one purpose only: the committed corpus is a
-# repository file (AAP §0.9.2), not package data, so the fixtures that load it name it
-# relative to this module rather than relative to the current working directory.
-# ---------------------------------------------------------------------------
+# Locations and fixed values. The repository root is needed for one purpose only: the committed
+# corpus is a repository file (AAP §0.9.2), not package data, so the fixtures that load it name
+# it relative to this module rather than relative to the current working directory.
 
 #: The repository root, derived from this file's own location (``<root>/tests/conftest.py``).
 _REPO_ROOT: Final[Path] = Path(__file__).resolve().parents[1]
@@ -277,13 +269,10 @@ def _stub_matrix(version: int = 2) -> Matrix:
     return grid
 
 
-# ---------------------------------------------------------------------------
-# Target stubs: the Adapter protocol implemented in four members
-#
-# Nothing here duplicates a production type: the records, the capability enumeration and
-# the error classes are imported from ``qrcheck/targets/base.py``, which is the single
-# declaration of each, so a rename there breaks this module rather than ten tests.
-# ---------------------------------------------------------------------------
+# Target stubs: the ``Adapter`` protocol implemented in four members. Nothing here duplicates a
+# production type -- the records, the capability enumeration and the error classes are imported
+# from ``qrcheck/targets/base.py``, the single declaration of each -- so a rename there breaks
+# this module rather than ten tests.
 
 
 class StubAdapter:
@@ -443,15 +432,11 @@ def adapter_raising(
     return RaisingAdapter(error, fail_on_call=fail_on_call, name=name)
 
 
-# ---------------------------------------------------------------------------
-# Decoded-evidence stubs
-#
-# Every check consumes one DecodeResult, so a negative case is "a valid result with exactly
-# one field changed to the defect this check asserts against". The factories below build the
-# valid baseline and apply the change through dataclasses.replace, keeping the fields that
-# must agree with each other -- the payload and its per-decoder digests, the grid and its
-# digest -- consistent whatever the caller overrides.
-# ---------------------------------------------------------------------------
+# Decoded-evidence stubs. Every check consumes one ``DecodeResult``, so a negative case is "a
+# valid result with exactly one field changed to the defect this check asserts against". The
+# factories below build the valid baseline and apply the change through ``dataclasses.replace``,
+# keeping the fields that must agree with each other -- the payload and its per-decoder digests,
+# the grid and its digest -- consistent whatever the caller overrides.
 
 
 def _decoder_outcome(**overrides: Any) -> DecoderOutcome:

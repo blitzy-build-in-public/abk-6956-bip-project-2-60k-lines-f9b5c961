@@ -1,75 +1,59 @@
 """The adapter port every QR generator target is driven through.
 
-The seam between *what is asserted* (``qrcheck/checks/``) and *what is being
-asserted against* (``qrcheck/targets/``), and deliberately the thinnest place in
-the product: the capability vocabulary, the two records a target exchanges with
-the framework, the closed five-error vocabulary every adapter raises, the single
-request builder every check calls, the capability gate, and the resolution
-helpers the concrete adapters share.  A fourth adapter kind needs no change to
-any check and a new check needs no change to any adapter, because neither side
-of the seam ever sees the other.
+The seam between *what is asserted* (``qrcheck/checks/``) and *what is being asserted against*
+(``qrcheck/targets/``), and deliberately the thinnest place in the product: the capability
+vocabulary, the two records a target exchanges with the framework, the closed five-error vocabulary
+every adapter raises, the single request builder every check calls, the capability gate, and the
+resolution helpers the concrete adapters share.  A fourth adapter kind needs no change to any check
+and a new check needs no change to any adapter, because neither side of the seam ever sees the
+other.
 
-What the port guarantees:
+What the port guarantees.  :class:`Capability` is the complete and closed list of the thirteen
+operations a target may declare, and :func:`require_capabilities` refuses an undeclared operation
+**before any I/O**, so an unsupported request never reaches a target and never consumes its
+``timeout_s``.  The thirteen names are declared twice by necessity -- ``CAPABILITY_NAMES`` in
+:mod:`qrcheck.config.models`, which this package imports and which may not import this one, and
+:class:`Capability` here -- and the two declarations are gated against each other at import, so a
+rename on either side fails loudly instead of leaving the schema accepting a capability no adapter
+can express.  :func:`build_request` is the only legal path to a :class:`GenerateRequest`, which is
+what keeps one definition of "this request is valid" in the product.  And
+:func:`decode_returned_image`, :func:`resolve_dotted_path`, :func:`apply_metadata_map`,
+:func:`ensure_image_bytes` and :func:`hex_prefix` each exist exactly once here; ``library.py``,
+``cli.py`` and ``http.py`` import them rather than re-deriving them.
 
-* :class:`Capability` is the complete and closed list of the thirteen operations
-  a target may declare, and :func:`require_capabilities` refuses an undeclared
-  operation **before any I/O**, so an unsupported request never reaches a target
-  and never consumes its ``timeout_s``.
-* The thirteen names are declared twice by necessity -- ``CAPABILITY_NAMES`` in
-  :mod:`qrcheck.config.models`, which this package imports and which may not
-  import this one, and :class:`Capability` here -- and the two declarations are
-  gated against each other at import, so a rename on either side fails loudly
-  instead of leaving the schema accepting a capability no adapter can express.
-* :func:`build_request` is the only legal path to a :class:`GenerateRequest`.
-  Every check builds its request through it, which is what keeps one definition
-  of "this request is valid" in the product.
-* :func:`decode_returned_image`, :func:`resolve_dotted_path`,
-  :func:`apply_metadata_map`, :func:`ensure_image_bytes` and
-  :func:`hex_prefix` each exist exactly once here; ``library.py``, ``cli.py``
-  and ``http.py`` import them rather than re-deriving them.
+The five-error vocabulary: an adapter raises nothing else, exactly one trigger produces each error,
+and every ``except`` inside ``qrcheck/targets/`` converts a library exception into one of the five
+rather than letting it escape unwrapped.  ``TargetUnavailable`` -- the process cannot be spawned,
+the connection is refused, the import path is missing.  ``TargetTimeout`` -- no response within
+``targets.<name>.timeout_s``.  ``TargetRejected`` -- the target returned a declared client-side
+rejection for a request the framework considers valid, and its text is reported verbatim:
+``str(exc)`` is exactly what the target said, because the ``IV-*`` checks record it in
+``decoded.rejection`` and every other check reports it as reason ``target_rejected``.
+``TargetContractError`` -- a response arrived but is unusable: empty body, undecodable base64,
+image bytes no decoder or image library can open, a configured field the response does not carry.
+``TargetUnsupported`` -- the request asks for a capability the adapter did not declare; raised
+before any I/O.
 
-The five-error vocabulary: an adapter raises nothing else, exactly one trigger
-produces each error, and every ``except`` inside ``qrcheck/targets/`` converts a
-library exception into one of the five rather than letting it escape unwrapped.
-``TargetUnavailable`` -- the process cannot be spawned, the connection is
-refused, the import path is missing.  ``TargetTimeout`` -- no response within
-``targets.<name>.timeout_s``.  ``TargetRejected`` -- the target returned a
-declared client-side rejection for a request the framework considers valid, and
-its text is reported verbatim.  ``TargetContractError`` -- a response arrived but
-is unusable: empty body, undecodable base64, image bytes no decoder or image
-library can open, a configured field the response does not carry.
-``TargetUnsupported`` -- the request asks for a capability the adapter did not
-declare; raised before any I/O.  :class:`TargetRejected` carries the target's
-text unchanged -- ``str(exc)`` is exactly what the target said, because the
-``IV-*`` checks record it in ``decoded.rejection`` and every other check reports
-it as reason ``target_rejected``.
+Why ``GenerateRequest`` validates nothing: it has no ``__post_init__``, no coercion and no guard.
+That is a contract, not an oversight -- ``IV-EMPTY``, ``IV-OVERCAPACITY`` and the four
+``IV-BAD-OPTION`` probes exist to prove that a target rejects requests breaking exactly the rules
+:func:`build_request` enforces, so they must be able to hand a target a deliberately illegal
+request (``ec_level="X"``, ``module_size_px=0``, ``quiet_zone_modules=-1``, a below-floor colour
+pair).  They do so through ``qrcheck/checks/support.py:construct_out_of_contract``, a plain
+constructor call precisely because this type has no gate; validation added here would silently make
+every ``IV-*`` case unconstructable.
 
-Why ``GenerateRequest`` validates nothing: it has no ``__post_init__``, no
-coercion and no guard.  That is a contract, not an oversight -- ``IV-EMPTY``,
-``IV-OVERCAPACITY`` and the four ``IV-BAD-OPTION`` probes exist to prove that a
-target rejects requests breaking exactly the rules :func:`build_request`
-enforces, so they must be able to hand a target a deliberately illegal request
-(``ec_level="X"``, ``module_size_px=0``, ``quiet_zone_modules=-1``, a
-below-floor colour pair).  They do so through
-``qrcheck/checks/support.py:construct_out_of_contract``, a plain constructor call
-precisely because this type has no gate; validation added here would silently
-make every ``IV-*`` case unconstructable.
-
-Layering: this module imports only the standard library,
-:mod:`qrcheck.config.models` and :mod:`qrcheck.corpus.capacity`, plus -- inside
-:func:`build_request`, at the point of use rather than at module scope --
-:func:`~qrcheck.corpus.payloads.mode_of`, the product's single payload-mode
-classifier, so a payload's mode keeps one definition in the product.  That one
-import is deferred because ``qrcheck.corpus.payloads`` imports ``numpy`` for its
-seeded generators, while this port is imported by the registry, the decoders and
-every check.  It imports no image library, no decoder and none of
-``qrcheck.checks``, ``qrcheck.report``, ``qrcheck.decode`` or
-``qrcheck.registry``, which is what lets ``decode/``, ``registry/``,
-``checks/support.py`` and ``runner.py`` all import it without a cycle.  In the
-other direction, ``qrcheck/checks/*`` may import this module and nothing else
-from ``qrcheck/targets/``, and nothing in ``qrcheck/targets/`` may import
-``qrcheck.checks`` -- the property ``tests/unit/test_layering.py`` holds by
-scanning source.
+Layering: only the standard library, :mod:`qrcheck.config.models` and
+:mod:`qrcheck.corpus.capacity`, plus -- inside :func:`build_request`, at the point of use rather
+than at module scope -- :func:`~qrcheck.corpus.payloads.mode_of`, the product's single payload-mode
+classifier, deferred because ``qrcheck.corpus.payloads`` imports ``numpy`` for its seeded
+generators while this port is imported by the registry, the decoders and every check.  It imports no
+image library, no decoder and none of ``qrcheck.checks``, ``qrcheck.report``, ``qrcheck.decode`` or
+``qrcheck.registry``, which is what lets ``decode/``, ``registry/``, ``checks/support.py`` and
+``runner.py`` all import it without a cycle.  In the other direction, ``qrcheck/checks/*`` may
+import this module and nothing else from ``qrcheck/targets/``, and nothing in ``qrcheck/targets/``
+may import ``qrcheck.checks`` -- the property ``tests/unit/test_layering.py`` holds by scanning
+source.
 """
 
 from __future__ import annotations

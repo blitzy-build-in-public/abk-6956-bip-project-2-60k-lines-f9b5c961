@@ -1,91 +1,65 @@
 """The conforming self-check target: a segno-backed generator that must come back clean.
 
-This target exists to prove the suite is not vacuous.  ``qrcheck run --adapter
-reference`` must report zero failed, zero errored and zero skipped results, with at
-least one ``passed`` result for every one of the twenty-one checks; the contrast pair
-is :mod:`qrcheck.targets.defective`, which must fail exactly the nine checks its five
-injections target.  Nothing here is the product under test -- it is the yardstick the
-product is measured against, and a change that makes a check pass against this target
-by weakening the check is forbidden.
+This target exists to prove the suite is not vacuous.  ``qrcheck run --adapter reference`` must
+report zero failed, zero errored and zero skipped results, with at least one ``passed`` result for
+every one of the twenty-one checks; the contrast pair is :mod:`qrcheck.targets.defective`, which
+must fail exactly the nine checks its five injections target.  Nothing here is the product under
+test -- it is the yardstick the product is measured against, and a change that makes a check pass
+against this target by weakening the check is forbidden.
 
-Two segno disciplines are mandatory at the call site
----------------------------------------------------
-``boost_error=False``
-    segno's default spends spare capacity on a *higher* error-correction level without
-    changing the version, so an oracle built with defaults would expect a different EC
-    level than the target was asked for and would fail a conforming target.  Every
-    call here passes ``boost_error=False`` explicitly.
-Model 2 only
-    Micro QR is out of scope: an M-series symbol has no ``4V+17`` module count, no
-    Version 1-40 number and a different format-information layout, so ``N = 4V+17``,
-    the version-from-dimension mapping, the mask/EC extraction and every capacity
-    lookup would be wrong on exactly the short payloads the corpus is full of.
-    ``segno.make()`` returns Micro QR for short content, so this module calls
-    ``segno.make_qr()`` and never bare ``segno.make()``.
+Two segno disciplines are mandatory at the call site.  ``boost_error=False``, because the default
+spends spare capacity on a *higher* error-correction level without changing the version, so an
+oracle built with defaults would expect a different EC level than the target was asked for.  Model
+2 only, because an M-series symbol has no ``4V+17`` module count, no Version 1-40 number and a
+different format-information layout, so the module count, the version-from-dimension mapping, the
+mask/EC extraction and every capacity lookup would be wrong on exactly the short payloads the
+corpus is full of; ``segno.make()`` returns Micro QR for short content, so this module calls
+``segno.make_qr()`` and never bare ``segno.make()``.  Recorded discrepancy: the plan writes the
+call as ``segno.make_qr(..., micro=False)``, but in segno 1.6.6 ``make_qr`` has no ``micro``
+parameter -- it is Model 2 by construction and forwards ``micro=False`` to ``make`` internally --
+so the outcome the plan requires is obtained by the function choice, and passing ``micro=False``
+would be a ``TypeError``.
 
-    Recorded discrepancy: the plan writes the call as ``segno.make_qr(..., micro=False)``,
-    but in segno 1.6.6 ``make_qr`` has no ``micro`` parameter.  It is Model 2 by
-    construction -- its own documentation says "Creates a QR code (never a Micro QR
-    code)" and it forwards ``micro=False`` to ``make`` internally -- while bare
-    ``segno.make`` accepts ``micro`` and defaults it to ``None``, meaning "prefer Micro
-    QR".  The outcome the plan requires is therefore obtained by calling
-    ``segno.make_qr``; passing ``micro=False`` to it would be a ``TypeError``.
+``capabilities`` is a gate, not documentation: the runner resolves a check whose requirements an
+adapter does not declare to ``skipped``.  This target declares all thirteen
+:class:`~qrcheck.targets.base.Capability` members unconditionally -- not intersected with the
+configured set -- because its whole job is the zero-skip clean-run gate.
 
-Why all thirteen capabilities are declared
-------------------------------------------
-``capabilities`` is a gate, not documentation: the runner resolves a check whose
-requirements an adapter does not declare to ``skipped``.  This target declares every
-one of the thirteen :class:`~qrcheck.targets.base.Capability` members
-unconditionally -- it does not intersect them with the configured set -- because its
-whole job is the zero-skip clean-run gate, and narrowing the declared set would let a
-check skip instead of run.
+``logo_overlay_path`` is applied here: the ``logo_overlay`` capability this target declares would
+otherwise be a claim with no behaviour behind it, and a target that declares a capability and
+ignores it is indistinguishable from one that honours it (AAP §0.3.4).  ``RN-LOGO`` in
+``qrcheck/checks/render.py`` owns the other half -- it generates the bitmap, writes it as
+``logo.png`` evidence and measures the area it covers -- while this target composites it, centred
+and at its own pixel size, through :func:`qrcheck.evidence.mux.composite_overlay`, the product's
+single image boundary, so no adapter opens an image with Pillow directly and every image keeps one
+pipeline and one owner.  Only a raster artefact can carry a composite, so a request that asks for
+an overlay on a vector artefact is refused with :class:`~qrcheck.targets.base.TargetUnsupported`
+before anything is encoded or rendered.
 
-Division of labour with the checks
-----------------------------------
-``logo_overlay_path`` is applied here.  The ``logo_overlay`` capability this target
-declares would otherwise be a claim with no behaviour behind it, and a target that
-declares a capability and ignores it is indistinguishable from one that honours it
-(AAP §0.3.4).  ``RN-LOGO`` in ``qrcheck/checks/render.py`` owns the other half: it
-generates the bitmap, writes it as ``logo.png`` evidence and measures the area it
-covers.  This target composites it, centred and at its own pixel size, through
-:func:`qrcheck.evidence.mux.composite_overlay`, the product's single image boundary, so
-no adapter opens an image with Pillow directly and every image the framework handles
-keeps one pipeline and one owner.  Only a raster artefact can carry a composite, so a
-request that asks for an overlay on a vector artefact is refused with
-:class:`~qrcheck.targets.base.TargetUnsupported` before anything is encoded or rendered.
+``timeout_s`` is not read by this adapter: the encode is a local segno call inside this
+interpreter, with no process, socket or pipe to bound.  The framework's per-call watchdog is what
+lets the ``library`` adapter bound an in-process call, and the out-of-process adapters bound their
+own work -- ``subprocess.run(timeout=...)`` for ``cli``, ``httpx.Timeout`` for ``http``.
 
-``timeout_s`` is not read by this adapter: its encode is a local segno call inside this
-interpreter, with no process, socket or pipe to bound, so the configured ceiling is not
-applied here.  The framework does carry a per-call watchdog -- that is what lets the
-``library`` adapter bound an in-process call -- and the out-of-process adapters bound
-their own work: ``subprocess.run(timeout=...)`` for ``cli``, ``httpx.Timeout`` for ``http``.
+Documented limitation, stated here so nobody mistakes it for independence: this target is
+segno-backed and segno is also the oracle, so ``SY-MATRIX-EQUIV`` against this target compares the
+oracle to itself in the encoder dimension.  What that check still proves is the render -> sample ->
+decode path end to end, and the tautology is broken by :mod:`qrcheck.targets.defective`, whose
+module matrix at pinned parameters differs from the oracle's.  The genuinely independent evidence
+is the decoder-derived set (``RT-ROUNDTRIP``, ``MD-CHARSET``, the decoder-side EC level of
+``SY-EC-MATCH``, the format-information mask of ``SY-MASK``) plus decoder-versus-decoder agreement.
+No second encoder is added: the pinned dependency set names none.
 
-Documented limitation, stated here so nobody mistakes it for independence
------------------------------------------------------------------------
-This target is segno-backed, and segno is also the oracle, so ``SY-MATRIX-EQUIV``
-against this target compares the oracle to itself in the encoder dimension.  What that
-check still proves is the render -> sample -> decode path end to end, and the tautology
-is broken by :mod:`qrcheck.targets.defective`, whose module matrix at pinned
-parameters differs from the oracle's.  The genuinely independent evidence is the
-decoder-derived set (``RT-ROUNDTRIP``, ``MD-CHARSET``, the decoder-side EC level of
-``SY-EC-MATCH``, the format-information mask of ``SY-MASK``) plus decoder-versus-decoder
-agreement.  No second encoder is added: the dependency set is pinned and names none.
-
-Layering
---------
-Only ``io``, ``time``, :mod:`pathlib` and :mod:`typing` from the standard library,
-``segno``, and four modules imported at module scope: :mod:`qrcheck.targets.base`,
-:mod:`qrcheck.corpus.capacity`, :mod:`qrcheck.corpus.payloads` -- for
-:func:`~qrcheck.corpus.payloads.mode_of`, the product's single payload-mode classifier --
-and :mod:`qrcheck.config.models`.  A fifth, :mod:`qrcheck.evidence.mux`, is imported at
-the point of use, only by the one method that composites an overlay: applying the overlay
-must go through the product's single image boundary, and importing it lazily keeps Pillow
-out of the import graph of anything that merely lists or registers checks --
-``qrcheck.registry.check`` imports this package's port for ``Capability``, and
-``qrcheck list`` pays for every module that graph reaches.  This file therefore imports
-no image library of its own, and no cycle is possible: ``mux`` imports nothing from
-``qrcheck``.  It imports no decoder, no transport client and none of ``qrcheck.checks``,
-``qrcheck.report``, ``qrcheck.decode`` or ``qrcheck.registry``, which is the property
+Layering: ``io``, ``time``, :mod:`pathlib` and :mod:`typing` from the standard library, ``segno``,
+and at module scope :mod:`qrcheck.targets.base`, :mod:`qrcheck.corpus.capacity`,
+:mod:`qrcheck.corpus.payloads` (for :func:`~qrcheck.corpus.payloads.mode_of`, the product's single
+payload-mode classifier) and :mod:`qrcheck.config.models`.  A fifth,
+:mod:`qrcheck.evidence.mux`, is imported at the point of use by the one method that composites an
+overlay, which keeps Pillow out of the import graph of anything that merely lists or registers
+checks -- ``qrcheck.registry.check`` imports this package's port for ``Capability`` and ``qrcheck
+list`` pays for every module that graph reaches -- and no cycle is possible because ``mux`` imports
+nothing from ``qrcheck``.  No image library of its own, no decoder, no transport client and none of
+``qrcheck.checks``, ``qrcheck.report``, ``qrcheck.decode`` or ``qrcheck.registry``, which
 ``tests/unit/test_layering.py`` holds by scanning source.
 """
 

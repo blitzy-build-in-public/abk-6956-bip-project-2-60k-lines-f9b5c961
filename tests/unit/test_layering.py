@@ -1,30 +1,28 @@
 """The inward-only dependency direction, held mechanically by an AST scan of the package.
 
 The architecture's dependency direction is a contract, not a convention (AAP §0.3.2, §0.3.4
-"Extension boundary", NFR-6, §0.12), and this module asserts it by reading the package's source, so
-a breach fails a test instead of relying on a reviewer: ``qrcheck/checks/**`` may import
-``qrcheck.targets.base`` and nothing else from ``qrcheck.targets`` -- not a concrete adapter, and
-not the ``qrcheck.targets`` package itself, whose entry point is the only module allowed to know
-the concrete class names, since denying only the five leaf names would leave ``import
-qrcheck.targets`` and ``from qrcheck.targets import Capability`` open; ``qrcheck/targets/**`` never
-imports ``qrcheck.checks`` in any spelling; nothing under ``qrcheck/`` imports anything under
-``tests``; and the scan cannot pass vacuously, because both subtrees must still hold the modules
-the plan's tree fixes, synthetic offenders must be flagged by the same collector the assertions
-use, and the modules permitted to name a concrete adapter are one explicit, sorted allow-list.
+"Extension boundary", NFR-6, §0.12), and this module asserts it by reading the package's
+source, so a breach fails a test instead of relying on a reviewer: ``qrcheck/checks/**`` may
+import ``qrcheck.targets.base`` and nothing else from ``qrcheck.targets`` -- not a concrete
+adapter, and not the package itself, since denying only the five leaf names would leave ``import
+qrcheck.targets`` and ``from qrcheck.targets import Capability`` open; ``qrcheck/targets/**``
+never imports ``qrcheck.checks`` in any spelling; nothing under ``qrcheck/`` imports anything
+under ``tests``; and the scan cannot pass vacuously, because both subtrees must still hold the
+modules the plan's tree fixes, synthetic offenders must be flagged by the same collector the
+assertions use, and the modules permitted to name a concrete adapter are one explicit, sorted
+allow-list.
 
-Why the AST and not a search over the source text: a comment, a docstring or a log line that
-mentions ``qrcheck.targets.cli`` is not a dependency and a text search would report it as one,
-while the same search also misses the relative spelling -- every import here is read from the
-parsed tree, and a relative ``from ..targets.cli import CliAdapter`` is resolved through the
-importing file's own package path before it is judged.
-
-Limitations, stated rather than discovered later: a module name computed at run time is invisible
-to any static scan, though a literal adapter module name passed to ``importlib.import_module`` or
-``__import__``, or stored in a table, is caught (:func:`_adapter_references`); the scan judges the
-two boundaries the plan names and is not a general import-cycle detector; and no verdict is stored,
-so a fresh run always re-reads the files on disk. The module imports no part of the product
-(:func:`test_this_module_does_not_import_the_product` holds that), because a package that cannot be
-imported must not be able to mask a layering breach by failing first.
+The AST rather than a search over the source text, because a comment or docstring mentioning
+``qrcheck.targets.cli`` is not a dependency while a relative ``from ..targets.cli import
+CliAdapter`` is one that a search misses: every import is read from the parsed tree and a
+relative spelling resolved through the importing file's own package path. Limitations, stated
+rather than discovered later: a module name computed at run time is invisible to any static
+scan, though a literal adapter module name passed to ``importlib.import_module`` or
+``__import__``, or stored in a table, is caught (:func:`_adapter_references`); and the scan
+judges the two boundaries the plan names rather than being a general import-cycle detector. The
+module imports no part of the product (:func:`test_this_module_does_not_import_the_product`
+holds that), because a package that cannot be imported must not be able to mask a layering
+breach by failing first.
 """
 
 from __future__ import annotations

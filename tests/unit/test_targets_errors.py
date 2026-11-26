@@ -1,30 +1,27 @@
 """The adapter layer's failure vocabulary is the five declared errors, and no more.
 
-``qrcheck/targets/base.py`` declares exactly five errors, and the port's contract is that an
+``qrcheck/targets/base.py`` declares exactly five errors and the port's contract is that an
 adapter raises nothing else: every ``except`` inside ``qrcheck/targets/`` converts a library
-exception into one of them rather than letting it escape unwrapped (AAP §0.3.4 "Error taxonomy",
-§0.14.1's conversion list). Each declared trigger is exercised through the **real** adapter code
-path, one test per trigger, so a failure names the trigger rather than a line number: a missing
-module or attribute, an absent executable, a refused loopback port and an unsupported protocol are
-``TargetUnavailable``; the configured ``timeout_s`` quoted in the message is ``TargetTimeout``,
-while a connect timeout is ``TargetUnavailable``; a declared rejection keeps the target's text byte
-for byte in ``TargetRejected``; an empty body, undecodable base64, bytes that are not an image, a
-missing configured ``image_field`` and a non-zero exit that declared no rejection are
-``TargetContractError``; and ``TargetUnsupported`` is raised *before any I/O*, which every probe
-here also proves by recording that the target was never called.
+exception into one of them rather than letting it escape unwrapped (AAP §0.3.4 "Error
+taxonomy", §0.14.1's conversion list). Each declared trigger is exercised through the **real**
+adapter code path, one test per trigger: a missing module or attribute, an absent executable, a
+refused loopback port and an unsupported protocol are ``TargetUnavailable``; the configured
+``timeout_s`` quoted in the message is ``TargetTimeout``, while a connect timeout is
+``TargetUnavailable``; a declared rejection keeps the target's text byte for byte in
+``TargetRejected``; an empty body, undecodable base64, bytes that are not an image, a missing
+configured ``image_field`` and a non-zero exit that declared no rejection are
+``TargetContractError``; and ``TargetUnsupported`` is raised before any I/O, which every probe
+proves by recording that the target was never called.
 
 Two distinctions the module exists to hold: ``TargetRejected`` versus ``TargetContractError``
-decides whether ``IV-*`` passes, because a declared rejection is the *expected* outcome there and a
-failure everywhere else, so misclassifying one as the other is a report defect rather than only an
-exception-type defect; and the five errors are siblings -- every one a ``TargetError``, none a
-subclass of another -- so a caller's ``except`` order cannot silently reclassify a failure. The
-HTTP adapter gives a non-2xx status no declared-rejection spelling (``qrcheck/targets/http.py``: "a
-non-2xx status is always ``TargetContractError``, never ``TargetRejected``"), which the comment on
-that test records so a reader does not read it as a gap.
-
-No threshold from ``qrcheck.toml`` is read or restated; the only numbers are probe values chosen to
-be recognisable. Nothing is skipped, marked ``xfail`` or retried, no network beyond ``127.0.0.1``
-is touched, no process has to time out for real and no sleep is taken.
+decides whether ``IV-*`` passes, a declared rejection being the *expected* outcome there and a
+failure everywhere else, so misclassifying one as the other is a report defect and not only an
+exception-type one; and the five are siblings -- every one a ``TargetError``, none a subclass of
+another -- so a caller's ``except`` order cannot silently reclassify a failure. The HTTP adapter
+gives a non-2xx status no declared-rejection spelling, which the comment on that test records so
+a reader does not read it as a gap. No threshold from ``qrcheck.toml`` is read or restated,
+nothing is skipped, marked ``xfail`` or retried, no network beyond ``127.0.0.1`` is touched, no
+process has to time out for real and no sleep is taken.
 """
 
 from __future__ import annotations
@@ -110,14 +107,10 @@ _ERROR_TYPES: Final[tuple[type[TargetError], ...]] = (
 )
 
 
-# ---------------------------------------------------------------------------
-# Request and target builders
-#
-# Every adapter is built from a real ``qrcheck.config.models`` record, never a mock, so
-# the constructor the product uses is the constructor exercised here. Capabilities are
-# declared explicitly because they are a gate: a record that declared none would turn
-# every probe into a ``TargetUnsupported`` before the trigger under test was reached.
-# ---------------------------------------------------------------------------
+# Request and target builders. Every adapter is built from a real ``qrcheck.models`` record,
+# never a mock, so the constructor the product uses is the one exercised here. Capabilities are
+# declared explicitly because they are a gate: a record declaring none would turn every probe
+# into ``TargetUnsupported`` before the trigger under test was reached.
 
 
 def _legal_request(text: str = _UNUSUAL_TEXT) -> GenerateRequest:
@@ -213,14 +206,10 @@ def _reference_adapter(
     return ReferenceAdapter(record, name="reference")
 
 
-# ---------------------------------------------------------------------------
-# Injection helpers, all at the library boundary
-#
-# The adapter's own mapping logic is under test, so the patch is always placed at the
-# point where a library is called and never around the adapter: ``httpx.Client`` for the
-# HTTP probes (a real client over a mock transport), ``subprocess.run`` for the CLI probes,
-# and one attribute on an importable module for the library probes.
-# ---------------------------------------------------------------------------
+# Injection helpers, all at the library boundary. The adapter's own mapping logic is what is
+# under test, so the patch always sits where a library is called and never around the adapter:
+# ``httpx.Client`` for the HTTP probes (a real client over a mock transport), ``subprocess.run``
+# for the CLI probes, and one attribute on an importable module for the library probes.
 
 
 def _patch_http_client(

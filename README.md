@@ -114,7 +114,7 @@ The two machine-readable variants exist for tooling: `list --json` lets a CI job
 |------|---------|---------------------|
 | `0` | Run completed with `failed == 0` and `error == 0` | After the reports are written; skipped results are permitted and never count as a pass, because they are tallied separately |
 | `1` | At least one check failed and none errored | After the reports are written |
-| `2` | Configuration, selection, corpus-filter, corpus-file, primary-decoder or target-availability error | Before any check runs, so **no report is written**; the offending key, filter, file or dependency is named |
+| `2` | Configuration, selection, corpus-filter, corpus-file, an unusable pinned dependency — the primary decoder, the oracle or a core library, whether absent or installed but not importable — or a target-availability error | Before any check runs, so **no report is written**; the offending key, filter, file or dependency is named |
 | `3` | A check errored internally, `report_dir` is not writable, or an unhandled framework exception occurred | After the reports are written — except for an unwritable `report_dir`: a run whose report cannot be written streams every result it holds to stdout as one JSON object per line, while a `report_dir` found unwritable before the run starts has no result to stream, so the diagnostic alone is written to stderr, naming the path and stating that nothing was streamed |
 
 Precedence: exit 2 is decided before execution and so never competes with a result; during and after a run, 3 outranks 1, which outranks 0.

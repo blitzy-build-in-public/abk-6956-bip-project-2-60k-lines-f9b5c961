@@ -1,74 +1,60 @@
 """``qrcheck doctor``: verify the target and the local toolchain before any check runs.
 
-``doctor`` is the pre-flight verification of functional requirement FR-2. It decides whether
-this host can test this target at all, and it reports every prerequisite rather than stopping
-at the first fault, because a reader fixing an environment needs the whole list. It runs no
-check, decodes no symbol, writes no report and asserts nothing about a generated symbol; the
-one symbol it asks a target for is the probe below, which makes this module the **only** place
-outside a run that is allowed to call ``generate``.
+``doctor`` is the pre-flight verification of functional requirement FR-2.  It decides whether this
+host can test this target at all, and it reports every prerequisite rather than stopping at the
+first fault, because a reader fixing an environment needs the whole list.  It runs no check,
+decodes no symbol, writes no report and asserts nothing about a generated symbol; the one symbol it
+asks a target for is the probe below, which makes this module the **only** place outside a run that
+is allowed to call ``generate``.
 
-What it verifies, and what each outcome means (AAP §0.7.2, §0.6.6 rows 3 and 4):
+What it verifies, and what each outcome means (AAP §0.7.2, §0.6.6 rows 3 and 4).  A blocking
+prerequisite fails the command with exit 2, naming the culprit: the configuration file (the dotted
+key, or the path of a file that cannot be read, since nothing else can be resolved without it), a
+CPython older than 3.11, an undeclared target adapter (the diagnostic echoing the declared list) or
+a declared one that is unreachable, the primary decoder ``zxing-cpp`` (naming the distribution, the
+interpreter and the wheel tag of this platform), and the oracle and core libraries ``segno``,
+``numpy``, ``Pillow``, ``httpx`` and ``click`` (naming the distribution and
+``requirements.lock``).  A degrading prerequisite still exits 0: a newer 3.x or a non-CPython
+interpreter runs unsupported, is reported ``degraded`` and still exits 0; a missing secondary
+decoder ``opencv-python-headless`` lets the run proceed in single-decoder mode, with ``agreement``
+recording ``primary_only`` and ``index.html`` carrying the degradation banner; and a missing SVG
+rasterizer makes ``RN-SVG`` report ``skipped`` with reason ``missing_dependency`` and the discovery
+order it attempted.  A ``degraded`` entry never fails the gate, and a missing secondary decoder
+never becomes a skipped or a passing check: degradation is recorded, never inferred as health.
 
-==============================  ========  ==============================================
-prerequisite                    class     what happens when it is not usable
-==============================  ========  ==============================================
-configuration file              blocking  exit 2 naming the dotted key, or the path of a
-                                          file that cannot be read; nothing else can be
-                                          resolved without it
-python - CPython 3.11           blocking  below 3.11 exits 2; a newer 3.x or a non-CPython
-                                          interpreter runs unsupported, is reported
-                                          ``degraded`` and still exits 0
-target adapter                  blocking  an undeclared name exits 2 echoing the declared
-                                          list; a declared one is probed for reachability
-zxing-cpp - primary decoder     blocking  exit 2 naming the distribution, the interpreter
-                                          and the wheel tag of this platform
-segno, numpy, Pillow, httpx,    blocking  exit 2 naming the distribution and
-click - oracle and core libs              ``requirements.lock``
-opencv-python-headless -        degrading exit 0; the run proceeds in single-decoder mode,
-secondary decoder                         ``agreement`` records ``primary_only`` and
-                                          ``index.html`` carries the degradation banner
-SVG rasterizer                  degrading exit 0; ``RN-SVG`` reports ``skipped`` with reason
-                                          ``missing_dependency`` and the discovery order it
-                                          attempted
-==============================  ========  ==============================================
+Output contract (AAP §0.8.3).  One result object with exactly six keys -- ``adapter``, ``type``,
+``reachable``, ``capabilities``, ``dependencies`` and ``svg_rasterizer`` -- is emitted once, on both
+the passing and the failing path, so a CI consumer reads one shape and finds a machine-readable
+failure instead of an empty stream.  Each dependency entry carries exactly ``name``, ``version``,
+``status`` and ``blocking``, with ``status`` drawn from ``ok``/``missing``/``degraded``, and the
+list is sorted by ``name``.  ``--json`` prints that object with sorted keys; without it a table is
+printed.  Diagnostics always go to standard error, so standard output stays parsable, and nothing
+emitted carries a timestamp, a hostname, a duration or a path other than the configuration path the
+caller supplied.
 
-A ``degraded`` entry never fails the gate, and a missing secondary decoder never becomes a
-skipped or a passing check: degradation is recorded, never inferred as health.
-
-Output contract (AAP §0.8.3). One result object with exactly six keys -- ``adapter``,
-``type``, ``reachable``, ``capabilities``, ``dependencies`` and ``svg_rasterizer`` -- is
-emitted once, on both the passing and the failing path, so a CI consumer reads one shape and
-finds a machine-readable failure instead of an empty stream. Each dependency entry carries
-exactly ``name``, ``version``, ``status`` and ``blocking``, with ``status`` drawn from
-``ok``/``missing``/``degraded``, and the list is sorted by ``name``. ``--json`` prints that
-object with sorted keys; without it a table is printed. Diagnostics always go to standard
-error, so standard output stays parsable, and nothing emitted carries a timestamp, a hostname,
-a duration or a path other than the configuration path the caller supplied.
-
-What this module does not own. The SVG-rasterizer discovery is
-:func:`qrcheck.checks.render.discover_svg_rasterizer` -- imported here, never re-implemented
-and never re-ordered, because the tool this command reports has to be the tool ``RN-SVG``
-uses. Adapters are built through :data:`qrcheck.targets.ADAPTER_TYPES`, the one factory map.
-Exit codes come from :mod:`qrcheck.cli.exit` and are never written as literals. Decoder
-presence is read from :mod:`qrcheck.decode`, whose probes import neither ``cv2`` nor
-``zxingcpp``; this command then confirms the load itself, because a module that is present but
-fails to import is precisely the failure this command exists to report.
+What this module does not own.  SVG-rasterizer discovery is
+:func:`qrcheck.checks.render.discover_svg_rasterizer` -- imported here, never re-implemented and
+never re-ordered, because the tool this command reports has to be the tool ``RN-SVG`` uses.
+Adapters are built through :data:`qrcheck.targets.ADAPTER_TYPES`, the one factory map.  Exit codes
+come from :mod:`qrcheck.cli.exit` and are never written as literals.  Decoder presence is read from
+:mod:`qrcheck.decode`, whose probes import neither ``cv2`` nor ``zxingcpp``; this command then
+confirms the load itself, because a module that is present but fails to import is precisely the
+failure this command exists to report.  Both the decoder's load and each core library are confirmed
+through the one guarded probe in :mod:`qrcheck.dependencies`, which is also what ``qrcheck run``
+refuses on, so the two commands can never disagree about whether a dependency is usable.
 
 The public surface is two names, split exactly as ``qrcheck/cli/loc.py`` splits ``loc`` and
 ``loc_command``: ``doctor_command`` is the click object ``qrcheck.cli.main`` registers, and
-:func:`doctor` is the function behind it, returning the exit code to a direct caller and to a
-test.
+:func:`doctor` is the function behind it, returning the exit code to a direct caller and to a test.
 
-Exit codes (AAP §0.3.4): ``0`` when every blocking prerequisite passes, ``2`` when one fails
-or the configuration, the adapter name or the probe does, and ``3`` when an unexpected
-framework fault occurred -- a probe that raises outside the adapter error vocabulary, an
-adapter that cannot be closed, or a ``report_dir`` that cannot be prepared.
+Exit codes (AAP §0.3.4): ``0`` when every blocking prerequisite passes, ``2`` when one fails or the
+configuration, the adapter name or the probe does, and ``3`` when an unexpected framework fault
+occurred -- a probe that raises outside the adapter error vocabulary, an adapter that cannot be
+closed, or a ``report_dir`` that cannot be prepared.
 """
 
 from __future__ import annotations
 
-import importlib
-import importlib.metadata
 import json
 import platform
 import sys
@@ -83,6 +69,15 @@ from qrcheck.checks.render import RasterizerStatus, discover_svg_rasterizer
 from qrcheck.cli.exit import EXIT_CONFIG, EXIT_INTERNAL, EXIT_OK
 from qrcheck.config import Config, ConfigError, load_config
 from qrcheck.decode import DecoderAvailability, decoder_availability
+from qrcheck.dependencies import (
+    CORE_DEPENDENCIES,
+    PRIMARY_DECODER_DISTRIBUTION,
+    PRIMARY_DECODER_MODULE,
+    SECONDARY_DECODER_DISTRIBUTION,
+    SECONDARY_DECODER_MODULE,
+    import_problem,
+    probe,
+)
 from qrcheck.targets import ADAPTER_TYPES
 from qrcheck.targets.base import (
     TargetContractError,
@@ -143,18 +138,6 @@ STATUS_DEGRADED: Final[_Status] = "degraded"
 _SUPPORTED_PYTHON: Final[tuple[int, int]] = (3, 11)
 _LOWEST_PYTHON: Final[tuple[int, int]] = (3, 11)
 _CPYTHON: Final[str] = "CPython"
-
-# The two reference decoders, by distribution name (the ``name`` of the dependency entry) and
-# by importable module (what the presence and load probes ask for).
-_PRIMARY_DECODER: Final[str] = "zxing-cpp"
-_PRIMARY_DECODER_MODULE: Final[str] = "zxingcpp"
-_SECONDARY_DECODER: Final[str] = "opencv-python-headless"
-_SECONDARY_DECODER_MODULE: Final[str] = "cv2"
-
-# The oracle and the core libraries, in declaration order. Every one of them is blocking: the
-# oracle verifies every oracle-backed assertion, and the other four are imported at their
-# point of use by the run. A broken install is an environment fault (AAP §0.7.2).
-_CORE_DISTRIBUTIONS: Final[tuple[str, ...]] = ("segno", "numpy", "Pillow", "httpx", "click")
 
 # The architectures whose Linux wheels the pinned primary decoder does not publish. This is
 # the one platform gap in the resolution matrix (AAP §0.2.3), so its diagnostic names the
@@ -419,8 +402,8 @@ def _host_dependencies(notes: list[_Note]) -> list[_Dependency]:
         _secondary_decoder_dependency(availability, notes),
     ]
     dependencies.extend(
-        _distribution_dependency(distribution, notes)
-        for distribution in _CORE_DISTRIBUTIONS
+        _distribution_dependency(distribution, module, notes)
+        for distribution, module in CORE_DEPENDENCIES
     )
     return sorted(dependencies, key=lambda dependency: dependency.name)
 
@@ -465,14 +448,15 @@ def _primary_decoder_dependency(
     ``availability`` comes from :func:`qrcheck.decode.decoder_availability`, whose probe never
     imports the binding. That probe reports a module which is present, and this function then
     confirms the module actually loads, because a binding present but unimportable is exactly
-    the state this command exists to report.
+    the state this command exists to report -- and the state ``qrcheck run`` refuses on, through
+    the same guarded probe (see :func:`_decoder_load_problem`).
     """
     status: _Status = STATUS_OK
-    problem = _decoder_load_problem(_PRIMARY_DECODER_MODULE, availability.primary)
+    problem = _decoder_load_problem(PRIMARY_DECODER_MODULE, availability.primary)
     if problem is not None:
         notes.append(_Note(_primary_decoder_message(problem), True))
         status = STATUS_MISSING
-    return _Dependency(_PRIMARY_DECODER, availability.primary_version, status, True)
+    return _Dependency(PRIMARY_DECODER_DISTRIBUTION, availability.primary_version, status, True)
 
 
 def _secondary_decoder_dependency(
@@ -484,11 +468,13 @@ def _secondary_decoder_dependency(
     corroborating decoder blocks anything, and no check may pass or skip on its absence.
     """
     status: _Status = STATUS_OK
-    problem = _decoder_load_problem(_SECONDARY_DECODER_MODULE, availability.secondary)
+    problem = _decoder_load_problem(SECONDARY_DECODER_MODULE, availability.secondary)
     if problem is not None:
         notes.append(_Note(_secondary_decoder_message(problem), False))
         status = STATUS_DEGRADED
-    return _Dependency(_SECONDARY_DECODER, availability.secondary_version, status, False)
+    return _Dependency(
+        SECONDARY_DECODER_DISTRIBUTION, availability.secondary_version, status, False
+    )
 
 
 def _decoder_load_problem(module: str, present: bool) -> str | None:
@@ -498,18 +484,17 @@ def _decoder_load_problem(module: str, present: bool) -> str | None:
     ``importlib.util.find_spec``, which locates a module without executing it. That is the
     right probe for the decode layer, which must not pay for a native image stack, but it
     cannot see the state a reader most needs diagnosed: a module that is installed yet fails to
-    import. So the load is attempted here too, with exactly the two failures the decoder
-    wrappers themselves treat as "not usable" -- ``ImportError`` for a missing distribution and
-    ``OSError`` for a compiled extension that cannot be loaded, such as one built for another
-    architecture.
+    import. So the load is attempted here too, through
+    :func:`qrcheck.dependencies.import_problem` -- the product's one guarded import probe, which
+    reports whatever the module raises as "not usable", the two failures the decoder wrappers
+    themselves treat that way included: ``ImportError`` for a missing distribution and ``OSError``
+    for a compiled extension built for another architecture. Sharing the probe is what keeps this
+    command and ``qrcheck run``'s prerequisite check from disagreeing about whether the decoder is
+    usable.
     """
     if not present:
         return f"the {module} module is not importable"
-    try:
-        importlib.import_module(module)
-    except (ImportError, OSError) as exc:
-        return f"importing {module} failed: {exc}"
-    return None
+    return import_problem(module)
 
 
 def _primary_decoder_message(problem: str) -> str:
@@ -521,7 +506,7 @@ def _primary_decoder_message(problem: str) -> str:
     reader guessing whether the package is missing or the platform is unsupported.
     """
     message = (
-        f"primary decoder {_PRIMARY_DECODER} is unusable: {problem}; "
+        f"primary decoder {PRIMARY_DECODER_DISTRIBUTION} is unusable: {problem}; "
         f"interpreter {platform.python_version()} on {sys.platform}-{platform.machine()}, "
         f"wheel tag {_decoder_wheel_tag()}; it is a blocking dependency, because every "
         f"round-trip assertion is decoded by it, so no check can run without it; install the "
@@ -542,9 +527,9 @@ def _secondary_decoder_message(problem: str) -> str:
     failure nor expects the corroboration the run will not have.
     """
     return (
-        f"secondary decoder {_SECONDARY_DECODER} is unusable: {problem}; the run proceeds in "
-        f"single-decoder mode, agreement records primary_only, index.html carries the "
-        f"degradation banner, and no check passes on the strength of the missing decoder"
+        f"secondary decoder {SECONDARY_DECODER_DISTRIBUTION} is unusable: {problem}; the run "
+        f"proceeds in single-decoder mode, agreement records primary_only, index.html carries "
+        f"the degradation banner, and no check passes on the strength of the missing decoder"
     )
 
 
@@ -567,26 +552,25 @@ def _is_linux_aarch64() -> bool:
     return sys.platform.startswith("linux") and platform.machine().lower() in _AARCH64_MACHINES
 
 
-def _distribution_dependency(distribution: str, notes: list[_Note]) -> _Dependency:
+def _distribution_dependency(distribution: str, module: str, notes: list[_Note]) -> _Dependency:
     """Report one blocking runtime distribution and its installed version.
 
-    The version is read from the installed distribution metadata, never guessed from the lock
-    file: this command reports the environment it is running in. An absent distribution is a
-    broken install rather than a user choice -- it is declared in ``requirements.lock`` -- so
-    the diagnostic points at the lock file a reader has to install from.
+    The status is ``ok`` only when :func:`qrcheck.dependencies.probe` finds the pair usable --
+    the distribution installed *and* its module importing -- because an install that cannot be
+    imported is the same broken environment in a different disguise: ``importlib.metadata``
+    answers with a version for a module that a shadowed entry on ``sys.path`` or an unloadable
+    extension makes impossible to import, and a run then fails with an ``ImportError`` from
+    wherever that module was first touched.  The version is read from the installed distribution
+    metadata, never guessed from the lock file: this command reports the environment it is
+    running in. An unusable distribution is a broken install rather than a user choice -- it is
+    declared in ``requirements.lock`` -- so the diagnostic is the probe's own, which names the
+    distribution, the module, the reason and the lock file a reader has to install from.
     """
-    try:
-        version = importlib.metadata.version(distribution)
-    except importlib.metadata.PackageNotFoundError:
-        notes.append(
-            _Note(
-                f"distribution {distribution} is not installed; it is a blocking runtime "
-                f"dependency, so install the pinned dependencies from requirements.lock",
-                True,
-            )
-        )
-        return _Dependency(distribution, None, STATUS_MISSING, True)
-    return _Dependency(distribution, version, STATUS_OK, True)
+    found = probe(distribution, module)
+    if not found.usable:
+        notes.append(_Note(found.message, True))
+        return _Dependency(distribution, found.version, STATUS_MISSING, True)
+    return _Dependency(distribution, found.version, STATUS_OK, True)
 
 
 # ---------------------------------------------------------------------------

@@ -1,43 +1,34 @@
 """Every one of the twenty-one checks must fail on the defect it asserts against.
 
-For each registered check this module drives the check's own ``cases`` generator with a
-protocol-conforming stub adapter and a stubbed decode result carrying the **one** defect that check
-exists to detect. The assertion is the check's exact :class:`~qrcheck.report.model.Reason`, never
-merely "it failed": a case that failed for an unrelated reason -- a stub returning bad bytes, a
-missing fixture -- would satisfy ``status is failed`` and say nothing about the assertion under
-test (AAP §0.4.4). Every check also carries a **control** round with no defect injected, which must
-pass; the conforming stubs below are what a conforming target looks like to a check, so a control
-round is what makes a negative round attributable to the injected defect rather than to the
-harness.
+Each registered check is driven through its own ``cases`` generator with a protocol-conforming
+stub adapter and a stubbed decode carrying the **one** defect that check exists to detect, and
+the assertion is the check's exact :class:`~qrcheck.report.model.Reason`, never merely "it
+failed": a case failing for an unrelated reason would satisfy ``status is failed`` and say
+nothing about the assertion under test (AAP §0.4.4). Every check also carries a control round
+with no defect injected, which must pass, so a negative round is attributable to the injected
+defect rather than the harness.
 
-Why the decoders are stubs: :func:`_render` is a small segno-backed target that honours module
-size, quiet zone, colours, version and mask pins, the ``png``/``svg`` format and the logo overlay,
-which is what the five ``RN-*`` checks measure, while :func:`_echo` is a conforming decoder -- a
-negative case needs to *put* a specific defect in front of a check, and a real decoder cannot be
-asked for one.
+The decoders are stubs because a negative case has to *put* a defect in front of a check and a
+real decoder cannot be asked for one: :func:`_render` is a segno-backed target honouring module
+size, quiet zone, colours, version and mask pins, the ``png``/``svg`` format and the logo
+overlay, which is what the five ``RN-*`` checks measure, and :func:`_echo` is a conforming
+decoder. :data:`EXPECTED_INVOCATIONS` declares the ``generate`` calls each check makes for ``n``
+cases and the observed count is asserted equal to it, so the one thing a recorded artefact
+cannot show -- a retry -- registers as the declared count plus one. Each check executes a
+documented prefix of its own ascending case order (:attr:`NegativeSpec.case_limit`),
+reproducible from the check's source alone, and three reasons are asserted as the owning module
+documents them rather than as the plan's prose reads them: ``SY-MASK``, ``IV-BAD-OPTION`` and
+``CL-ARTIFACTS`` all report ``value_mismatch`` (``CL-ARTIFACTS``'s skip is
+``unsupported_platform``), while ``RN-SVG``'s payload-less round asserts ``value_mismatch``
+rather than ``sampling_failed``.
 
-:data:`EXPECTED_INVOCATIONS` declares the ``generate`` calls each check makes for ``n`` cases
-(``0`` for the three target-independent checks, ``2 * n`` for ``DT-DETERMINISTIC``, ``n // 7`` for
-``DM-RESILIENCE``, ``warmup + encode_samples`` for ``PF-ENCODE`` read from the resolved
-configuration, ``n`` for the other fifteen) and the observed count is asserted **equal** to it, so
-the one thing a recorded artefact cannot show -- a retry -- registers as the declared count plus
-one. Each check executes a documented prefix of its own ascending case order
-(:attr:`NegativeSpec.case_limit`), taken from the check's own order so it stays reproducible from
-the check's source alone.
-
-Three reasons are asserted as the owning module documents them rather than as the plan's prose
-reads them: ``SY-MASK``, ``IV-BAD-OPTION`` and ``CL-ARTIFACTS`` all report ``value_mismatch`` for
-their defect (``CL-ARTIFACTS``'s skip is ``unsupported_platform``). ``RN-SVG``'s round carries a
-version and no payload, so it asserts ``value_mismatch`` rather than ``sampling_failed``; and
-``DM-RESILIENCE``'s declared eight invocations are expressed as "one invocation per seven cases",
-which :func:`test_declared_invocations_match_the_family_tables` holds against each family module's
-own ``EXPECTED_ENCODES`` so the two cannot drift.
-
-``DM-SEEDED`` reads the symbol, the pristine reading and the damaged variants that
-``DM-RESILIENCE`` memoises on the damage module, so each damage run clears that memo first and
-re-derives it through its own prerequisite. Every artefact is written under the test's own report
-directory, every image the harness opens is closed before ``CL-ARTIFACTS`` executes, and the one
-temporary entry its round injects is removed in a ``finally``.
+``DM-RESILIENCE``'s eight declared invocations are expressed as one per seven cases, held
+against each family module's own ``EXPECTED_ENCODES`` by
+:func:`test_declared_invocations_match_the_family_tables` so the two cannot drift, and
+``DM-SEEDED`` reads the readings that check memoises on the damage module, so each damage run
+clears that memo and re-derives it through its own prerequisite. Every artefact is written under
+the test's own report directory, every image the harness opens is closed before ``CL-ARTIFACTS``
+executes, and the one temporary entry its round injects is removed in a ``finally``.
 """
 
 from __future__ import annotations
@@ -235,15 +226,12 @@ EXPECTED_INVOCATIONS: Final[dict[str, Callable[[int], int]]] = {
     "SY-VERSION-MIN": _per_case,
 }
 
-# ---------------------------------------------------------------------------
-# The negative rounds: one entry per check identifier, control first
-#
-# Each round injects the minimum change the check's own assertion detects, so a failing round
-# cannot be failing for a second reason: one field of the decoded evidence, one property of
-# the rendered artefact, one adapter behaviour, or one configuration threshold.  The reasons
-# are the ones the family modules document; where AAP §0.4.4's prose named a different one,
-# the module docstring records the delta.
-# ---------------------------------------------------------------------------
+# The negative rounds: one entry per check identifier, control first. Each round injects the
+# minimum change the check's own assertion detects -- one field of the decoded evidence, one
+# property of the rendered artefact, one adapter behaviour or one configuration threshold -- so
+# a failing round cannot be failing for a second reason. The reasons are the ones the family
+# modules document; where AAP §0.4.4's prose named another, the module docstring records the
+# delta.
 
 NEGATIVE_CASES: Final[dict[str, NegativeSpec]] = {
     "RT-ROUNDTRIP": NegativeSpec(

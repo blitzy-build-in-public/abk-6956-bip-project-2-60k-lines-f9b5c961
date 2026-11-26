@@ -4,22 +4,20 @@ deliberate exception to it.
 :mod:`qrcheck.config.schema` is the single declaration of ``qrcheck.toml`` (AAP §0.3.4,
 "Configuration contract"), so every case here is derived from :data:`SCHEMA`, from ``models`` or
 from the committed document: a key added without a kind, a rule or a default fails here, each
-declared default is compared with the ``models.DEFAULT_*`` constant its table entry names, and each
-rejection asserts the offending **dotted** key path the exit-2 diagnostic prints. A representative
-subset of the faults is also driven through ``qrcheck run`` with a real ``--config`` path, where
-the answer is exit 2 and no report artefact at all.
-
-The one deliberate exception: a capability *shortfall* -- a target declaring only ``png`` while a
-selected check requires ``svg`` -- is a ``skipped`` result with reason ``unsupported_capability``,
-not a configuration error, because whether a declared set can satisfy a check depends on the
-run-time ``--checks`` selection (AAP §0.12, fourth resolved conflict;
-``tests/unit/test_registry_contract.py`` asserts that half). An unknown capability *member* is
-still exit 2.
+declared default is compared with the ``models.DEFAULT_*`` constant its table entry names, and
+each rejection asserts the offending **dotted** key path the exit-2 diagnostic prints, with a
+representative subset of the faults also driven through ``qrcheck run`` where the answer is exit
+2 and no report artefact at all. The one deliberate exception is a capability *shortfall* -- a
+target declaring only ``png`` while a selected check requires ``svg`` -- which is a ``skipped``
+result with reason ``unsupported_capability`` rather than a configuration error, because whether
+a declared set can satisfy a check depends on the run-time ``--checks`` selection (AAP §0.12,
+fourth resolved conflict; ``tests/unit/test_registry_contract.py`` asserts that half), while an
+unknown capability *member* is still exit 2.
 
 Nothing here loads the repository's own ``qrcheck.toml`` through ``load_config``, which would
-create ``reports/`` inside the checkout, and the unusable-``report_dir`` cases never use ``chmod``,
-which proves nothing as root: one makes ``mkdir`` fail for every user and one monkeypatches the
-loader's probe.
+create ``reports/`` inside the checkout, and the unusable-``report_dir`` cases never use
+``chmod``, which proves nothing as root: one makes ``mkdir`` fail for every user and one
+monkeypatches the loader's probe.
 """
 
 from __future__ import annotations
@@ -58,13 +56,9 @@ _PROBE_TARGET: Final[str] = "probe"
 _TARGET_NAME: Final[str] = "target"
 
 
-# ---------------------------------------------------------------------------
-# Reading the one declaration
-#
-# Nothing below restates a group path, a key name or a default: every case is derived from
-# ``SCHEMA``, ``models`` or the committed document, so this module cannot disagree with the
-# contract it is testing.
-# ---------------------------------------------------------------------------
+# Reading the one declaration. Nothing below restates a group path, a key name or a default:
+# every case is derived from ``SCHEMA``, ``models`` or the committed document, so this module
+# cannot disagree with the contract it is testing.
 
 
 def _group_defaults(group: str) -> dict[str, Any]:
@@ -207,15 +201,11 @@ def _default_constant_name(key: str) -> str:
     return _DEFAULT_CONSTANT_ALIASES.get(key, f"DEFAULT_{key.upper()}")
 
 
-# ---------------------------------------------------------------------------
-# Valid documents, one per adapter kind
-#
-# These are the worked examples every rejection below is a single perturbation of, and
-# ``test_every_adapter_kind_has_a_valid_document`` asserts they cover the whole
-# ``models.ADAPTER_TYPE_NAMES`` vocabulary, so a sixth kind cannot be added without one. A plain
-# ``dict`` (never a mapping proxy) is required where the schema declares the ``dict`` kind, which
+# Valid documents, one per adapter kind. These are the worked examples every rejection below is
+# a single perturbation of, and ``test_every_adapter_kind_has_a_valid_document`` asserts they
+# cover the whole ``models.ADAPTER_TYPE_NAMES`` vocabulary, so a sixth kind cannot be added
+# without one. A plain ``dict`` is required where the schema declares the ``dict`` kind, which
 # is how TOML itself produces a table.
-# ---------------------------------------------------------------------------
 
 _VALID_TARGET_TABLES: Final[Mapping[str, Mapping[str, Any]]] = MappingProxyType(
     {

@@ -5,25 +5,24 @@ configuration -- ``url``, ``method``, ``request_template`` with its eight placeh
 ``image_field`` as a dotted path or the ``_body`` sentinel, ``image_encoding`` as ``base64`` or
 ``raw``, and ``metadata_map`` -- and the adapter itself knows none of it. The mechanical half of
 that MUST NOT is the AST scan in ``tests/unit/test_targets_transport.py``; this module holds the
-positive half, over a socket rather than a mock. ``examples/http_target_server.py`` is a
-load-bearing example (AAP §0.9.2): it runs here as a real process on an ephemeral loopback port,
-is configured into a ``[targets.<name>]`` table, and every assertion below is measured from the
+positive half over a socket rather than a mock. ``examples/http_target_server.py`` is a
+load-bearing example (AAP §0.9.2): it runs here as a real process on an ephemeral loopback
+port, is configured into a ``[targets.<name>]`` table, and every assertion is measured from the
 artefact it answered with.
 
-Two contract details this file states rather than assumes. A non-2xx status from an HTTP target
-is :class:`TargetContractError`, not ``TargetRejected``, because an HTTP target has no
-declared-rejection channel (AAP §0.14.1): the response's own bytes travel on ``body_prefix`` and
-its text stays in the message. A configured ``metadata_map`` path the response does not carry is
-also :class:`TargetContractError` -- AAP §0.3.4's trigger is "missing field named in config" --
-while a field that is *not configured* yields ``None``, because the adapter invents no claim.
-
-Every URL here is the fixture's own ``http://127.0.0.1:<port>``, so the offline guarantee of
-AAP §0.12 is the transport's own. Payloads, colours, module sizes, margins and error levels are
-fixed, and every measurement is a pixel value or a decoded field -- never a duration, a dict's
-order or a clock. Artefacts land under ``tmp_path`` only, image bytes are read through
-:class:`io.BytesIO`, and adapters are closed through :func:`_open_adapter` so no connection
-outlives its test. Nothing is skipped, marked, retried or mocked (AAP §0.4.3, §0.5.6): a server
-that does not announce its port fails the fixture, not a skip here.
+Two contract details are stated rather than assumed: a non-2xx status is
+:class:`TargetContractError` and not ``TargetRejected``, because an HTTP target has no
+declared-rejection channel (AAP §0.14.1), the response's own bytes travelling on
+``body_prefix`` and its text staying in the message; and a configured ``metadata_map`` path the
+response does not carry is also :class:`TargetContractError` -- AAP §0.3.4's trigger is
+"missing field named in config" -- while a field that is *not configured* yields ``None``,
+because the adapter invents no claim. Every URL is the fixture's own
+``http://127.0.0.1:<port>``, so the offline guarantee of AAP §0.12 is the transport's own;
+every measurement is a pixel value or a decoded field, never a duration, a dict's order or a
+clock; artefacts land under ``tmp_path``, image bytes are read through :class:`io.BytesIO`, and
+adapters are closed through :func:`_open_adapter` so no connection outlives its test. Nothing is
+skipped, marked, retried or mocked (AAP §0.4.3, §0.5.6): a server that does not announce its
+port fails the fixture, not a skip here.
 """
 
 from __future__ import annotations
@@ -53,13 +52,9 @@ from qrcheck.targets.base import (
     build_request,
 )
 
-# ---------------------------------------------------------------------------
-# The example server's routes
-#
-# These two paths are the *example's* shape, configured into a target table through ``url``,
-# and they are asserted only as configuration -- never as a fact about
-# ``qrcheck/targets/http.py``, which knows no endpoint at all.
-# ---------------------------------------------------------------------------
+# The example server's routes. These two paths are the *example's* shape, configured into a
+# target table through ``url``, and they are asserted only as configuration -- never as a fact
+# about ``qrcheck/targets/http.py``, which knows no endpoint at all.
 
 _GENERATE_ROUTE: Final[str] = "/generate"
 _RAW_ROUTE: Final[str] = "/raw"
@@ -178,13 +173,9 @@ _REJECTED_REQUESTS: Final[tuple[Any, ...]] = (
 )
 
 
-# ---------------------------------------------------------------------------
-# The two fixture contracts this module borrows
-#
-# Declared as protocols rather than imported from ``tests/integration/conftest.py``: a
-# conftest is not an importable module of the package under test, and stating the members
-# used here keeps the coupling visible.
-# ---------------------------------------------------------------------------
+# The two fixture contracts this module borrows, declared as protocols rather than imported from
+# ``tests/integration/conftest.py``: a conftest is not an importable module of the package under
+# test, and stating the members used here keeps the coupling visible.
 
 
 class _ServerCarrier(Protocol):
@@ -286,13 +277,10 @@ def _open_adapter(config_path: Path, name: str) -> Iterator[Adapter]:
         adapter.close()
 
 
-# ---------------------------------------------------------------------------
-# Measuring the artefact
-#
-# The placeholder proofs measure pixels rather than echo the request: an endpoint that repeated
-# the request back would prove only that the framework can serialise a dict, while a quiet zone,
-# a module colour and a pixel dimension are properties of the symbol actually produced.
-# ---------------------------------------------------------------------------
+# Measuring the artefact. The placeholder proofs measure pixels rather than echo the request: an
+# endpoint that repeated the request back would prove only that the framework can serialise a
+# dict, while a quiet zone, a module colour and a pixel dimension are properties of the symbol
+# actually produced.
 
 
 def _png_image(symbol: GeneratedSymbol) -> Image.Image:

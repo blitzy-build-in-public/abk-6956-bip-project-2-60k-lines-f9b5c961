@@ -1,34 +1,30 @@
 """The ``--checks`` grammar, the ``--class`` filter and the two empty-result diagnostics.
 
 AAP §0.3.4 ("Identity and selection") fixes three token forms for ``--checks`` -- an exact
-identifier (``RT-ROUNDTRIP``), an identifier glob (``SY-*``) and a family selector
-(``family:render``) -- makes a selection that matches nothing an exit-2 condition that echoes the
-selector **verbatim** with no report written, and makes ``--class`` a repeatable glob over the
-corpus record's class name whose zero-record outcome is a second, differently worded exit-2
-condition; §0.6.6 rows 1 and 2 name this module as the gate for both states.
+identifier, an identifier glob and a family selector such as ``family:render`` -- makes a
+selection that matches nothing an exit-2 condition echoing the selector **verbatim** with no
+report written, and makes ``--class`` a repeatable glob whose zero-record outcome is a second,
+differently worded exit 2; §0.6.6 rows 1 and 2 name this module as the gate for both states.
+Pinned: the three forms resolve as the plan says, are unioned, de-duplicated and returned
+**sorted by identifier ascending**, asserted against a selector whose token order is
+deliberately the reverse of the answer, because a ``results[]`` order that followed the typing
+order would break the determinism promise of AAP §0.5.3; a mistyped token raises
+:class:`SelectionError` carrying the selector as typed rather than being dropped, since a
+dropped token would stop a check executing while the run still reported a clean pass -- the
+vacuous suite AAP §0.4.1 forbids; the two empty states are proved separately, so collapsing
+them would lose the "name the filter" half of §0.6.6 row 2; and ``--class 'boundary-*'``
+selects the 40-record boundary subset criterion 2 runs at EC L, Q and H, repeated options
+combining as a union.
 
-Pinned: the three token forms resolve as the plan says, are unioned, de-duplicated and returned
-**sorted by identifier ascending**, asserted against a selector whose token order is deliberately
-the reverse of the answer, because a ``results[]`` order that depended on how the user typed
-``--checks`` would break the determinism promise of AAP §0.5.3; every token must select something,
-so a mistyped token raises :class:`SelectionError` carrying the selector as typed rather than being
-dropped, because a dropped token would stop a check from executing while the run still reported a
-clean pass -- the vacuous suite AAP §0.4.1 forbids; the two empty states are proved separately, so
-collapsing them into one message would lose the "name the filter" half of §0.6.6 row 2; and
-``--class 'boundary-*'`` selects the 40-record boundary subset success criterion 2 runs at EC L, Q
-and H, with repeated options combining as a union.
-
-Registration is forced here: ``qrcheck.registry`` deliberately leaves
-:data:`~qrcheck.registry.check.REGISTRY` empty when it is imported, because a package that
-populated it would make the executed set depend on whether some unrelated module happened to import
-it (AAP §0.5), so this module loads the families once and asserts the registry holds exactly
-``CHECK_IDS`` before any selector is resolved -- a grammar test against a half-populated registry
-would pass while selecting nothing. It decides no exit code (``qrcheck.registry.selection`` raises
-and ``qrcheck.cli.run`` maps the raise to exit 2, asserted through the real command line) and
-re-implements neither the corpus filter nor the zero-record condition. The grammar cases touch the
-registry only, and the one command-line run that executes is restricted with ``--checks
-RT-ROUNDTRIP`` and two ``--class`` globs, so it exercises 42 cases instead of the 1,283 of a full
-run.
+Registration is forced here, because ``qrcheck.registry`` deliberately leaves ``REGISTRY`` empty
+on import -- a package that populated it would make the executed set depend on whether some
+unrelated module happened to import it (AAP §0.5) -- so the families are loaded once and the
+registry asserted to hold exactly ``CHECK_IDS`` before any selector is resolved, a grammar test
+against a half-populated registry otherwise passing while selecting nothing. No exit code is
+decided here: ``qrcheck.registry.selection`` raises, ``qrcheck.cli.run`` maps that to exit 2,
+and the real command line proves it. The one command-line run that executes is restricted with
+``--checks RT-ROUNDTRIP`` and two ``--class`` globs, exercising 42 cases rather than the 1,283
+of a full run.
 """
 
 from __future__ import annotations

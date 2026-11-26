@@ -1,125 +1,66 @@
 """The deliberately broken self-check target: five injections the suite must catch.
 
-This target is the other half of the framework's non-vacuity proof.  ``qrcheck run
---adapter reference`` must come back with zero failed, zero errored and zero skipped
-results; ``qrcheck run --adapter defective`` must fail **exactly** the nine checks the
-five injections target and leave the other twelve passing **in the same run**.  A
-"fix" that makes a tenth check fail is a defect in the framework, not in this target,
-and so is a change that makes one of the nine pass.  No check may be weakened,
-skipped, retried or threshold-relaxed to accommodate this target: the injections here
-and their expected failing set are acceptance criteria in their own right.
+This target is the other half of the framework's non-vacuity proof.  ``qrcheck run --adapter
+defective`` must fail **exactly** the nine checks the five injections target and leave the
+other twelve passing in the same run; a tenth failure, or one of the nine passing, is a
+framework defect.  No check may be weakened, skipped, retried or threshold-relaxed to
+accommodate this target.
 
-The five injections, each the minimum change its own check detects
-------------------------------------------------------------------
-D1 ``wrong_ec_level``
-    Encodes one error-correction level below the request (L->L, M->L, Q->M, H->Q)
-    while the metadata it declares claims the requested level.  Caught by
-    ``SY-EC-MATCH``; ``SY-VERSION-MIN`` and ``SY-MATRIX-EQUIV`` follow necessarily,
-    because a lower level fits the same payload in a smaller version at a boundary
-    and a pinned-EC matrix cannot match.
-D2 ``truncated_payload``
-    Encodes only the first 64 bytes of a longer payload **when the full length still
-    selects the same version at the level actually encoded**, and leaves a payload
-    alone when truncating it would cross a version boundary.  Caught by
-    ``RT-ROUNDTRIP``; ``MD-CHARSET`` follows, because its multi-byte and binary
-    payloads are longer than the window.  With the window fixed this way the
-    truncated payload still occupies the same version, so ``SY-VERSION-MIN`` keeps
-    D1 as its single cause and no other check sees a difference.  The eight synthetic
-    ``SY-MATRIX-EQUIV`` payloads are 64 bytes or shorter by construction, so the
-    injection never reaches them.  The predicate itself is
-    :func:`qrcheck.corpus.capacity.truncation_keeps_version`, and the corpus builder's
-    witness check calls the same function, so the injection and the proof that it is
-    observable are one rule rather than two that could disagree.  This target evaluates
-    it at the level the symbol is encoded at, which is the reading the cascade
-    containment requires: only that level keeps the shortened symbol on the version the
-    whole one occupies, while at the requested level the cut would move a payload across
-    a version boundary and put a check that must pass at risk.
-D3 ``missing_quiet_zone``
-    Renders a quiet zone of one module where four or more were requested, and sizes
-    the image from the zone actually drawn.  Caught by ``RN-QUIET-ZONE``;
-    ``RN-MODULE-SIZE`` follows, because the dimension contract is
-    ``(modules + 2 * quiet_zone) * module_size``.  The stop is at one module and
-    never zero, so the primary decoder still reads the symbol and ``RT-ROUNDTRIP``
-    keeps passing for these cases.
-D4 ``non_deterministic_mask``
-    Cycles the mask per call (0, 1, 2, ... modulo 8) when the request pins none, and
-    honours an explicit pin.  Caught by ``DT-DETERMINISTIC`` and by nothing else:
-    because a pin is honoured, ``SY-MASK`` and ``SY-MATRIX-EQUIV`` stay clean, and an
-    unpinned mask is an encoder choice rather than a framework expectation.
-D5 ``over_capacity_acceptance``
-    Accepts a payload above the capacity of a pinned version and level and silently
-    encodes a truncated payload instead of refusing it.  Caught by
-    ``IV-OVERCAPACITY``, which builds its own over-capacity payload outside the
-    corpus, so no corpus-driven check sees it.
+D1 ``wrong_ec_level`` encodes one level below the request (M->L, Q->M, H->Q) while declaring
+the requested one, and ``SY-EC-MATCH`` catches it; ``SY-VERSION-MIN`` and ``SY-MATRIX-EQUIV``
+follow, because a lower level fits the same payload in a smaller version at a boundary and a
+pinned-EC matrix cannot match.  D2 ``truncated_payload`` encodes the first 64 bytes of a
+longer payload when the shortened payload still selects the version the whole one occupies at
+the level actually encoded -- the predicate
+:func:`qrcheck.corpus.capacity.truncation_keeps_version`, which the corpus builder's witness
+check also calls, so the injection and the proof that it is observable are one rule rather
+than two that could disagree.  ``RT-ROUNDTRIP`` catches it and ``MD-CHARSET`` follows, whose
+multi-byte and binary payloads are longer than the window; the eight synthetic
+``SY-MATRIX-EQUIV`` payloads are 64 bytes or shorter, so the injection never reaches them and
+D1 keeps its single cause.  D3 ``missing_quiet_zone`` draws one module where four or more were
+requested and sizes the image from the zone actually drawn, which ``RN-QUIET-ZONE`` catches
+and ``RN-MODULE-SIZE`` follows through ``(modules + 2 * quiet_zone) * module_size``; the stop
+is at one module and never zero, so the primary decoder still reads the symbol and
+``RT-ROUNDTRIP`` keeps passing.  D4 ``non_deterministic_mask`` cycles the mask per call
+(0, 1, 2, ... modulo 8) when the request pins none and honours an explicit pin, so
+``DT-DETERMINISTIC`` alone fails.  D5 ``over_capacity_acceptance`` accepts a payload above the
+capacity of a pinned version and level and silently encodes a truncated one instead of
+refusing it, which ``IV-OVERCAPACITY`` catches with a payload it builds outside the corpus.
 
-The nine checks that must fail
-------------------------------
-``RT-ROUNDTRIP``, ``SY-VERSION-MIN``, ``SY-EC-MATCH``, ``SY-MATRIX-EQUIV``,
+Must fail: ``RT-ROUNDTRIP``, ``SY-VERSION-MIN``, ``SY-EC-MATCH``, ``SY-MATRIX-EQUIV``,
 ``MD-CHARSET``, ``RN-QUIET-ZONE``, ``RN-MODULE-SIZE``, ``DT-DETERMINISTIC``,
-``IV-OVERCAPACITY``.  :func:`expected_failing_ids` derives that set from
-:data:`DEFECTS` and refuses to return unless it is exactly those nine.
+``IV-OVERCAPACITY``.  Must still pass: ``SY-MASK``, ``MD-MODE-OPTIMAL``, ``RN-CONTRAST``,
+``RN-SVG``, ``RN-LOGO``, ``DM-RESILIENCE``, ``DM-SEEDED``, ``IV-EMPTY``, ``IV-BAD-OPTION``,
+``PF-ENCODE``, ``PF-DECODE``, ``CL-ARTIFACTS``.  That second half passes only because the
+conforming validation is inherited rather than re-implemented, and because ``RN-LOGO`` and
+``DM-RESILIENCE`` derive their budgets from the EC level decoded out of the symbol rather than
+from the requested one.
 
-The twelve checks that must still pass
---------------------------------------
-``SY-MASK``, ``MD-MODE-OPTIMAL``, ``RN-CONTRAST``, ``RN-SVG``, ``RN-LOGO``,
-``DM-RESILIENCE``, ``DM-SEEDED``, ``IV-EMPTY``, ``IV-BAD-OPTION``, ``PF-ENCODE``,
-``PF-DECODE``, ``CL-ARTIFACTS``.  This half is the easy one to break by accident:
-``IV-EMPTY`` and the four ``IV-BAD-OPTION`` probes pass here only because the
-conforming validation is inherited rather than re-implemented, and ``RN-LOGO`` and
-``DM-RESILIENCE`` pass only because they derive their budgets from the EC level
-decoded out of the symbol rather than from the requested one.
+Every encode goes through :meth:`~qrcheck.targets.reference.ReferenceAdapter._encode`, which
+passes ``boost_error=False`` and calls ``segno.make_qr``: a boosted level would change the
+level the injection is about and a Micro symbol has no ``4V+17`` module count and no Version
+1-40 number.  This module has no encoding path of its own and changes only the six protected
+hooks.  :data:`DEFECTS` declares what each injection does and :func:`expected_failing_ids`
+derives the failing set from it, refusing to return unless that set is exactly the nine IDs;
+``qrcheck/registry/expectations.py`` declares the same sets independently, because it must not
+import a concrete adapter, and ``tests/integration/test_defective_run.py`` holds the two in
+set equality.
 
-Segno discipline, inherited and never re-implemented
-----------------------------------------------------
-Every encode goes through :meth:`~qrcheck.targets.reference.ReferenceAdapter._encode`,
-which passes ``boost_error=False`` and calls ``segno.make_qr`` -- Model 2 only, never
-Micro QR.  A boosted level would change the EC level the injection is about, and a
-Micro symbol has no ``4V+17`` module count, no Version 1-40 number and a different
-format-information layout, so every symbol-geometry assertion would be wrong.  This
-module therefore contains no encoding path of its own; it changes only the six
-protected hooks named below, two of which carry D1 and two of which carry D2 and D5.
+The D4 mask counter is the only mutable state in this module and it is per-instance, so two
+adapters cannot share one sequence; nothing here reads a clock, ``random``, ``hash()``,
+``id()``, the environment or a file.
 
-What this table declares, and what is declared beside it
---------------------------------------------------------
-:data:`DEFECTS` is the declaration of what each injection does and what it is expected
-to break, and :func:`expected_failing_ids` derives the failing set from it, refusing to
-return unless that set is exactly the nine IDs the acceptance criteria name.  It is not
-the declaration a consumer reads.  ``qrcheck/registry/expectations.py`` declares the
-per-defect expectation sets itself, deliberately: it must not import a concrete adapter,
-because ``qrcheck list`` imports ``qrcheck.registry`` on every invocation and this
-target imports segno.  The two declarations are therefore independent, and they are kept
-in agreement by the integration gate -- ``tests/integration/test_defective_run.py``
-asserts **set equality** between the check IDs that failed or errored and
-``SELF_CHECK_TARGETS["defective"]`` -- so an edit on one side never moves the other.
-
-State, and why it lives on the instance
----------------------------------------
-The mask counter D4 needs is the only mutable state in this module, and it is
-per-instance: a module-level or class-level counter would make two adapters share one
-sequence and would make ``DT-DETERMINISTIC``'s observation depend on run order.
-Nothing here reads a clock, ``random``, ``hash()``, ``id()``, the environment or a
-file, so two runs of the same requests produce the same symbols.
-
-Layering, and which errors can escape
--------------------------------------
-This module imports the standard library, :mod:`qrcheck.targets.reference` (which
-supplies segno and the whole render path), :mod:`qrcheck.targets.base` and
-:mod:`qrcheck.corpus.capacity`.  It imports no decoder, no image library, no
-transport client and none of ``qrcheck.checks``, ``qrcheck.report``,
-``qrcheck.decode`` or ``qrcheck.registry``.
-
-The errors that can escape it are the same three the conforming target raises:
-:class:`~qrcheck.targets.base.TargetRejected` for a request the target's own contract
-refuses -- an empty payload, an error level outside L/M/Q/H, a version or mask
-outside its range, a non-positive module size, a negative quiet zone, a malformed
-colour, a below-floor contrast ratio, or a payload that does not fit even Version 40
--- :class:`~qrcheck.targets.base.TargetContractError` when segno or the stream writer
-fails for a reason the request does not explain, and
-:class:`~qrcheck.targets.base.TargetUnsupported` from the capability gate.
-:class:`~qrcheck.targets.base.TargetUnavailable` and
-:class:`~qrcheck.targets.base.TargetTimeout` are never raised: this adapter is an
-in-process call.  Note the one deliberate hole D5 opens: at a pinned version an
-over-capacity payload is **not** rejected, which is the defect, not an oversight.
+Imports: the standard library, :mod:`qrcheck.targets.reference`, :mod:`qrcheck.targets.base`
+and :mod:`qrcheck.corpus.capacity` -- no decoder, image library, transport client, check,
+report or registry.  The errors that can escape are :class:`~qrcheck.targets.base.TargetRejected`
+for a request its own contract refuses (empty payload, level outside L/M/Q/H, version or mask
+out of range, non-positive module size, negative quiet zone, malformed colour, below-floor
+contrast, a payload that does not fit even Version 40),
+:class:`~qrcheck.targets.base.TargetContractError` when segno or the stream writer fails for a
+reason the request does not explain, and :class:`~qrcheck.targets.base.TargetUnsupported` from
+the capability gate.  Being an in-process call it never raises ``TargetUnavailable`` or
+``TargetTimeout``, and the hole D5 opens is deliberate: at a pinned version an over-capacity
+payload is not rejected.
 """
 
 from __future__ import annotations

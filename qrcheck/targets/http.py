@@ -1,112 +1,89 @@
 """The loopback-only ``http`` adapter: every request and response shape comes from configuration.
 
-:class:`HttpAdapter` drives a QR generator reachable over loopback HTTP.  Nothing in this
-module knows a vendor's endpoint, field name or response key: the URL, the method, the
-request body, the path to the image inside the response, the way that image is carried and
-the paths to any declared metadata all come from the ``[targets.<name>]`` table
-(:class:`qrcheck.config.models.HTTPTarget`), so a fourth vendor is a configuration edit and
-not a code change.
+:class:`HttpAdapter` drives a QR generator reachable over loopback HTTP.  Nothing here knows a
+vendor's endpoint, field name or response key: the URL, the method, the request body, the path
+to the image and the paths to any declared metadata all come from the ``[targets.<name>]``
+table (:class:`qrcheck.config.models.HTTPTarget`), so a fourth vendor is a configuration edit
+and not a code change.
 
-Request templates.  ``request_template`` is the mapping the adapter sends after substituting
-the eight placeholders of :data:`qrcheck.config.models.TEMPLATE_FIELDS`: ``payload_b64`` (the
-payload bytes, base64-encoded), ``payload_utf8`` (the payload as UTF-8 text, omitted when it
-is not valid UTF-8), ``ec_level``, ``format``, ``size`` (module edge in pixels, integer,
-when pinned), ``margin`` (quiet zone in modules, integer, when pinned), ``fg`` and ``bg`` (the
-dark- and light-module colours as ``#rrggbb``).  A string leaf that is one whole placeholder
-(``"{size}"``) receives the value with its own type, so ``{size}`` arrives as a JSON number
-rather than as text; a placeholder embedded in a longer string (``"--ec={ec_level}"``)
-receives the textual form.  Everything else in the template -- numbers, booleans, null -- is
-sent unchanged.  Conversion and format specifications (``{size:d}``, ``{payload_utf8!s}``)
-are honoured and ``{{``/``}}`` are literal braces, exactly as the configuration schema
-validates them.
-
-**A placeholder whose request value is ``None`` omits the containing key** rather than
-sending an empty string: ``module_size_px`` and ``quiet_zone_modules`` are ``None`` whenever
-a case lets the target apply its own default, and a key that is simply absent is the only
-way to say "unspecified" over a protocol whose values are otherwise always present.  The same
-rule covers ``{payload_utf8}`` meeting a payload that is not valid UTF-8: that key is
-dropped, and a template carrying ``payload_utf8`` as its only payload channel refuses such a
+``request_template`` is the mapping sent after substituting the eight placeholders of
+:data:`qrcheck.config.models.TEMPLATE_FIELDS` -- ``payload_b64``, ``payload_utf8``,
+``ec_level``, ``format``, ``size``, ``margin``, ``fg`` and ``bg``.  A string leaf that is one
+whole placeholder (``"{size}"``) receives the value with its own type, so ``{size}`` arrives as
+a JSON number rather than as text; a placeholder embedded in a longer string receives the
+textual form; numbers, booleans and null are sent unchanged; conversion and format
+specifications are honoured and ``{{``/``}}`` are literal braces, as the configuration schema
+validates them.  A placeholder whose request value is ``None`` **omits the containing key**
+rather than sending an empty string, which is the only way to say "unspecified" over a protocol
+whose values are otherwise always present; the same rule drops ``payload_utf8`` for a payload
+that is not valid UTF-8, and a template carrying it as its only payload channel refuses such a
 payload with :class:`TargetUnsupported` instead of sending a request with no payload at all.
 
 ``GET`` carries the substituted template as query parameters, so every leaf must be a scalar
 and a nested table or array is a :class:`TargetContractError` naming the template path that
 holds it.  Passing the mapping as ``params=`` rather than concatenating a URL is what keeps a
-base64 payload's ``+``, ``/`` and ``=`` intact through the query string; a hand-built query
-string would turn ``+`` into a space and corrupt exactly the binary payloads the corpus is
-full of.  Every other method sends the template as a JSON body.
+base64 payload's ``+``, ``/`` and ``=`` intact through the query string: a hand-built query
+string would turn ``+`` into a space and corrupt exactly the binary payloads the corpus is full
+of.  Every other method sends the template as a JSON body.
 
-Responses.  ``image_field`` names the image inside the response: ``_body`` means the
-response body *is* the image, and any other value is a dotted path into the parsed JSON
-response (``data.0.image``), read by the product's single dotted-path resolver
+``image_field`` names the image inside the response: ``_body`` means the response body *is* the
+image, and any other value is a dotted path into the parsed JSON response (``data.0.image``),
+read by the product's single dotted-path resolver
 :func:`qrcheck.targets.base.resolve_dotted_path`.  ``image_encoding`` says how that value
 carries the image: ``base64`` decodes it as base64 text, ``raw`` takes a string's UTF-8 bytes
 or a byte value unchanged.  Whichever route the image takes,
 :func:`qrcheck.targets.base.ensure_image_bytes` is the gate that refuses an empty,
 unrecognisable or wrong-format body; whether those bytes are a *valid* image stays the decode
-layer's decision and is not repeated here.  ``metadata_map`` maps each of the four framework
-metadata fields -- ``version``, ``ec``, ``mask``, ``mode`` -- to the dotted path carrying it,
-and the values land in ``GeneratedSymbol.declared_*`` as evidence a check may compare
-against, never as the assertion it makes.  A target whose ``image_field`` is ``_body`` has no
-JSON envelope, so it declares no metadata.
+layer's decision.  ``metadata_map`` maps each of ``version``, ``ec``, ``mask`` and ``mode`` to
+the dotted path carrying it, and the values land in ``GeneratedSymbol.declared_*`` as evidence
+a check may compare against, never as the assertion it makes.  A target whose ``image_field``
+is ``_body`` has no JSON envelope, so it declares no metadata.
 
-Loopback only.  The framework is offline: the only hosts it may reach are ``127.0.0.1``,
-``localhost`` and ``::1``, and that is enforced when the configuration is loaded
-(``qrcheck.config.schema``) with exit 2 naming the offending host.  The constructor re-checks
-the URL anyway and raises :class:`ValueError` -- a framework defect rather than a user
-diagnostic -- so a caller that builds an ``HTTPTarget`` directly cannot aim the transport off
-loopback.  The client is created with ``follow_redirects=False``, because a redirect could
-carry the request to a host the product forbids, and with ``trust_env=False``, because an
-``HTTP_PROXY`` or ``HTTPS_PROXY`` environment variable would route a loopback request
-through a remote host.  Between them the offline guarantee holds at the transport layer and
-not merely in configuration.  No credential, cookie jar, proxy setting, authorisation header
-or telemetry is read, written or sent.
+The framework is offline, so the only hosts the transport may reach are ``127.0.0.1``,
+``localhost`` and ``::1``.  ``qrcheck.config.schema`` enforces that when the configuration is
+loaded, with exit 2 naming the offending host, and the constructor re-checks the URL and raises
+:class:`ValueError` -- a framework defect rather than a user diagnostic -- so a caller that
+builds an ``HTTPTarget`` directly cannot aim the transport off loopback.  The client is created
+with ``follow_redirects=False``, because a redirect could carry the request to a host the
+product forbids, and with ``trust_env=False``, because an ``HTTP_PROXY`` or ``HTTPS_PROXY``
+environment variable would route a loopback request through a remote host.  No credential,
+cookie jar, proxy setting, authorisation header or telemetry is read, written or sent.
 
-A non-2xx status is always :class:`TargetContractError`, never :class:`TargetRejected`: the
-plan gives an HTTP target no declared-rejection channel (``cli`` and ``library`` have one
-through ``returns``), so a refusal and a crash are reported alike and the
-``IV-BAD-OPTION``/``IV-EMPTY`` probes, which pass only on a declared rejection, fail against
-an HTTP target by design rather than by oversight.  The body that arrived travels on the
-error's ``body_prefix``, so the evidence field ``hex_prefix`` records the response itself and
-not the diagnostic built from it -- for every refusal of a response this module actually
-received, while a body with no bytes at all has nothing to attach.
+A non-2xx status is always :class:`TargetContractError`, never :class:`TargetRejected`: the plan
+gives an HTTP target no declared-rejection channel, so a refusal and a crash are reported alike
+and the ``IV-*`` probes, which pass only on a declared rejection, fail against an HTTP target by
+design.  The body that arrived travels on the error's ``body_prefix``, so the evidence field
+``hex_prefix`` records the response itself rather than the diagnostic built from it.
 
-The body is read once, under a bound.  A response body is streamed from the transport and
-accumulated, never fetched as one already-complete object, and the read stops the moment the
-total passes :data:`_MAX_RESPONSE_BODY_BYTES`.  A misbehaving loopback target is the code
-under test, so an unbounded read would let it exhaust this process' memory; the bound is
-16 MiB, orders of magnitude above any legitimate artefact (the extreme 1640x1640 px geometry
-the adapter is exercised at is about 1.6 kB, and a Version 40 symbol at that geometry about
-21 kB), so it refuses a runaway response without refusing a real one.  Exceeding it is a
+The body is read once, under a bound: it is streamed from the transport and accumulated, and the
+read stops the moment the total passes :data:`_MAX_RESPONSE_BODY_BYTES`.  A misbehaving
+loopback target is the code under test, so an unbounded read would let it exhaust this process'
+memory; the bound is 16 MiB, orders of magnitude above any legitimate artefact (the extreme
+1640x1640 px geometry is about 1.6 kB and a Version 40 symbol at that geometry about 21 kB), so
+it refuses a runaway response without refusing a real one.  Exceeding it is a
 :class:`TargetContractError` naming the bound, the number of bytes received, the target, the
-method and the URL: the response arrived, so it is a contract failure rather than an
-unreachable target.  Everything after the read -- the status check, the JSON parse, the image
-extraction and the metadata lookup -- works on the bytes already in hand.
+method and the URL -- the response arrived, so it is a contract failure and not an unreachable
+target.  Everything after the read -- the status check, the JSON parse, the image extraction and
+the metadata lookup -- works on the bytes already in hand.
 
-A defect is not a target fault: :meth:`HttpAdapter.generate` converts the library families
-named in its own code -- ``httpx``, ``OSError``, and the JSON, base64 and text-decoding
-errors -- into the framework's adapter errors, and nothing else.  An exception outside those
-families was raised by this module or by something it calls, so it is a framework defect and
-propagates out of the adapter with its traceback, which is what makes the runner record an
-``error`` result for the case rather than a ``failed`` one blamed on the target.
+:meth:`HttpAdapter.generate` converts the library families named in its own code -- ``httpx``,
+``OSError``, and the JSON, base64 and text-decoding errors -- into the framework's adapter
+errors and nothing else: an exception outside those families was raised by this module or
+something it calls, so it propagates with its traceback and the runner records an ``error``
+result for the case rather than a ``failed`` one blamed on the target.
 
-Configuration faults this module refuses itself.  The configuration schema decides the
-template's shape -- a table or the JSON text of an object -- together with its placeholders,
-the ``image_encoding`` enum, the loopback URL and the ``metadata_map`` field names before any
-record exists, so a document that gets one of those wrong leaves as exit 2 naming the key.
-What remains here is the belt-and-braces re-check for a record built without the loader, plus
-the one fault the schema cannot decide at all, all four reported as
+Configuration faults this module refuses itself, all reported as
 :class:`qrcheck.config.schema.ConfigError` so they leave as exit 2 naming the offending key
 instead of as exit 3 with a traceback: a ``request_template`` that is neither a table nor the
-JSON text of an object, or whose JSON text does not parse; a placeholder that is not one of
-the eight; a ``metadata_map`` naming a framework field outside ``version``, ``ec``, ``mask``
-and ``mode``; and a template carrying no payload placeholder at all, since every request it
-could build would omit the payload.
+JSON text of an object, or whose JSON text does not parse; a placeholder that is not one of the
+eight; a ``metadata_map`` naming a framework field outside ``version``, ``ec``, ``mask`` and
+``mode``; and a template carrying no payload placeholder at all, since every request it could
+build would omit the payload.
 
-Layering: the standard library, :mod:`httpx`, and three project modules --
-:mod:`qrcheck.config.models`, :mod:`qrcheck.config.schema` and
-:mod:`qrcheck.targets.base`.  No check, report, decode or registry module is imported, no
-image library is imported, and ``qrcheck/checks/`` may import the adapter port but never this
-module; ``tests/unit/test_layering.py`` holds both directions mechanically.
+Layering: the standard library, :mod:`httpx`, :mod:`qrcheck.config.models`,
+:mod:`qrcheck.config.schema` and :mod:`qrcheck.targets.base` -- no check, report, decode or
+registry module and no image library, which ``tests/unit/test_layering.py`` holds in both
+directions.
 """
 
 from __future__ import annotations

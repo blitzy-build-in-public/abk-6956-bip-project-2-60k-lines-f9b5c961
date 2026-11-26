@@ -1,35 +1,26 @@
 """The 15-bit format-information contract of ``qrcheck.decode.format_info``.
 
 The fifteen format bits beside the top-left finder pattern, repeated along the top-right and
-bottom-left edges, carry the EC level and the mask reference, which makes them the product's only
-source of the *mask* and its independent second source of the *EC level*: ``zxing-cpp`` 2.2.0
-reports an EC level but neither version nor mask, ``opencv`` reports none of the three, yet
-``SY-MASK``, ``SY-MATRIX-EQUIV`` and ``SY-EC-MATCH`` must assert all three (IM-1) -- so a wrong
-reading here is wrong in three checks at once, and the contract is pinned exhaustively rather than
-by example.
+bottom-left edges, carry the EC level and the mask reference, which makes them the product's
+only source of the *mask* and its independent second source of the *EC level*: ``zxing-cpp``
+2.2.0 reports an EC level but neither version nor mask and ``opencv`` reports none of the three,
+yet ``SY-MASK``, ``SY-MATRIX-EQUIV`` and ``SY-EC-MATCH`` must assert all three (IM-1), so a
+wrong reading here is wrong in three checks at once and the contract is pinned exhaustively
+rather than by example.
 
-* **The code.** ISO/IEC 18004:2015(E) §7.9 defines a BCH(15, 5) code with generator ``0x537``,
-  codewords XOR-masked with ``0x5412`` and minimum Hamming distance 7; the 32 codewords are
-  generated through ``encode_format_info`` and never transcribed, so a hand-copied table cannot
-  drift.
-* **Three bits corrected, four never claimed.** ``2 * 3 < 7`` is why radius-three correction is
-  unambiguous, so all 32 x C(15, 3) = 14560 three-bit corruptions must come back as the original
-  pair with ``bit_errors == 3``, while a four-bit corruption must never be reported as that pair.
-* **Both copies, with their distances.** A majority vote across the two copies would invent a third
-  value present in neither, so the reader prefers the copy that spent less redundancy and reports
-  both.
-* **Never an exception.** An unreadable grid, an unusable module count and a copy damaged beyond
-  its redundancy all come back as ``None``: a symbol defect has to become a failed check, never an
-  ``error`` result that destroys the run-level attribution the self-check targets depend on.
-* **The placement convention, proved against a real symbol.** Every case writes its bits through
-  ``format_info_positions`` and reads them back through the same table, so a mirrored, rotated or
-  bit-reversed convention would satisfy all of them at once; the real-symbol proof therefore
-  samples a ``segno``-placed symbol and requires the recovered pair to be the ``error`` and
-  ``mask`` it was built with -- the one expectation this module cannot derive from its own table.
-
-Determinism: the codeword tables are a sorted product of the four EC levels and masks 0-7, every
-parametrisation id comes from a declaration rather than from iteration order, and nothing reads a
-clock, a locale, ``hash()``, ``id()`` or a threshold from ``qrcheck.toml``.
+ISO/IEC 18004:2015(E) §7.9 defines a BCH(15, 5) code with generator ``0x537``, codewords
+XOR-masked with ``0x5412`` and minimum Hamming distance 7; the 32 codewords are generated
+through ``encode_format_info`` rather than transcribed, and ``2 * 3 < 7`` is why radius-three
+correction is unambiguous, so all 32 x C(15, 3) = 14560 three-bit corruptions must return the
+original pair with ``bit_errors == 3`` while a four-bit corruption must never be reported as
+that pair. A majority vote across the two copies would invent a third value present in neither,
+so the reader prefers the copy that spent less redundancy and reports both; an unreadable grid,
+an unusable module count or a copy damaged beyond its redundancy all come back ``None``, because
+a symbol defect must become a failed check rather than an ``error`` result; and since every case
+writes its bits and reads them back through the same ``format_info_positions`` table, a
+mirrored, rotated or bit-reversed convention would satisfy all of them at once, so a
+``segno``-placed symbol proves the convention against the ``error`` and ``mask`` it was built
+with.
 """
 
 from __future__ import annotations
@@ -557,13 +548,12 @@ def test_copy_one_follows_the_module_count(version: int) -> None:
     assert copy_one[8:] == tuple((module_count - 7 + offset, 8) for offset in range(7))
 
 
-# ISO/IEC 18004:2015(E) §7.9.1 is the clause that places these fifteen bits twice,
-# and segno places them by that clause rather than by this module's table. A grid
-# written and read back through ``format_info_positions`` cannot prove the
-# convention, because a mirrored, rotated or bit-reversed table satisfies both
-# halves of that round trip; the expectation here is instead the pair the symbol was
-# built with -- segno's own ``error`` and ``mask`` -- which no reading of this
-# module's table can derive.
+# ISO/IEC 18004:2015(E) §7.9.1 is the clause that places these fifteen bits twice, and segno
+# places them by that clause rather than by this module's table. A grid written and read back
+# through ``format_info_positions`` cannot prove the convention, because a mirrored, rotated or
+# bit-reversed table satisfies both halves of that round trip; the expectation here is instead
+# the pair the symbol was built with -- segno's own ``error`` and ``mask`` -- which no reading
+# of this module's table can derive.
 @pytest.mark.parametrize("case", REAL_SYMBOL_CASES, ids=_symbol_id)
 def test_a_real_symbol_reports_the_level_and_mask_it_was_built_with(
     case: tuple[int, str, int],

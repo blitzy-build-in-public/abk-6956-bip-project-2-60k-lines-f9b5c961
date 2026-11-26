@@ -1,29 +1,25 @@
 """The one line-count metric, its exclusion list, and the ``--limit`` gate on top of it.
 
 ``qrcheck/loc.py`` is the product's only definition of "tracked physical lines" and
-``qrcheck/cli/loc.py`` the only place that compares that figure with the ceiling, so a second
-counting rule anywhere -- in the command, in a report writer, in a test -- would let
-``RunResult.loc_count`` and the CI gate disagree about one tree. Four levels are held: the counting
-rule (every physical line counts, blank and comment lines included, a final unterminated line
-counts too, and the ``LF`` byte rather than decoded text is counted); the walk (the name-based
-exclusion list prunes generated and metadata directories, no symlink is followed, report paths are
-root-relative POSIX strings, the collections are sorted and immutable and ``total`` is the sum of
-the per-file counts); the gate (``0`` under the limit, ``1`` at or above it, ``2`` for a missing
-path, and the configured ``loc_limit`` when no option overrides it); and the property that makes
-the rest worth anything -- no other module defines a line-counting function and the command imports
-the metric instead of repeating the walk.
+``qrcheck/cli/loc.py`` the only place that compares the figure with the ceiling, so a second
+counting rule anywhere would let ``RunResult.loc_count`` and the CI gate disagree about one
+tree. Four levels are held: the counting rule (every physical line counts, blanks and comments
+included, a final unterminated line counts too, and the ``LF`` byte rather than decoded text is
+counted); the walk (a name-based exclusion list prunes generated and metadata directories, no
+symlink is followed, report paths are root-relative POSIX strings, collections are sorted and
+immutable and ``total`` is the sum of the per-file counts); the gate (``0`` under the limit,
+``1`` at or above it, ``2`` for a missing path, and the configured ``loc_limit`` when no option
+overrides it); and the property that makes the rest worth anything -- no other module defines a
+line-counting function and the command imports the metric instead of repeating the walk.
 
-The gate boundary is "``0`` when the total is under the limit and ``1`` when it is at or above it"
-(AAP §0.3.4 and ``qrcheck/cli/loc.py``'s own docstring), which is what makes ``qrcheck loc --limit
-$((count - 1))`` fail -- the negative case success criterion 11 turns into a CI gate (AAP §0.6.1
-#11). All three neighbouring limits are therefore asserted, because an off-by-one in the comparison
-moves exactly one of them and a single assertion could sit on the side the defect does not reach.
-
-Every limit is computed from the tree just measured or read from
+The boundary is "``0`` under the limit, ``1`` at or above", which is what makes ``qrcheck loc
+--limit $((count - 1))`` fail -- the negative case success criterion 11 turns into a CI gate
+(AAP §0.6.1 #11) -- so all three neighbouring limits are asserted, because an off-by-one moves
+exactly one of them. Every limit is computed from the tree just measured or read from
 :data:`qrcheck.config.schema.SCHEMA`, never typed, and the repository's own total is never
-asserted: the module stays green as the product grows, and retuning ``loc_limit`` in
-``qrcheck.toml`` cannot leave a stale expectation behind it. Each tree is built under ``tmp_path``
-and the one real-repository walk is a file listing rather than an import.
+asserted, so the module stays green as the product grows and retuning ``loc_limit`` cannot leave
+a stale expectation behind it. Each tree is built under ``tmp_path`` and the one real-repository
+walk is a file listing rather than an import.
 """
 
 from __future__ import annotations
