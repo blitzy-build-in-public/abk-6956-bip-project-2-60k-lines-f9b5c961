@@ -2,8 +2,9 @@
 
 A person who opens this file has three questions - did the run pass, what failed, and
 can I see it (AAP §0.8.4) - and the document answers them before they scroll, in the
-order: verdict and tallies, then degradation banners, then every case in one table,
-then a detail block per failure, then the skips, then how to reproduce a case.
+order: verdict and tallies, then degradation banners, then every case in one table - or
+the empty state when the run recorded no case at all - then a detail block per failure,
+then the skips, then how to reproduce a case.
 
 The file is self-contained by construction, which is what "opens with no server and no
 network" costs:
@@ -175,6 +176,7 @@ header {
 .verdict-failed { color: #96201a; }
 .verdict-errored { color: #5f1d8a; }
 .verdict-skipped { color: #6b4b00; }
+.verdict-empty { color: #3f3f47; }
 
 .facts {
   display: grid;
@@ -238,6 +240,15 @@ header {
   padding: 0.5rem 0.75rem;
   border-inline-start: 4px solid #8a6d00;
   background: #fdf8e6;
+}
+
+.empty-state {
+  margin-block: 1rem 0;
+  padding: 0.75rem 1rem;
+  border: 1px solid #d0d0d8;
+  border-inline-start: 4px solid #55555f;
+  border-radius: 0.375rem;
+  background: #f7f7fa;
 }
 
 table {
@@ -433,7 +444,7 @@ def _render_document(run_result: RunResult, evidence_root: Path) -> str:
     fragments += _render_table(run_result, anchors)
     fragments += _render_details(run_result, evidence_root, anchors)
     fragments += _render_skipped(run_result)
-    fragments += _render_footer()
+    fragments += _render_footer(run_result)
     fragments += ["</body>", "</html>"]
     return "\n".join(fragments) + "\n"
 
@@ -488,11 +499,18 @@ def _render_header(run_result: RunResult) -> list[str]:
 def _verdict(run_result: RunResult) -> tuple[str, str]:
     """Return the verdict text and its CSS modifier from the four tallies.
 
-    Precedence is the product's: an internal error outranks a failure, because a run that
-    errored cannot be summarised as merely failing, and both outrank a skip. There is no
-    verdict that a skip alone can turn into a plain pass.
+    A run in which no case executed is never called a pass. It reports ``no cases ran``
+    in a neutral colour, because a reader must not be able to conclude that the suite
+    passed when nothing ran: the four tallies would otherwise read 0/0/0/0 under a green
+    ``run passed``, and a table with no rows would say nothing that contradicts them.
+
+    Precedence for every other run is the product's: an internal error outranks a
+    failure, because a run that errored cannot be summarised as merely failing, and both
+    outrank a skip. There is no verdict that a skip alone can turn into a plain pass.
     """
     counts = run_result.counts
+    if counts.total == 0:
+        return "no cases ran", "verdict-empty"
     if counts.error:
         return "run errored", "verdict-errored"
     if counts.failed:
@@ -572,7 +590,21 @@ def _render_table(run_result: RunResult, anchors: Mapping[int, str]) -> list[str
     an in-page anchor, and the anchor is generated here rather than derived from evidence.
     The section carries ``tabindex="-1"`` so the jump from the skip link takes the keyboard
     focus with it instead of leaving the reader's focus on the link.
+
+    A run that recorded no result gets the empty state in place of the table rather than a
+    table with only a header: there is no row to read, and a header-only table under four
+    zero tallies would leave a reader nothing to contradict a conclusion that the suite
+    passed. The paragraph says so in words, so the state does not rest on colour alone.
     """
+    if not run_result.results:
+        return [
+            '<section id="results" tabindex="-1">',
+            "<h2>Results</h2>",
+            '<p class="empty-state">No cases ran: this run recorded zero results, so no '
+            "check was exercised and nothing here can be read as a pass. Select at least "
+            "one check and run again.</p>",
+            "</section>",
+        ]
     fragments: list[str] = [
         '<section id="results" tabindex="-1">',
         "<h2>Results</h2>",
@@ -612,11 +644,13 @@ def _render_details(
 
     The block answers "can I see it": the recorded images inline as ``data:`` URIs, the
     request that produced them, the decoded-or-error outcome and the seed, plus the one
-    command that re-runs the case. The ``request`` and ``decoded`` bodies come from the
-    in-memory model through the canonical JSON formatter rather than from the files on
-    disk, which is what keeps this writer a pure function of the result it is handed. Each
-    block carries ``tabindex="-1"`` so a jump to it moves the keyboard focus as well as the
-    viewport.
+    command that re-runs the case. The ``request.json`` panel renders the body
+    :func:`_request_payload` composes - the artefact's own content, its identity envelope
+    merged over the request projection - rather than the request alone, and both JSON
+    panels are built from the in-memory model through the canonical JSON formatter instead
+    of read back from the files on disk, which is what keeps this writer a pure function of
+    the result it is handed. Each block carries ``tabindex="-1"`` so a jump to it moves the
+    keyboard focus as well as the viewport.
     """
     blocks: list[str] = []
     for index, case in enumerate(run_result.results):
@@ -646,7 +680,7 @@ def _render_details(
         )
         blocks += _render_images(evidence_root, case)
         blocks.append("<h4>request.json</h4>")
-        blocks.append(f"<pre>{_esc(dumps_canonical(case.request))}</pre>")
+        blocks.append(f"<pre>{_esc(dumps_canonical(_request_payload(case)))}</pre>")
         blocks.append("<h4>decoded.json</h4>")
         blocks.append(f"<pre>{_esc(dumps_canonical(case.decoded))}</pre>")
         if case.expected is not None:
@@ -657,6 +691,28 @@ def _render_details(
         return []
     header = ['<section id="failures">', "<h2>Failures and errors</h2>"]
     return [*header, *blocks, "</section>"]
+
+
+def _request_payload(case: CaseResult) -> dict[str, object]:
+    """Return the request body ``request.json`` carries for ``case``.
+
+    ``request.json`` is not the request projection on its own: the artefact is the case's
+    identity envelope - ``check_id``, ``case_id`` and ``seed`` - merged over
+    :attr:`~qrcheck.report.model.CaseResult.request`, with the envelope spread last so
+    that it wins a key collision, because the envelope identifies the case and a check
+    must never be able to override it.
+    :meth:`qrcheck.report.evidence.EvidenceStore.record` is the single writer of that
+    artefact and composes exactly this mapping, so the panel renders the file's content
+    rather than a request without the case's identity. The body is composed from the
+    model alone, never re-read from disk, so the block stays a pure function of the result
+    it is handed (AAP §0.5.4).
+    """
+    return {
+        **dict(case.request),
+        "check_id": case.check_id,
+        "case_id": case.case_id,
+        "seed": case.seed,
+    }
 
 
 def _render_images(evidence_root: Path, case: CaseResult) -> list[str]:
@@ -803,14 +859,31 @@ def _render_skipped(run_result: RunResult) -> list[str]:
     return fragments
 
 
-def _render_footer() -> list[str]:
-    """Render the closing note that says how to reproduce a single case."""
+def _render_footer(run_result: RunResult) -> list[str]:
+    """Render the closing note that says how to reproduce a single case.
+
+    The guiding sentence follows the results this run recorded. A run with at least one
+    result points the reader at the case's detail block and the rows of the table; a run
+    that recorded none says there is no row to re-run, so the page never sends a reader
+    looking for a row that does not exist. The command, the seed contract and the note
+    about the two machine-readable files are the same on both, because they describe how
+    the product works rather than what this run happened to do.
+    """
     command = "qrcheck run --checks <CHECK-ID> --seed <seed>"
+    if run_result.results:
+        guidance = (
+            "<p>Every row of the results table can be re-run on its own at the same seed: "
+            "copy the command from the case's detail block, or use</p>"
+        )
+    else:
+        guidance = (
+            "<p>No case ran, so there is no row to re-run at a seed: a single case is run "
+            "with</p>"
+        )
     return [
         "<footer>",
         "<h2>Reproducing a case</h2>",
-        "<p>Every row of the results table can be re-run on its own at the same seed: copy "
-        "the command from the case's detail block, or use</p>",
+        guidance,
         f'<p class="command"><code>{_esc(command)}</code></p>',
         "<p>The recorded seed regenerates the same payloads and the same damaged images. "
         "The <code>summary.json</code> and <code>junit.xml</code> written beside this file "
