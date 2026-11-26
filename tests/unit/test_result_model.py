@@ -350,3 +350,29 @@ def test_the_same_case_id_under_two_check_ids_is_accepted() -> None:
         ("RT-ROUNDTRIP", "corpus:url-001"),
         ("SY-EC-MATCH", "corpus:url-001"),
     ]
+
+
+# --------------------------------------------------------------------------- #
+# Reason: the vocabulary names every non-passed cause
+# --------------------------------------------------------------------------- #
+
+
+def test_an_internal_fault_has_a_reason_of_its_own() -> None:
+    """An ``error`` row names the framework's fault, not a check's verdict.
+
+    AAP §0.6.6 row 11 contains an internal exception as an ``error`` result carrying
+    its traceback instead of aborting the run, so its cause needs a word of its own:
+    without one, a real capacity-gate ``ValueError`` raised on the framework side can
+    only be filed as ``capacity_violation`` - a check's verdict - and the ``reason``
+    ``summary.json`` records and the ``<error message=...>`` ``junit.xml`` emits then
+    describe the row as something it is not.
+    """
+    assert Reason.INTERNAL_ERROR.value == "internal_error"
+    assert Reason("internal_error") is Reason.INTERNAL_ERROR
+    result = case_result(
+        check_id="IV-OVERCAPACITY",
+        case_id="synthetic:internal-error",
+        status=Status.ERROR,
+        reason=Reason.INTERNAL_ERROR,
+    )
+    assert result.as_dict()["reason"] == "internal_error"

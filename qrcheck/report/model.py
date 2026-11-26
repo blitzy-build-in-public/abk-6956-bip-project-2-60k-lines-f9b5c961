@@ -79,6 +79,11 @@ class Reason(enum.StrEnum):
     the command with exit code 2 before any result exists, so they never reach this
     model and need no word here.
 
+    ``INTERNAL_ERROR`` names an ``error`` result filed after an internal fault - an
+    exception raised by a check or by the framework itself, which the run contains
+    instead of aborting (AAP §0.6.6 row 11) - so the row names the fault instead of
+    borrowing a check's verdict.
+
     Adding a member is additive and safe for consumers that compare against the
     string value; renaming one changes the public surface that ``summary.json``,
     ``junit.xml`` and CI trend lines key on.
@@ -96,6 +101,7 @@ class Reason(enum.StrEnum):
     VALUE_MISMATCH = "value_mismatch"
     SAMPLING_FAILED = "sampling_failed"
     CAPACITY_VIOLATION = "capacity_violation"
+    INTERNAL_ERROR = "internal_error"
 
 
 @dataclass(frozen=True)
@@ -189,6 +195,17 @@ def failure_id(check_id: str, case_id: str, reason: Reason | str | None) -> str:
     ``hash()`` or a random source, and safe to use as a single path segment: every
     character outside ``[A-Za-z0-9._-]`` has been replaced, which is what stops a
     hostile case identifier from writing outside the report directory.
+
+    The replacement rule is not injective: two case identifiers that differ only in
+    the characters it replaces derive the same identifier and so name the same
+    evidence directory, as ``a b`` and ``a/b`` do. The case-identifier forms the
+    product produces - ``corpus:<record-id>``, whose record ids use only
+    ``[a-z0-9-]``, and the fixed ``synthetic:<name>`` literals - carry no replaced
+    character except the constant ``:`` separating the family from the name, so
+    distinct case identifiers always derive distinct identifiers. The digest suffix
+    is therefore reserved for the :data:`FAILURE_ID_MAX` truncation bound and is not
+    added for sanitation, because the derivation is fixed by AAP §0.3.4 and is a
+    stable public surface (§0.1.3).
 
     Args:
         check_id: The stable check identifier, such as ``RT-ROUNDTRIP``.
