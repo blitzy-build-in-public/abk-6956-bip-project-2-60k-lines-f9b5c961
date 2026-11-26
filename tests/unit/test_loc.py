@@ -78,9 +78,13 @@ _EXIT_FAILED: Final[int] = 1
 _EXIT_CONFIG: Final[int] = 2
 
 # The directory names every sweep must prune (AAP §0.9.1, §0.5 "build/ and dist/ hold generated
-# copies of the package").  Neither list is restated by the metric: the assertions below check
-# that these names are the ones it declares, then that the walk demonstrably skips them.
-_ALWAYS_PRUNED_DIRS: Final[tuple[str, ...]] = (".git", ".venv", "__pycache__", "build", "dist")
+# copies of the package"); ".tmp" is the local scratch directory a suite run uses as its TMPDIR and
+# "env" a per-checkout virtualenv, so neither holds tracked source.  Neither list is restated by
+# the metric: the assertions below check that these names are the ones it declares, then that the
+# walk demonstrably skips them.
+_ALWAYS_PRUNED_DIRS: Final[tuple[str, ...]] = (
+    ".git", ".venv", "__pycache__", "build", "dist", ".tmp", "env",
+)
 
 # The setuptools metadata directory, identified by suffix because its name follows the package.
 _EGG_INFO_DIR: Final[str] = "something.egg-info"

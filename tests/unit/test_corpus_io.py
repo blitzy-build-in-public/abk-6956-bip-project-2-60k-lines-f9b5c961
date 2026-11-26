@@ -1,8 +1,8 @@
 """Contract test: the corpus's record schema, canonical wire form, inventory and predicates.
 
 ``corpus/default.jsonl`` is a committed repository file and the fixed input every corpus-driven
-check case is built from, so three promises rest on it (AAP §0.8.2, §0.5.3, §0.4.2). The wire form
-is canonical -- one JSON object per line, keys sorted at every depth, ``ensure_ascii=False`` so
+check case is built from, so three promises rest on it (AAP §0.8.2, §0.5.3, §0.4.2). The wire
+form is canonical -- one JSON object per line, keys sorted at every depth, ``ensure_ascii=False`` so
 the ``emoji``, ``rtl`` and ``utf8-multibyte`` payloads stay literal UTF-8 instead of ``\\uXXXX``
 escapes, LF line endings and exactly one trailing newline -- which is what makes a regenerated
 corpus byte-comparable with the committed one in ``tests/integration/test_corpus_determinism.py``.

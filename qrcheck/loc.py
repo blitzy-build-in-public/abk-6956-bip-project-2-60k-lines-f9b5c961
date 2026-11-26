@@ -31,11 +31,14 @@ __all__ = ["FileLines", "LocReport", "count_lines"]
 
 # Pruned wherever they appear, matched on the directory name alone: the root may
 # be a fixture tree, so an absolute prefix would tie the sweep to a location.
+# ".venv", "venv" and "env" are per-checkout virtualenvs and ".tmp" is the local
+# scratch directory a suite run uses as its TMPDIR: none of them is tracked, so
+# none can contribute to a total whose subject is the tracked sources.
 EXCLUDED_DIR_NAMES: frozenset[str] = frozenset(
     {
         ".git", ".hg", ".svn", "__pycache__", ".venv", "venv", ".tox", ".nox",
         ".eggs", "build", "dist", "node_modules", ".pytest_cache", ".mypy_cache",
-        ".ruff_cache", "htmlcov",
+        ".ruff_cache", "htmlcov", ".tmp", "env",
     }
 )
 
