@@ -1,26 +1,19 @@
 """The 15-bit format-information contract of ``qrcheck.decode.format_info``.
 
 The fifteen format bits beside the top-left finder pattern, repeated along the top-right and
-bottom-left edges, carry the EC level and the mask reference, which makes them the product's
-only source of the *mask* and its independent second source of the *EC level*: ``zxing-cpp``
-2.2.0 reports an EC level but neither version nor mask and ``opencv`` reports none of the three,
-yet ``SY-MASK``, ``SY-MATRIX-EQUIV`` and ``SY-EC-MATCH`` must assert all three (IM-1), so a
-wrong reading here is wrong in three checks at once and the contract is pinned exhaustively
-rather than by example.
+bottom-left edges, carry the EC level and the mask reference, which makes them the product's only
+source of the *mask* and its second source of the *EC level*: ``zxing-cpp`` 2.2.0 reports neither
+version nor mask, ``opencv`` reports none of the three, yet ``SY-MASK``, ``SY-MATRIX-EQUIV`` and
+``SY-EC-MATCH`` must assert all three, so a wrong reading here is wrong in three checks at once.
 
-ISO/IEC 18004:2015(E) §7.9 defines a BCH(15, 5) code with generator ``0x537``, codewords
-XOR-masked with ``0x5412`` and minimum Hamming distance 7; the 32 codewords are generated
-through ``encode_format_info`` rather than transcribed, and ``2 * 3 < 7`` is why radius-three
-correction is unambiguous, so all 32 x C(15, 3) = 14560 three-bit corruptions must return the
-original pair with ``bit_errors == 3`` while a four-bit corruption must never be reported as
-that pair. A majority vote across the two copies would invent a third value present in neither,
-so the reader prefers the copy that spent less redundancy and reports both; an unreadable grid,
-an unusable module count or a copy damaged beyond its redundancy all come back ``None``, because
-a symbol defect must become a failed check rather than an ``error`` result; and since every case
-writes its bits and reads them back through the same ``format_info_positions`` table, a
-mirrored, rotated or bit-reversed convention would satisfy all of them at once, so a
-``segno``-placed symbol proves the convention against the ``error`` and ``mask`` it was built
-with.
+Pinned: ISO/IEC 18004:2015(E) §7.9's BCH(15, 5) code with generator ``0x537``, codewords
+XOR-masked with ``0x5412`` and minimum distance 7, all 32 codewords generated rather than
+transcribed; ``2 * 3 < 7`` is why radius-three correction is unambiguous, so all 14560 three-bit
+corruptions come back as the original pair while a four-bit one never does; both copies are read
+and their distances reported rather than majority-voted; nothing raises, so a symbol defect
+becomes a failed check instead of an ``error`` result; and the placement convention is proved
+against a ``segno``-placed symbol, the one expectation this module cannot derive from its own
+table.
 """
 
 from __future__ import annotations
@@ -52,22 +45,17 @@ from qrcheck.decode.format_info import (
     read_format_copies,
 )
 
-# EC_INDICATORS is stored in sorted key order, so this tuple is ("H", "L", "M",
-# "Q"): ISO/IEC 18004:2015(E) Table 12 numbers the levels L=01, M=00, Q=11,
-# H=10, which is not the order of increasing recovery capacity. Iterating the
-# sorted keys rather than a hand-written sequence keeps the tables and the
-# parametrisation ids identical on every interpreter and every import.
+# EC_INDICATORS is stored in sorted key order, so this tuple is ("H", "L", "M", "Q"): Table 12
+# numbers the levels L=01, M=00, Q=11, H=10, which is not the order of increasing capacity.
 EC_LEVELS: Final[tuple[str, ...]] = tuple(sorted(EC_INDICATORS))
 
 #: The three-bit mask reference has exactly eight legal values, 0-7.
 MASKS: Final[tuple[int, ...]] = tuple(range(8))
 
-#: ISO/IEC 18004:2015(E) Table 12 exactly as the standard numbers it: the two-bit
-#: error correction level indicator that leads the fifteen format bits. This is the
-#: one table typed rather than derived, because it is data from the standard and no
-#: part of the implementation can produce it -- and it is typed here once, so both
-#: the constant assertion and the codeword-structure assertion measure the module
-#: against the standard rather than against itself.
+#: ISO/IEC 18004:2015(E) Table 12 exactly as the standard numbers it: the two-bit indicator that
+#: leads the fifteen format bits. Typed once rather than derived, because it is data from the
+#: standard that no part of the implementation can produce -- so the constant assertion and the
+#: codeword-structure assertion both measure the module against the standard, not against itself.
 TABLE_12_INDICATORS: Final[dict[str, int]] = {"L": 0b01, "M": 0b00, "Q": 0b11, "H": 0b10}
 
 #: The 32 (EC level, mask) pairs -- one per legal format codeword -- in sorted order.
@@ -75,24 +63,20 @@ CODEWORD_CASES: Final[tuple[tuple[str, int], ...]] = tuple(
     (ec_level, mask) for ec_level in EC_LEVELS for mask in MASKS
 )
 
-#: Model 2 versions sampled by the placement assertions: the smallest, the first
-#: with an alignment pattern, the first with version information, two mid-range
-#: ones and the largest. ``N = 4V + 17`` is the only dimension input they need.
+#: Model 2 versions sampled by the placement assertions: the smallest, the first with an alignment
+#: pattern, the first with version information, two mid-range ones and the largest.
 VERSIONS: Final[tuple[int, ...]] = (1, 2, 7, 10, 20, 40)
 
-#: The module count the two-copy assertions build grids at -- Version 2, whose
-#: 25 x 25 grid is big enough for every format position and small enough to build
-#: once per parametrised case.
+#: The module count the two-copy assertions build grids at -- Version 2, big enough for every format
+#: position and small enough to build once per parametrised case.
 GRID_MODULE_COUNT: Final = 25
 
-#: The versions the real-symbol proof samples: the smallest symbol, the first with
-#: an alignment pattern, and the first whose format information shares a grid with
-#: the version information, so the same fixed bit layout is exercised in three
-#: different surroundings.
+#: The versions the real-symbol proof samples: the smallest, the first with an alignment pattern,
+#: and
+#: the first whose format information shares a grid with the version information.
 REAL_SYMBOL_VERSIONS: Final[tuple[int, ...]] = (1, 2, 7)
 
-#: ``QRCHECK`` is seven characters, which Version 1 carries at EC level H, so one
-#: constant payload keeps every sampled (version, EC level, mask) case encodable.
+#: ``QRCHECK`` is seven characters, which Version 1 carries at EC H, so one payload fits every case.
 REAL_SYMBOL_PAYLOAD: Final = "QRCHECK"
 
 #: The 3 x 4 x 8 real symbols the placement proof decodes, in declaration order.
@@ -138,10 +122,7 @@ def _distance(left: int, right: int) -> int:
 
 
 def _bch_remainder(codeword: int) -> int:
-    """Remainder of ``codeword`` divided by :data:`BCH_GENERATOR`. Deliberately a different
-    formulation from the module's own ``_bch_codeword``: bit-at-a-time elimination from the
-    most significant bit downwards, instead of a loop over ``bit_length``.
-    """
+    """Remainder of `codeword` divided by :data:`BCH_GENERATOR`, computed bit by bit."""
     remainder = codeword
     for shift in range(remainder.bit_length() - 1, 9, -1):
         if (remainder >> shift) & 1:
@@ -155,12 +136,7 @@ def _sphere_size(radius: int) -> int:
 
 
 def _grid(module_count: int, copy_zero: int, copy_one: int) -> decode_base.Matrix:
-    """Build a module grid carrying ``copy_zero`` and ``copy_one`` in the two copies. The result
-    is the shape every consumer of the sampler sees -- a ``numpy.bool_`` array of
-    ``module_count`` squared modules, dark = ``True``, indexed ``grid[row][column]`` -- with
-    every module that carries no format bit left light, so only the fifteen bits of each copy
-    are ever set.
-    """
+    """Build a ``numpy.bool_`` module grid carrying the two format copies, dark = ``True``."""
     grid = numpy.zeros((module_count, module_count), dtype=bool)
     for raw, positions in zip((copy_zero, copy_one), format_info_positions(module_count)):
         for bit, (row, column) in enumerate(positions):
@@ -185,11 +161,7 @@ def _flipped(
 
 @functools.lru_cache(maxsize=None)
 def _space_projection() -> tuple[tuple[tuple[int, str, int, int], ...], tuple[int, ...]]:
-    """Project the whole 15-bit space once: ``(decodable, undecodable)``. The first element holds
-    ``(raw, ec_level, mask, bit_errors)`` for each copy the decoder accepts and the second
-    holds every copy it rejects, so the three exhaustive assertions share one pass instead of
-    re-deriving it.
-    """
+    """Project the whole 15-bit space once as ``(decodable, undecodable)``."""
     decodable: list[tuple[int, str, int, int]] = []
     undecodable: list[int] = []
     for raw in range(_MAX_RAW + 1):
@@ -222,11 +194,9 @@ def test_the_module_publishes_the_names_the_checks_import() -> None:
 
 def test_the_constants_are_the_ones_iso_18004_states() -> None:
     """``0x5412``, ``0x537``, a radius of 3, and the four EC indicators of Table 12."""
-    # ISO/IEC 18004:2015(E) §7.9.1: the 15 format bits are XOR-masked with
-    # 101010000010010 = 0x5412 before placement.
+    # ISO/IEC 18004:2015(E) §7.9.1: the 15 format bits are XOR-masked with 0x5412 before placement.
     assert FORMAT_MASK == 0x5412
-    # Annex C: the BCH(15, 5) generator x^10 + x^8 + x^5 + x^4 + x^2 + x + 1 =
-    # 0b10100110111 = 0x537, a code of minimum distance 7.
+    # Annex C: the BCH(15, 5) generator x^10 + x^8 + x^5 + x^4 + x^2 + x + 1 = 0x537, distance 7.
     assert BCH_GENERATOR == 0x537
     assert BCH_GENERATOR.bit_length() == 11
     # floor((7 - 1) / 2) = 3 correctable bit errors per copy.
@@ -255,12 +225,7 @@ def test_every_legal_codeword_decodes_to_the_pair_that_encoded_it(
 def test_every_codeword_carries_its_data_bits_and_a_zero_bch_remainder(
     case: tuple[str, int],
 ) -> None:
-    """Unmasked, each codeword is ``indicator << 13 | mask << 10 | parity``. This is the
-    structural half of the contract: the ``0x5412`` mask is applied, the ten parity bits are
-    the remainder of the polynomial division by ``0x537`` (so the value is a codeword at all),
-    and the five data bits are exactly the two-bit EC indicator of Table 12 followed by the
-    three-bit mask reference.
-    """
+    """Unmasked, each codeword is ``indicator << 13 | mask << 10 | parity``."""
     ec_level, mask = case
     unmasked = encode_format_info(ec_level, mask) ^ FORMAT_MASK
     assert _bch_remainder(unmasked) == 0, (
@@ -274,10 +239,7 @@ def test_every_codeword_carries_its_data_bits_and_a_zero_bch_remainder(
 
 
 def test_the_masked_and_unmasked_views_are_disjoint_so_the_mask_is_applied() -> None:
-    """The mask is not a no-op: no placed value is also a bare codeword. ``0x5412`` has Hamming
-    weight 5 while the code's minimum distance is 7, so masking every codeword moves it out of
-    the code entirely; the two sets of 32 values therefore cannot share a member.
-    """
+    """The mask is not a no-op: no placed value is also a bare codeword."""
     placed = {encode_format_info(ec_level, mask) for ec_level, mask in CODEWORD_CASES}
     bare = {value ^ FORMAT_MASK for value in placed}
     assert len(placed) == len(CODEWORD_CASES)
@@ -289,9 +251,7 @@ def test_the_masked_and_unmasked_views_are_disjoint_so_the_mask_is_applied() -> 
 def test_decoding_the_wrong_side_of_the_mask_never_recovers_the_pair(
     case: tuple[str, int],
 ) -> None:
-    """``decode_bits`` unmasks its own input, so it must not be fed an unmasked value. It may then
-    return nothing or another codeword, but never the pair that encoded it, which is what
-    proves the ``0x5412`` step happens inside the decoder rather than in its caller.
+    """``decode_bits`` unmasks its own input, so fed an unmasked value it never recovers the pair.
     """
     ec_level, mask = case
     decoded = decode_bits(encode_format_info(ec_level, mask) ^ FORMAT_MASK)
@@ -299,10 +259,7 @@ def test_decoding_the_wrong_side_of_the_mask_never_recovers_the_pair(
 
 
 def test_the_minimum_hamming_distance_is_exactly_seven() -> None:
-    """The property that makes three-bit correction safe and four-bit correction unsafe. The
-    masked and unmasked views must show the same distances, because ``0x5412`` is a constant
-    XOR.
-    """
+    """The property that makes three-bit correction safe and four-bit correction unsafe."""
     placed = tuple(encode_format_info(ec_level, mask) for ec_level, mask in CODEWORD_CASES)
     bare = tuple(value ^ FORMAT_MASK for value in placed)
     assert len(placed) == 32
@@ -321,14 +278,13 @@ def test_the_minimum_hamming_distance_is_exactly_seven() -> None:
     assert bare_distances == distances
 
 
-#: One arbitrary legal (EC level, mask) pair for the damage and placement cases.
-#: It is an input rather than an expectation: every other expected pair in this
-#: module is produced by ``encode_format_info`` or read back out of that encoding,
-#: and the real-symbol proof takes its expectation from the symbol instead.
+#: One arbitrary legal (EC level, mask) pair for the damage and placement cases. It is an input, not
+#: an
+#: expectation: every other expected pair is produced by ``encode_format_info`` or read from it.
 SAMPLE_CASE: Final[tuple[str, int]] = ("Q", 5)
 
-#: Grids whose dimension is not ``4V + 17``, or which cannot be indexed at all. The
-#: reader must answer "no copy" for every one of them instead of raising.
+#: Grids whose dimension is not ``4V + 17``, or which cannot be indexed: the reader answers "no
+#: copy".
 _UNUSABLE_GRIDS: Final[tuple[tuple[str, object], ...]] = (
     ("twenty-modules", numpy.zeros((20, 20), dtype=bool)),
     ("twenty-two-modules", numpy.zeros((22, 22), dtype=bool)),
@@ -347,11 +303,7 @@ _UNUSABLE_GRIDS: Final[tuple[tuple[str, object], ...]] = (
 def test_every_three_bit_error_is_corrected_back_to_its_own_codeword(
     case: tuple[str, int],
 ) -> None:
-    """All 32 x C(15, 3) = 14560 three-bit corruptions are corrected, and reported. ``bit_errors
-    == 3`` is part of the contract rather than a detail: the evidence records how much
-    redundancy a copy spent, and a decoder that snapped to the right answer while reporting
-    zero would hide that the symbol was damaged.
-    """
+    """All 14560 three-bit corruptions are corrected, and ``bit_errors == 3`` reported."""
     ec_level, mask = case
     raw = encode_format_info(ec_level, mask)
     patterns = tuple(itertools.combinations(range(15), 3))
@@ -365,11 +317,7 @@ def test_every_three_bit_error_is_corrected_back_to_its_own_codeword(
 
 
 def test_a_four_bit_error_is_never_reported_as_the_original_pair() -> None:
-    """All 32 x C(15, 4) = 43680 four-bit corruptions, and what a decoder may say about them. Four
-    bit errors lie outside the radius-three sphere, so the original pair is unreachable and
-    must never be returned: a decoder that answered with it would be claiming a correction the
-    code cannot support.
-    """
+    """All 43680 four-bit corruptions lie outside the radius-three sphere: never the pair."""
     patterns = tuple(itertools.combinations(range(15), 4))
     assert len(patterns) == math.comb(15, 4) == 1365
     undetected = 0
@@ -394,17 +342,13 @@ def test_a_four_bit_error_is_never_reported_as_the_original_pair() -> None:
     assert undetected + misdecoded == len(CODEWORD_CASES) * len(patterns)
     # Some patterns are detected as undecodable, so detection works at distance four.
     assert undetected > 0
-    # And some are not: distance 7 cannot distinguish a four-bit error from a
-    # three-bit error on another codeword. Recorded here so the split is visible.
+    # And some are not: distance 7 cannot distinguish a four-bit error from a three-bit error on
+    # another codeword. Recorded here so the split is visible.
     assert misdecoded > 0
 
 
 def test_the_whole_fifteen_bit_space_decodes_within_the_correction_radius() -> None:
-    """An exhaustive sweep of all 32768 possible copies, not a sample of them. The count of
-    decodable values is ``32 x (1 + 15 + 105 + 455) = 18432`` only because those radius-three
-    spheres do not overlap, which restates the minimum distance of 7 as arithmetic over the
-    whole space; an overlapping pair would make the union smaller.
-    """
+    """An exhaustive sweep of all 32768 copies, not a sample: 18432 decode within radius three."""
     decodable, undecodable = _space_projection()
     assert len(decodable) + len(undecodable) == _MAX_RAW + 1 == 32768
     for raw, ec_level, mask, bit_errors in decodable:
@@ -433,8 +377,8 @@ def test_both_clean_copies_are_read_and_agree(case: tuple[str, int]) -> None:
 
 @pytest.mark.parametrize(
     ("corrupted_copy", "error_count"),
-    # The sorted product of copy then error count, so the parametrisation order is fixed
-    # by this declaration rather than by decorator order.
+    # The sorted product of copy then error count, so the parametrisation order is fixed by this
+    # declaration rather than by decorator order.
     [
         pytest.param(copy_index, error_count, id=f"copy{copy_index}-{error_count}-bit")
         for copy_index in (0, 1)
@@ -445,10 +389,7 @@ def test_a_corrupted_copy_is_visible_per_copy_not_averaged_away(
     corrupted_copy: int,
     error_count: int,
 ) -> None:
-    """Damaging one copy leaves the pair intact and names the damaged copy. A reader that merged
-    the copies -- by majority vote, or by taking whichever bit "looked" right -- would invent a
-    third value present in neither copy and would lose the fact that the symbol is damaged.
-    """
+    """Damaging one copy leaves the pair intact and names the damaged copy."""
     raw = encode_format_info(*SAMPLE_CASE)
     grid = _grid(GRID_MODULE_COUNT, raw, raw)
     corrupted = _flipped(grid, GRID_MODULE_COUNT, corrupted_copy, tuple(range(error_count)))
@@ -487,11 +428,7 @@ def test_the_copy_that_spent_less_redundancy_is_the_one_that_is_read(
 
 
 def test_a_copy_that_cannot_be_recovered_is_recorded_as_none() -> None:
-    """An unreadable copy is ``None`` beside the distance of the copy that was read. ``None`` is
-    not interchangeable with a distance of 0 or of 3: it says the copy carries no recoverable
-    codeword at all, which is evidence about the symbol that a numeric distance would have
-    silently discarded.
-    """
+    """An unreadable copy is ``None``, which is not a distance of 0 or of 3."""
     raw = encode_format_info(*SAMPLE_CASE)
     unrecoverable = _space_projection()[1][0]
     assert decode_bits(unrecoverable) is None
@@ -507,11 +444,7 @@ def test_a_copy_that_cannot_be_recovered_is_recorded_as_none() -> None:
 
 @pytest.mark.parametrize("version", VERSIONS, ids=_version_id)
 def test_each_copy_holds_fifteen_disjoint_positions(version: int) -> None:
-    """Thirty module positions, in range, disjoint, off the timing patterns. The fixed dark module
-    at ``(4V + 9, 8)`` -- ``(N - 8, 8)`` -- belongs to neither copy, and row 6 and column 6
-    carry the timing patterns; shifting any of these by one would still produce a
-    plausible-looking answer, which is a worse failure than ``None``.
-    """
+    """Thirty module positions, in range, disjoint and off the timing patterns."""
     module_count = 4 * version + 17
     copy_zero, copy_one = format_info_positions(module_count)
     assert len(copy_zero) == 15
@@ -548,21 +481,15 @@ def test_copy_one_follows_the_module_count(version: int) -> None:
     assert copy_one[8:] == tuple((module_count - 7 + offset, 8) for offset in range(7))
 
 
-# ISO/IEC 18004:2015(E) §7.9.1 is the clause that places these fifteen bits twice, and segno
-# places them by that clause rather than by this module's table. A grid written and read back
-# through ``format_info_positions`` cannot prove the convention, because a mirrored, rotated or
-# bit-reversed table satisfies both halves of that round trip; the expectation here is instead
-# the pair the symbol was built with -- segno's own ``error`` and ``mask`` -- which no reading
-# of this module's table can derive.
+# ISO/IEC 18004:2015(E) §7.9.1 places these fifteen bits twice, and segno places them by that
+# clause rather than by this module's table. A grid written and read back through
+# ``format_info_positions`` cannot prove the convention -- a mirrored, rotated or bit-reversed table
+# satisfies both halves -- so the expectation is the pair the symbol was built with.
 @pytest.mark.parametrize("case", REAL_SYMBOL_CASES, ids=_symbol_id)
 def test_a_real_symbol_reports_the_level_and_mask_it_was_built_with(
     case: tuple[int, str, int],
 ) -> None:
-    """A real symbol's own format modules decode to its own EC level and mask. ``segno.make_qr``
-    builds Model 2 only and ``boost_error=False`` keeps the EC level the case asked for (AAP
-    §0.3.5), so ``symbol.error`` and ``symbol.mask`` are the expectation this module cannot
-    supply for itself: they are what an ISO/IEC 18004:2015(E) §7.9.1 placement put in the grid.
-    """
+    """A real symbol's format modules decode to the level and mask it was built with."""
     version, ec_level, mask = case
     symbol = segno.make_qr(
         REAL_SYMBOL_PAYLOAD,
@@ -571,8 +498,8 @@ def test_a_real_symbol_reports_the_level_and_mask_it_was_built_with(
         mask=mask,
         boost_error=False,
     )
-    # ``matrix`` is rows of module values -- ``1`` dark, no quiet zone -- which is
-    # exactly the grid a sampler hands the reader of a sampled matrix.
+    # ``matrix`` is rows of module values -- ``1`` dark, no quiet zone -- exactly the grid a sampler
+    # hands the reader.
     grid = numpy.array(symbol.matrix, dtype=bool)
     module_count = 4 * version + 17
     assert grid.shape == (module_count, module_count)
@@ -587,10 +514,7 @@ def test_a_real_symbol_reports_the_level_and_mask_it_was_built_with(
 
 @pytest.mark.parametrize("module_count", (20, 22, 178, 0, -3), ids=str)
 def test_an_illegal_module_count_is_a_programmer_error(module_count: int) -> None:
-    """A dimension that is not ``4V + 17`` is a caller bug, so it raises. Symbol damage never
-    reaches this: ``read_format_copies`` screens the grid first and answers ``None``, which
-    keeps a bad symbol out of the exception path.
-    """
+    """A dimension that is not ``4V + 17`` is a caller bug, so it raises."""
     with pytest.raises(ValueError, match="Model 2"):
         format_info_positions(module_count)
 
@@ -608,10 +532,7 @@ def test_an_unusable_grid_reads_no_copy_and_returns_none(label: str, grid: objec
 
 @pytest.mark.parametrize("index", range(4), ids=("first", "second", "third", "fourth"))
 def test_a_grid_carrying_no_legal_format_information_decodes_to_none(index: int) -> None:
-    """A copy more than three bits from every codeword is undecodable, not guessed. The values are
-    the smallest few that this module's own distance arithmetic puts outside every radius-three
-    sphere, so they are not lifted out of the decoder.
-    """
+    """A copy more than three bits from every codeword is undecodable rather than guessed."""
     unrecoverable = _space_projection()[1][index]
     assert decode_bits(unrecoverable) is None
     grid = _grid(GRID_MODULE_COUNT, unrecoverable, unrecoverable)
@@ -625,10 +546,7 @@ def test_a_grid_carrying_no_legal_format_information_decodes_to_none(index: int)
     ids=("all-light", "all-dark"),
 )
 def test_a_uniform_grid_decodes_to_none(label: str, dark: bool) -> None:
-    """A blank or a fully dark symbol carries no format information at all. The ``0x5412`` mask is
-    what makes the all-light case honest: without it, fifteen light modules would present the
-    all-zero word, which is a valid-looking codeword.
-    """
+    """A blank or fully dark symbol carries no format information at all."""
     grid = numpy.full((GRID_MODULE_COUNT, GRID_MODULE_COUNT), dark, dtype=bool)
     assert decode_format_info(grid) is None, f"{label} decoded to format information"
 

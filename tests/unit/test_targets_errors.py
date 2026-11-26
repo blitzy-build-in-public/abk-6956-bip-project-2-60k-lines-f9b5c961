@@ -1,28 +1,22 @@
 """The adapter layer's failure vocabulary is the five declared errors, and no more.
 
-``qrcheck/targets/base.py`` declares exactly five errors and the port's contract is that an
+``qrcheck/targets/base.py`` declares exactly five errors, and the port's contract is that an
 adapter raises nothing else: every ``except`` inside ``qrcheck/targets/`` converts a library
-exception into one of them rather than letting it escape unwrapped (AAP §0.3.4 "Error
-taxonomy", §0.14.1's conversion list). Each declared trigger is exercised through the **real**
-adapter code path, one test per trigger: a missing module or attribute, an absent executable, a
-refused loopback port and an unsupported protocol are ``TargetUnavailable``; the configured
-``timeout_s`` quoted in the message is ``TargetTimeout``, while a connect timeout is
-``TargetUnavailable``; a declared rejection keeps the target's text byte for byte in
-``TargetRejected``; an empty body, undecodable base64, bytes that are not an image, a missing
-configured ``image_field`` and a non-zero exit that declared no rejection are
-``TargetContractError``; and ``TargetUnsupported`` is raised before any I/O, which every probe
-proves by recording that the target was never called.
+exception into one of them (AAP §0.3.4 "Error taxonomy", §0.14.1's conversion list). Each trigger
+is exercised through the **real** adapter code path, one test per trigger: a missing module or
+attribute, an absent executable, a refused loopback port and an unsupported protocol are
+``TargetUnavailable``; the configured ``timeout_s`` quoted in the message is ``TargetTimeout``,
+while a connect timeout is ``TargetUnavailable``; a declared rejection keeps the target's text
+byte for byte in ``TargetRejected``; an empty body, undecodable base64, bytes that are not an
+image, a missing ``image_field`` and a non-zero exit that declared no rejection are
+``TargetContractError``; and ``TargetUnsupported`` is raised *before any I/O*.
 
 Two distinctions the module exists to hold: ``TargetRejected`` versus ``TargetContractError``
-decides whether ``IV-*`` passes, a declared rejection being the *expected* outcome there and a
-failure everywhere else, so misclassifying one as the other is a report defect and not only an
-exception-type one; and the five are siblings -- every one a ``TargetError``, none a subclass of
-another -- so a caller's ``except`` order cannot silently reclassify a failure. The HTTP adapter
-gives a non-2xx status no declared-rejection spelling, which the comment on that test records so
-a reader does not read it as a gap. No threshold from ``qrcheck.toml`` is read or restated,
-nothing is skipped, marked ``xfail`` or retried, no network beyond ``127.0.0.1`` is touched, no
-process has to time out for real and no sleep is taken.
-"""
+decides whether ``IV-*`` passes, so misclassifying one as the other is a report defect and not
+only an exception-type defect; and the five errors are siblings -- every one a ``TargetError``,
+none a subclass of another -- so a caller's ``except`` order cannot reclassify a failure. The
+HTTP adapter gives a non-2xx status no declared-rejection spelling, which the comment on that
+test records."""
 
 from __future__ import annotations
 
@@ -107,10 +101,10 @@ _ERROR_TYPES: Final[tuple[type[TargetError], ...]] = (
 )
 
 
-# Request and target builders. Every adapter is built from a real ``qrcheck.models`` record,
-# never a mock, so the constructor the product uses is the one exercised here. Capabilities are
-# declared explicitly because they are a gate: a record declaring none would turn every probe
-# into ``TargetUnsupported`` before the trigger under test was reached.
+# Request and target builders. Every adapter is built from a real ``qrcheck.config.models`` record,
+# never a mock, so the constructor the product uses is the constructor exercised here. Capabilities
+# are declared explicitly because they are a gate: a record declaring none would turn every probe
+# into a ``TargetUnsupported`` before the trigger under test was reached.
 
 
 def _legal_request(text: str = _UNUSUAL_TEXT) -> GenerateRequest:
@@ -151,11 +145,8 @@ def _cli_target(
     returns: str = "raw_bytes",
     timeout_s: float = _PROBE_TIMEOUT_S,
 ) -> models.CLITarget:
-    """Return a resolved ``type = "cli"`` target record running `command`. The default payload
-    arrives on stdin through a bare flag and no artefact path is passed, which is the simplest
-    shape the adapter accepts: nothing is created on disk before the process is spawned, so a
-    spawn failure is the only thing a probe sees.
-    """
+    """Return a resolved ``type = cli`` record running `command`: the default payload arrives on
+    stdin through a bare flag, so nothing exists on disk before the spawn."""
     return models.CLITarget(
         name="probe-cli",
         type="cli",
@@ -176,11 +167,8 @@ def _http_target(
     image_encoding: str = "base64",
     timeout_s: float = _PROBE_TIMEOUT_S,
 ) -> models.HTTPTarget:
-    """Return a resolved ``type = "http"`` target record for `url`. The request template carries
-    only ``{payload_b64}``, which is the one payload placeholder every probe can satisfy, and
-    the response shape is read through `image_field` in `image_encoding`, so no vendor field
-    name appears in the adapter.
-    """
+    """Return a resolved ``type = http`` record for `url`: the template carries only
+    ``{payload_b64}`` and the shape is read through ``image_field``."""
     return models.HTTPTarget(
         name="probe-http",
         type="http",
@@ -206,10 +194,10 @@ def _reference_adapter(
     return ReferenceAdapter(record, name="reference")
 
 
-# Injection helpers, all at the library boundary. The adapter's own mapping logic is what is
-# under test, so the patch always sits where a library is called and never around the adapter:
-# ``httpx.Client`` for the HTTP probes (a real client over a mock transport), ``subprocess.run``
-# for the CLI probes, and one attribute on an importable module for the library probes.
+# Injection helpers, all at the library boundary. The adapter's own mapping logic is under test, so
+# the patch is always placed where a library is called and never around the adapter:
+# ``httpx.Client`` for the HTTP probes (a real client over a mock transport), ``subprocess.run`` for
+# the CLI probes, and one attribute on an importable module for the library probes.
 
 
 def _patch_http_client(
@@ -271,20 +259,15 @@ def _patched_callable(
     attribute: str,
     function: Callable[..., object],
 ) -> str:
-    """Install `function` on an importable module and return its ``module:attribute`` path. The
-    library adapter resolves ``targets.<name>.callable`` with ``importlib.import_module``
-    followed by ``getattr``, so the only way to reach its call path without writing a module
-    into the checkout is to add one attribute to a module that is already importable.
-    """
+    """Install `function` on an importable module and return its ``module:attribute`` path: the
+    library adapter resolves with ``importlib`` then ``getattr``, so no file is needed."""
     monkeypatch.setattr(json, attribute, function, raising=False)
     return f"{json.__name__}:{attribute}"
 
 
 def _closed_loopback_url() -> str:
-    """Return a URL on a loopback port that nothing is listening on. A socket is bound to port 0
-    so the kernel picks a free port, then closed, so the port is in the ephemeral range and
-    unbound: dialling it is refused.
-    """
+    """Return a URL on a loopback port that nothing listens on: a socket is bound to port 0 so the
+    kernel picks a free port, then closed, so dialling it is refused."""
     probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
         probe.bind((_LOOPBACK_HOST, 0))
@@ -299,18 +282,13 @@ def _snapshot(root: Path) -> tuple[str, ...]:
     return tuple(sorted(entry.relative_to(root).as_posix() for entry in root.rglob("*")))
 
 
-# ---------------------------------------------------------------------------
 # TargetUnavailable -- "the process cannot be spawned, the connection is refused,
 # the import path is missing" (AAP §0.3.4)
-# ---------------------------------------------------------------------------
 
 
 def test_library_adapter_missing_module_is_unavailable() -> None:
-    """A ``callable`` naming a module that does not exist is a missing import path. The adapter
-    converts ``ModuleNotFoundError`` at resolution time, so the caller sees
-    ``TargetUnavailable`` with the ``ImportError`` chained as its cause rather than a raw
-    import failure escaping the target layer.
-    """
+    """A ``callable`` naming a module that does not exist is a missing import path:
+    ``ModuleNotFoundError`` becomes ``TargetUnavailable`` with the ``ImportError`` chained."""
     adapter = LibraryAdapter(
         _library_target(callable_path="qrcheck_no_such_module_6f3a:generate"),
         name="probe-library",
@@ -330,10 +308,8 @@ def test_library_adapter_missing_module_is_unavailable() -> None:
 
 
 def test_library_adapter_missing_attribute_is_unavailable() -> None:
-    """A ``callable`` naming an attribute its module lacks is also a missing import path. ``json``
-    imports perfectly, so only the attribute walk fails; the conversion must still be
-    ``TargetUnavailable`` with the ``AttributeError`` chained.
-    """
+    """A ``callable`` naming an attribute its module lacks is also a missing import path: ``json``
+    imports, so only the attribute walk fails and it must still become ``TargetUnavailable``."""
     adapter = LibraryAdapter(
         _library_target(callable_path="json:no_such_attribute_6f3a"),
         name="probe-library",
@@ -389,10 +365,8 @@ def test_cli_adapter_missing_executable_is_unavailable(tmp_path: Path) -> None:
 
 
 def test_cli_adapter_non_executable_file_is_unavailable(tmp_path: Path) -> None:
-    """An existing file without the exec bit cannot be spawned either. ``execve`` fails with
-    ``EACCES``, which is a ``PermissionError`` and therefore the same ``OSError`` trigger: the
-    target is unreachable, not wrong.
-    """
+    """An existing file without the exec bit cannot be spawned either: ``execve`` fails with
+    ``EACCES``, the same ``OSError`` trigger."""
     present = tmp_path / "qrcheck-target-without-exec-bit"
     present.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     present.chmod(0o644)
@@ -424,10 +398,8 @@ def test_http_adapter_refused_loopback_connection_is_unavailable() -> None:
 def test_http_adapter_unsupported_protocol_is_unavailable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """An unusable address arrives as ``httpx.UnsupportedProtocol``, not as an ``HTTPError``. The
-    adapter lists it beside the network errors for exactly that reason; a mapping that only
-    caught ``httpx.HTTPError`` would let it escape unwrapped.
-    """
+    """An unusable address arrives as ``httpx.UnsupportedProtocol``, not an ``HTTPError``, so
+    the adapter lists it beside the network errors instead of letting it escape unwrapped."""
 
     def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.UnsupportedProtocol("no handler for the request scheme")
@@ -444,17 +416,12 @@ def test_http_adapter_unsupported_protocol_is_unavailable(
     )
 
 
-# ---------------------------------------------------------------------------
 # TargetTimeout -- "no response within targets.<name>.timeout_s" (AAP §0.3.4)
-# ---------------------------------------------------------------------------
 
 
 def test_cli_adapter_timeout_is_target_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A child that outlives ``timeout_s`` is killed and reported as a timeout. The spawn is
-    patched, so no probe waits for a real child; what is asserted is that the
-    ``subprocess.TimeoutExpired`` is converted and that the message quotes the *configured*
-    timeout, which is the value the consumer's report repeats.
-    """
+    """A child that outlives ``timeout_s`` is killed and reported as a timeout: the spawn is
+    patched, so what is asserted is the conversion and the *configured* timeout in the message."""
     invocations = _patch_spawn(
         monkeypatch,
         subprocess.TimeoutExpired(("qrcheck-fake-target",), _PROBE_TIMEOUT_S),
@@ -520,19 +487,14 @@ def test_http_adapter_connect_timeout_is_unavailable_not_a_timeout(
     )
 
 
-# ---------------------------------------------------------------------------
 # TargetRejected -- a declared rejection, with the target's text verbatim
-# ---------------------------------------------------------------------------
 
 
 def test_library_adapter_rejected_channel_preserves_the_text(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A callable that speaks the ``rejected:`` channel is reported verbatim. Only the whitespace
-    separating the prefix from the message is removed; every other character of the target's
-    text reaches ``str(exc)`` unchanged, because the ``IV-*`` checks record it in
-    ``decoded.rejection``.
-    """
+    """A callable that speaks the ``rejected:`` channel is reported verbatim: only the whitespace
+    after the prefix is removed, because ``IV-*`` records the text in ``decoded.rejection``."""
 
     def target(**kwargs: Any) -> bytes:
         raise ValueError(f"rejected: {_UNUSUAL_TEXT}")
@@ -552,10 +514,8 @@ def test_library_adapter_rejected_channel_preserves_the_text(
 def test_cli_adapter_json_rejection_preserves_the_text(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A non-zero exit carrying ``{"error": <text>}`` is a declared rejection. The text is the
-    JSON member's value, unchanged: the adapter decodes the line, it does not re-word, quote or
-    escape what the target said.
-    """
+    """A non-zero exit carrying ``{"error": <text>}`` is a declared rejection whose text is the JSON
+    member's value, unchanged: the adapter decodes the line without re-wording or escaping it."""
     stdout = json.dumps({"error": _UNUSUAL_TEXT}, ensure_ascii=False).encode("utf-8")
     _patch_spawn(monkeypatch, _completed(1, stdout=stdout))
     adapter = CliAdapter(_cli_target(command=("qrcheck-fake-target",)), name="probe-cli")
@@ -602,20 +562,14 @@ def test_reference_adapter_declared_rejection_is_target_rejected(
 
 
 
-# ---------------------------------------------------------------------------
 # TargetContractError -- "response present but unusable" (AAP §0.3.4)
-# ---------------------------------------------------------------------------
 
 
 def test_http_adapter_error_status_is_a_contract_error_not_a_rejection(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """An error-shaped HTTP body is unusable response data, not a declared rejection. This is the
-    probe that states the departure: an HTTP target has no declared-rejection channel in its
-    configuration (``url``, ``method``, ``request_template``, ``image_field``,
-    ``image_encoding``, ``metadata_map``), so a 4xx is reported as a contract error and the
-    body travels on the error as evidence.
-    """
+    """An error-shaped HTTP body is unusable data, not a declared rejection: an HTTP target has no
+    rejection channel in its configuration, so a 4xx is a contract error carrying the body."""
     body = json.dumps({"error": _UNUSUAL_TEXT}, ensure_ascii=False).encode("utf-8")
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -790,10 +744,8 @@ def test_http_adapter_non_image_bytes_record_the_full_hex_prefix(
 def test_http_adapter_absent_image_field_is_a_contract_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A configured ``image_field`` the response does not carry names both sides. The diagnostic
-    quotes the configured dotted path and the segment that was absent, so the reader can tell a
-    target that changed its response shape from one that answered a different request.
-    """
+    """A configured ``image_field`` the response does not carry names both sides -- the dotted path
+    and the absent segment -- so a changed shape is distinguishable from a different request."""
 
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"envelope": {"other": "not the image"}})
@@ -819,10 +771,8 @@ def test_http_adapter_absent_image_field_is_a_contract_error(
 def test_cli_adapter_nonzero_exit_without_declared_rejection_is_a_contract_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A non-zero exit is only a rejection when the target said so. Every other non-zero exit is a
-    contract error -- a fabricated rejection would make the ``IV-*`` checks vacuous -- and the
-    child's stdout travels on the error as evidence.
-    """
+    """A non-zero exit is a rejection only when the target said so: anything else is a contract
+    error, and a fabricated rejection would make the ``IV-*`` checks vacuous."""
     _patch_spawn(monkeypatch, _completed(2, stdout=b"partial output", stderr=b"boom"))
     adapter = CliAdapter(_cli_target(command=("qrcheck-fake-target",)), name="probe-cli")
 
@@ -868,19 +818,15 @@ def test_contract_error_body_prefix_is_bounded_to_the_hex_limit() -> None:
     assert str(error) == "probe", "the message must stay the diagnostic, unaltered"
 
 
-# ---------------------------------------------------------------------------
 # TargetUnsupported -- "a capability the adapter did not declare", before any I/O
-# ---------------------------------------------------------------------------
 
 
 def test_require_capabilities_refuses_a_missing_capability_without_calling_the_target(
     counting_adapter: Any,
     tmp_path: Path,
 ) -> None:
-    """One missing capability is refused, and the target is never invoked. The counting stub
-    declares all thirteen capabilities by default so that no check is skipped by accident; a
-    shortfall probe therefore narrows it to the one capability it has.
-    """
+    """One missing capability is refused and the target is never invoked: the counting stub declares
+    all thirteen, so a shortfall probe narrows it to the one it has."""
     counting_adapter.capabilities = frozenset({Capability.png})
     before = _snapshot(tmp_path)
 
@@ -929,10 +875,8 @@ def test_require_capabilities_names_every_missing_capability(
 def test_cli_adapter_unsupported_capability_precedes_any_spawn(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A request needing an undeclared capability never reaches a process. The patched spawn
-    raises if it is ever called, so this probe fails loudly if the adapter spawns first and
-    refuses afterwards -- which an exception-type assertion alone would not catch.
-    """
+    """A request needing an undeclared capability never reaches a process: the patched spawn
+    raises if called, so a spawn-before-refuse adapter fails here."""
     invocations = _patch_spawn(
         monkeypatch,
         AssertionError("the adapter spawned a process for an undeclared capability"),
@@ -956,11 +900,8 @@ def test_cli_adapter_unsupported_capability_precedes_any_spawn(
 def test_cli_adapter_inexpressible_pin_precedes_any_spawn(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A version pin no argument template can carry is refused before any process exists.
-    Declaring the capability is not enough: the CLI vocabulary has no version placeholder, so
-    running the request anyway would let the target choose and report its choice as a
-    conformance failure.
-    """
+    """A version pin no argument template can carry is refused before any process exists: the CLI
+    vocabulary has no version placeholder, so running it would let the target choose."""
     invocations = _patch_spawn(
         monkeypatch,
         AssertionError("the adapter spawned a process for a request it cannot convey"),
@@ -1011,9 +952,7 @@ def test_http_adapter_unsupported_capability_precedes_any_client(
     )
 
 
-# ---------------------------------------------------------------------------
 # Hierarchy, and no library exception escaping the reference adapter
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("error_type", _ERROR_TYPES)
@@ -1029,10 +968,8 @@ def test_every_declared_error_is_a_target_error(error_type: type[TargetError]) -
 
 
 def test_no_declared_error_is_a_subclass_of_another() -> None:
-    """The five are siblings, so a caller's ``except`` order cannot reclassify a failure. If
-    ``TargetRejected`` were a ``TargetContractError``, an ``except`` clause for the contract
-    error would silently swallow the rejections the ``IV-*`` checks depend on.
-    """
+    """The five are siblings, so a caller's ``except`` order cannot reclassify a failure: were
+    ``TargetRejected`` a ``TargetContractError``, the contract clause would swallow rejections."""
     for outer in _ERROR_TYPES:
         for inner in _ERROR_TYPES:
             if outer is inner:
@@ -1046,10 +983,8 @@ def test_no_declared_error_is_a_subclass_of_another() -> None:
 def test_reference_adapter_over_capacity_at_a_pinned_version_is_rejected(
     config_factory: Callable[..., models.Config],
 ) -> None:
-    """One byte past the pinned version's capacity is a declared rejection. The capacity figure is
-    read from the product's own tables rather than typed, and the message repeats it, so the
-    rejection is auditable from the report alone.
-    """
+    """One byte past the pinned version's capacity is a declared rejection: the capacity is read
+    from the product's own tables and repeated in the message, so it is auditable."""
     adapter = _reference_adapter(config_factory())
     capacity = max_payload_bytes(_PINNED_VERSION, "M", "byte")
     request = _out_of_contract(payload=b"a" * (capacity + 1), version=_PINNED_VERSION)
@@ -1089,10 +1024,8 @@ def test_reference_adapter_over_capacity_without_a_pin_is_rejected(
 def test_reference_adapter_invalid_ec_level_is_rejected(
     config_factory: Callable[..., models.Config],
 ) -> None:
-    """An error level outside L/M/Q/H is refused by the target, never passed to segno. segno would
-    raise a bare ``ValueError`` for it; the target validates first and raises its own declared
-    rejection naming the value, which is what ``IV-BAD-OPTION`` reads.
-    """
+    """An error level outside L/M/Q/H is refused by the target, never passed to segno: segno
+    would raise a bare ``ValueError``, so the target validates first and names the value."""
     adapter = _reference_adapter(config_factory())
     request = _out_of_contract(payload=_UNUSUAL_TEXT.encode("utf-8"), ec_level="X")
 

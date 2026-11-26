@@ -2,26 +2,16 @@
 
 A suite that cannot fail proves nothing, so the framework ships the defect it is supposed to
 catch: ``qrcheck/targets/defective.py`` carries five injections, and this module holds AAP
-§0.4.2 -- a run against it fails **exactly** the nine checks those injections target, with zero
-``error`` results and the other twelve passing in the same run -- and §0.4.3, that nothing was
-weakened, skipped, retried or threshold-relaxed to reach that outcome (AAP §0.6.1 #1 and #3).
-Containment would accept any run whose failures *include* the nine, which is what a cascade of
-collateral failures looks like, so the observed set is compared with
-``SELF_CHECK_TARGETS["defective"]`` **and** with the nine-identifier literal of §0.4.2 as an
-equality, every message naming what is extra beside what is missing. Four of the nine fail from
-a **declared, unavoidable** consequence of another injection, so a test demanding only the five
-primary ones would be wrong, and the five are declared once in ``DEFECTS`` and once in
-``qrcheck/registry/expectations.py``, deliberately independently, with the last test here
-proving the two still agree.
+§0.4.2 -- a run against it fails **exactly** the nine checks those injections target, with
+zero ``error`` results and the other twelve passing -- and §0.4.3, that nothing was weakened,
+skipped or relaxed to get there.
 
-Evidence is written for failing, errored and skipped cases only (AAP §0.3.4), so this is the
-one integration module whose artefacts are guaranteed to exist and whose attribution can be read
-rather than inferred: each failing case carries ``request.json`` and ``decoded.json`` under
-``<report_root>/evidence/<check-id>/<failure-id>/``, agreeing with ``summary.json``, while
-``RN-QUIET-ZONE`` and ``RN-MODULE-SIZE`` are held to their own measurement keys because AAP
-§0.4.2 measures both arithmetically from the image. Both runs come from the session-scoped
-fixtures, so the five-run budget of AAP §0.6.1 #9 is untouched.
-"""
+Set equality is asserted in both directions, because containment would accept a cascade of
+collateral failures: the observed set is compared with ``SELF_CHECK_TARGETS["defective"]``
+**and** with the nine-identifier literal, and every message names what is extra beside what
+is missing. Evidence is written only for failing, errored and skipped cases (AAP §0.3.4), so
+this is the one integration module where attribution can be read rather than inferred. Both
+runs come from the session-scoped fixtures, so §0.6.1 #9's five-run budget is untouched."""
 
 from __future__ import annotations
 
@@ -38,15 +28,11 @@ from qrcheck.registry.expectations import SELF_CHECK_TARGETS, validate_against_r
 from qrcheck.report.model import Status
 from qrcheck.targets.defective import DEFECTS, Defect, expected_failing_ids
 
-# The cost of this module is two full 240-record runs, both session-scoped in
-# tests/integration/conftest.py. The marker is the one thing that keeps them out of the fast
-# unit job, so it is declared here and nowhere else; pyproject.toml registers the name.
+# Two full runs are the cost; the marker keeps them out of the fast unit job.
 pytestmark = pytest.mark.e2e
 
-# The nine check identifiers a --adapter defective run must fail (AAP §0.4.2), as one literal.
-# SELF_CHECK_TARGETS["defective"] is compared against this too: the declaration in the product
-# and the acceptance criterion in the plan are two statements of the same set, and a drift
-# between them is a defect in one of them rather than something to reconcile silently.
+# The nine identifiers a --adapter defective run must fail (AAP §0.4.2), as one literal;
+# SELF_CHECK_TARGETS["defective"] is compared against it too, so a drift is a defect in one of them.
 _EXPECTED_FAILING_CHECKS: Final[frozenset[str]] = frozenset(
     {
         "DT-DETERMINISTIC",
@@ -61,9 +47,7 @@ _EXPECTED_FAILING_CHECKS: Final[frozenset[str]] = frozenset(
     }
 )
 
-# The twelve checks that must pass in the same run that fails the nine above. Together with
-# _EXPECTED_FAILING_CHECKS this partitions the twenty-one declared identifiers, which is what
-# makes "the complement of the expected failures" and "these twelve, listed" the same assertion.
+# The twelve checks that pass beside the nine: with the set above this partitions the twenty-one.
 _EXPECTED_PASSING_CHECKS: Final[frozenset[str]] = frozenset(
     {
         "CL-ARTIFACTS",
@@ -81,9 +65,8 @@ _EXPECTED_PASSING_CHECKS: Final[frozenset[str]] = frozenset(
     }
 )
 
-# Each injection of AAP §0.4.2 by name, with every identifier it is declared to fail: the check
-# designed to catch it plus the consequences the plan declares unavoidable. This is the plan's
-# per-defect attribution, and the last test asserts it against the target's own DEFECTS table.
+# Each injection of AAP §0.4.2 by name with every identifier it is declared to fail, consequences
+# included; the last test asserts this against the target's own DEFECTS table.
 _DECLARED_PER_DEFECT: Final[Mapping[str, frozenset[str]]] = MappingProxyType(
     {
         "missing_quiet_zone": frozenset({"RN-QUIET-ZONE", "RN-MODULE-SIZE"}),
@@ -94,11 +77,8 @@ _DECLARED_PER_DEFECT: Final[Mapping[str, frozenset[str]]] = MappingProxyType(
     }
 )
 
-# The closed decode-evidence projection of AAP §0.3.4 that makes a failure re-derivable: both
-# decoder outcomes with their polarity, the agreement classification, the EC level from the
-# decoder and from the format information independently, the version implied by the sampled grid,
-# the mask, and the sampled matrix's digest. Sorted, so a missing-key diagnostic lists them in a
-# stable order.
+# The closed decode-evidence projection of AAP §0.3.4: both decoder outcomes, the agreement
+# classification, both EC readings, the grid's version, the mask and its digest; sorted.
 _DECODE_EVIDENCE_KEYS: Final[tuple[str, ...]] = (
     "agreement",
     "ec_level_decoder",
@@ -110,15 +90,10 @@ _DECODE_EVIDENCE_KEYS: Final[tuple[str, ...]] = (
     "version",
 )
 
-# The two checks AAP §0.4.2 measures arithmetically from the image rather than by decoding it, so
-# their evidence carries measurements instead of the decode projection above. Holding them to
-# _DECODE_EVIDENCE_KEYS would contradict the plan in the one place it explains why they need no
-# decode, and would leave every such case failing on a key the check is designed never to produce.
+# The two checks AAP §0.4.2 measures arithmetically, whose evidence carries measurements instead.
 _MEASUREMENT_ONLY_CHECKS: Final[frozenset[str]] = frozenset({"RN-MODULE-SIZE", "RN-QUIET-ZONE"})
 
-# The measurement keys each measurement-only check must persist, so that its failure is as
-# re-derivable as a decoded one: the canvas the module geometry was read from, the measurement
-# itself, and the value the request asked for.
+# The measurement keys a measurement-only check persists: the canvas, the measurement, the request.
 _MEASUREMENT_EVIDENCE_KEYS: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType(
     {
         "RN-MODULE-SIZE": ("image_px", "module_px_measured", "module_size_px_requested"),
@@ -129,9 +104,7 @@ _MEASUREMENT_EVIDENCE_KEYS: Final[Mapping[str, tuple[str, ...]]] = MappingProxyT
 # The four sides RN-QUIET-ZONE measures, in the order the evidence names them.
 _QUIET_ZONE_SIDES: Final[tuple[str, ...]] = ("bottom", "left", "right", "top")
 
-# The closed artefact set this module reads, by name. The names are the evidence layout's, and
-# reading them here rather than deriving them keeps a renamed artefact visible as a failure of
-# this module instead of a KeyError inside a helper.
+# The closed artefact set this module reads, by name, so a rename fails here, not in a helper.
 _REQUEST_JSON: Final[str] = "request.json"
 _DECODED_JSON: Final[str] = "decoded.json"
 _SYMBOL_PNG: Final[str] = "symbol.png"
@@ -139,12 +112,8 @@ _SYMBOL_REPEAT_PNG: Final[str] = "symbol-repeat.png"
 
 
 def _results(summary: Mapping[str, Any]) -> list[Mapping[str, Any]]:
-    """Return the run's result objects, proving the report carries the list it must.
-
-    The list is returned as ``summary.json`` stores it -- ordered by ``(check_id, case_id)`` by the
-    writer, and not re-sorted here. A missing ``results`` list fails the test rather than letting
-    every assertion below rest on an empty iteration.
-    """
+    """Return the run's result objects as ``summary.json`` stores them, in ``(check_id, case_id)``
+    order."""
     results = summary.get("results")
     assert isinstance(results, list), (
         f"summary.json carries no results list: keys present {sorted(summary)}"
@@ -161,12 +130,7 @@ def _statuses_by_check(results: list[Mapping[str, Any]]) -> dict[str, list[str]]
 
 
 def _failed_check_ids(results: list[Mapping[str, Any]]) -> frozenset[str]:
-    """Return the identifiers of the checks that failed or errored, as one set.
-
-    An error counts beside a failure because both mean the check did not pass: an injection that
-    broke the framework rather than the symbol is not an acceptable way to reach the expected set,
-    and the tallies are separately asserted to hold zero errors.
-    """
+    """Return the identifiers of the checks that failed or errored, as one set."""
     return frozenset(
         result["check_id"]
         for result in results
@@ -175,11 +139,7 @@ def _failed_check_ids(results: list[Mapping[str, Any]]) -> frozenset[str]:
 
 
 def _case_evidence_dir(report_root: Path, result: Mapping[str, Any]) -> Path:
-    """Return the failing case's evidence directory, proving the result records one.
-
-    ``CaseResult`` forbids a null directory on a non-passing result, so its absence means evidence
-    was not persisted and the failure cannot be re-derived.
-    """
+    """Return the failing case's evidence directory, which ``CaseResult`` forbids being null."""
     evidence_dir = result["evidence_dir"]
     assert evidence_dir is not None, (
         f"{result['check_id']}[{result['case_id']}] is {result['status']} with no evidence_dir, "
@@ -191,11 +151,7 @@ def _case_evidence_dir(report_root: Path, result: Mapping[str, Any]) -> Path:
 def _read_evidence(
     report_root: Path, result: Mapping[str, Any], name: str
 ) -> Mapping[str, Any]:
-    """Return one JSON artefact of a failing case, parsed.
-
-    An artefact that is absent or is not a JSON object fails the test, naming the case and the
-    path that was expected.
-    """
+    """Return one JSON artefact of a failing case, parsed."""
     path = _case_evidence_dir(report_root, result) / name
     assert path.is_file(), (
         f"{result['check_id']}[{result['case_id']}] carries no {name} at {path}"
@@ -208,11 +164,7 @@ def _read_evidence(
 
 
 def _require(container: Mapping[str, Any], key: str, where: str) -> Any:
-    """Return ``container[key]``, failing with the key's name when it is absent.
-
-    The diagnostic lists the keys that *are* present, because the reader's next question is always
-    what the artefact actually holds.
-    """
+    """Return ``container[key]``, failing with the key's name when it is absent."""
     assert key in container, (
         f"{where} carries no {key!r}; keys present: {sorted(container)}"
     )
@@ -222,10 +174,7 @@ def _require(container: Mapping[str, Any], key: str, where: str) -> Any:
 def _first_failing(
     results: list[Mapping[str, Any]], check_id: str
 ) -> Mapping[str, Any]:
-    """Return ``check_id``'s failing result with the lowest ``case_id``, so the choice is stable.
-
-    A check with no failing result fails the test, because there is then no evidence to read.
-    """
+    """Return ``check_id``'s failing result with the lowest ``case_id``."""
     failing = [
         result
         for result in results
@@ -240,13 +189,7 @@ def _first_failing(
 def test_defective_run_exits_1(
     defective_report: tuple[Path, dict[str, Any], int],
 ) -> None:
-    """The defective run must exit 1, with a failure and no internal error.
-
-    Catches a run that reaches the expected failing set by *erroring* rather than by judging -- an
-    error is exit 3 and means the framework faulted rather than the symbol -- and a run whose
-    tallies no longer account for every result it wrote, which would let a result disappear from the
-    count a CI gate reads.
-    """
+    """The defective run must exit 1, with a failure and no internal error."""
     _, summary, exit_code = defective_report
     counts = summary["counts"]
     results = _results(summary)
@@ -273,12 +216,7 @@ def test_defective_run_exits_1(
 def test_failed_check_set_equals_the_declared_expectation(
     defective_report: tuple[Path, dict[str, Any], int],
 ) -> None:
-    """The failing check set must equal the declared nine -- not a superset, not a subset.
-
-    Both directions are broken acceptance criteria: a superset means a failure outside the declared
-    blast radius (an injection cascading further than AAP §0.4.2 declares, or a framework defect),
-    and a subset means a declared defect went undetected.
-    """
+    """The failing check set must equal the declared nine -- not a superset, not a subset."""
     _, summary, _ = defective_report
     observed = _failed_check_ids(_results(summary))
     declared = SELF_CHECK_TARGETS["defective"]
@@ -302,13 +240,7 @@ def test_failed_check_set_equals_the_declared_expectation(
 def test_the_other_twelve_checks_all_pass(
     defective_report: tuple[Path, dict[str, Any], int],
 ) -> None:
-    """The twelve checks outside the declared set must every one of them pass.
-
-    Catches an expected failure that was turned into a skip -- the target declares the same
-    capabilities the conforming one does, precisely so that no expected failure can be reached
-    that way (AAP §0.4.2) -- and a check that reports nothing at all, which set equality over the
-    failing identifiers alone would not see.
-    """
+    """The twelve checks outside the declared set must every one of them pass."""
     _, summary, _ = defective_report
     results = _results(summary)
     grouped = _statuses_by_check(results)
@@ -338,14 +270,7 @@ def test_the_other_twelve_checks_all_pass(
 def test_every_failed_case_carries_request_and_decoded_evidence(
     defective_report: tuple[Path, dict[str, Any], int],
 ) -> None:
-    """Every failing case must carry the evidence that makes its failure re-derivable.
-
-    Catches a failure recorded without the request that produced it or the decoded-or-error outcome
-    that judged it, and a result whose identity disagrees with the evidence filed for it. The decode
-    projection of AAP §0.3.4 is required wherever a symbol was decoded; ``RN-QUIET-ZONE`` and
-    ``RN-MODULE-SIZE`` are held to their measurement keys instead, because AAP §0.4.2 measures both
-    arithmetically from the image and neither performs a decode.
-    """
+    """Every failing case must carry the evidence that makes its failure re-derivable."""
     report_root, summary, _ = defective_report
     results = _results(summary)
     failed = [result for result in results if result["status"] == Status.FAILED]
@@ -381,8 +306,7 @@ def test_every_failed_case_carries_request_and_decoded_evidence(
         for key in keys:
             _require(decoded, key, f"{where} {_DECODED_JSON}")
 
-    # The attribution asserted below reads one case per defect, so every one of the nine must
-    # have failed with evidence rather than merely have failed.
+    # The attribution reads one case per defect, so all nine must have failed with evidence.
     without_evidence = sorted(
         check_id
         for check_id in _EXPECTED_FAILING_CHECKS
@@ -400,19 +324,12 @@ def test_every_failed_case_carries_request_and_decoded_evidence(
 def test_defect_attribution_is_visible_in_the_evidence(
     defective_report: tuple[Path, dict[str, Any], int],
 ) -> None:
-    """Each injection's own observation must be readable in a real failure directory.
-
-    Catches a defect that fails a check for the wrong reason: the nine identifiers say *which*
-    checks must fail, while only the observation named for each injection in AAP §0.4.5 says
-    *why*, so a check failing on something other than its injected defect would satisfy the set
-    equality above while proving nothing about the defect the target carries.
-    """
+    """Each injection's own observation must be readable in a real failure directory."""
     report_root, summary, _ = defective_report
     results = _results(summary)
 
-    # D1 wrong_ec_level: the symbol really is one error-correction level down, read from two
-    # independent sources -- the primary decoder's own report and the format information -- both
-    # of which differ from the level the request asked for and agree with each other.
+    # D1 wrong_ec_level: the symbol is one level down, read from the decoder's report and the format
+    # information, which differ from the request and agree with each other.
     ec_case = _first_failing(results, "SY-EC-MATCH")
     ec_request = _read_evidence(report_root, ec_case, _REQUEST_JSON)
     ec_decoded = _read_evidence(report_root, ec_case, _DECODED_JSON)
@@ -433,8 +350,7 @@ def test_defect_attribution_is_visible_in_the_evidence(
         f"show one downshift but an inconsistency of its own"
     )
 
-    # D3 missing_quiet_zone: one module drawn where four or more were asked, measured on each of
-    # the four sides, so the shortfall is read from the image rather than assumed.
+    # D3 missing_quiet_zone: one module drawn where four were asked, measured on all four sides.
     quiet_case = _first_failing(results, "RN-QUIET-ZONE")
     quiet_request = _read_evidence(report_root, quiet_case, _REQUEST_JSON)
     quiet_decoded = _read_evidence(report_root, quiet_case, _DECODED_JSON)
@@ -461,8 +377,7 @@ def test_defect_attribution_is_visible_in_the_evidence(
         f"were asked -- a marginal shortfall is a different defect"
     )
 
-    # D4 non_deterministic_mask: two calls of the identical request whose sampled matrices
-    # differ, with both artefacts on disk so the change is visible and not merely asserted.
+    # D4 non_deterministic_mask: two calls of one request whose sampled matrices differ.
     determinism_case = _first_failing(results, "DT-DETERMINISTIC")
     determinism_dir = _case_evidence_dir(report_root, determinism_case)
     for artefact in (_SYMBOL_PNG, _SYMBOL_REPEAT_PNG):
@@ -483,8 +398,7 @@ def test_defect_attribution_is_visible_in_the_evidence(
         f"{first_digest}, so the mask did not change between them"
     )
 
-    # D5 over_capacity_acceptance: a symbol returned for an over-capacity request, decoding to
-    # fewer bytes than were asked for, with the first divergence located.
+    # D5 over_capacity_acceptance: a symbol returned for an over-capacity request, decoding short.
     over_case = _first_failing(results, "IV-OVERCAPACITY")
     over_request = _read_evidence(report_root, over_case, _REQUEST_JSON)
     over_decoded = _read_evidence(report_root, over_case, _DECODED_JSON)
@@ -504,8 +418,7 @@ def test_defect_attribution_is_visible_in_the_evidence(
         f"evidence does not locate where the accepted symbol departs from the request"
     )
 
-    # D2 truncated_payload: the decoded bytes differ from the requested ones, with the digest of
-    # both sides and the offset of the first divergence recorded.
+    # D2 truncated_payload: the decoded bytes differ from the requested ones, with both digests.
     roundtrip_case = _first_failing(results, "RT-ROUNDTRIP")
     roundtrip_request = _read_evidence(report_root, roundtrip_case, _REQUEST_JSON)
     roundtrip_decoded = _read_evidence(report_root, roundtrip_case, _DECODED_JSON)
@@ -543,12 +456,7 @@ def test_defect_attribution_is_visible_in_the_evidence(
 
 
 def test_expectations_validate_against_the_live_registry() -> None:
-    """The declared expectation must validate against the twenty-one registered checks.
-
-    Catches a deleted expectation or a deleted check: ``validate_against_registry`` raises rather
-    than shrinking what the gate above compares (AAP §0.4.3), so removing an expected failure
-    breaks a test instead of silencing one.
-    """
+    """The declared expectation must validate against the twenty-one registered checks."""
     import qrcheck.checks  # noqa: F401 - importing the package registers the nine families
 
     validate_against_registry()
@@ -584,12 +492,7 @@ def test_reference_and_defective_form_a_contrast_pair(
     reference_report: tuple[Path, dict[str, Any], int],
     defective_report: tuple[Path, dict[str, Any], int],
 ) -> None:
-    """The same suite must come back clean on one target and failing on the other.
-
-    Catches the other form of the vacuity AAP §0.4 opens with: a suite that fails wherever a seeded
-    defect sits proves something only if it also passes against a conforming generator given the
-    same seed, the same error-correction level and the same corpus.
-    """
+    """The same suite must come back clean on one target and failing on the other."""
     _, reference_summary, _ = reference_report
     _, defective_summary, _ = defective_report
 
@@ -636,13 +539,7 @@ def test_reference_and_defective_form_a_contrast_pair(
 
 
 def test_defects_table_declares_the_five_injections() -> None:
-    """The target's own injection table must declare exactly the five defects and their catches.
-
-    Catches a drift between the two declarations of the expected set: ``DEFECTS`` in the target
-    and ``SELF_CHECK_TARGETS`` in the registry are independent on purpose (the registry must not
-    import an adapter that imports segno), so a change to either -- a renamed injection, a moved
-    consequence, a dropped catch -- has to fail here rather than move the gate above.
-    """
+    """The target's own injection table must declare exactly the five defects and their catches."""
     assert len(DEFECTS) == 5, (
         f"the target declares {len(DEFECTS)} injection(s), not the five of AAP §0.4.2: "
         f"{[getattr(defect, 'name', defect) for defect in DEFECTS]}"

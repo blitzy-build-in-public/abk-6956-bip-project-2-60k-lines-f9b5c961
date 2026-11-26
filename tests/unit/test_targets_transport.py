@@ -1,27 +1,23 @@
 """The transport-mapping half of the adapter contract: how an answer is decoded, and how a request
 is shaped, all of it from configuration.
 
-:mod:`qrcheck.targets.base` states the ``returns`` contract once and both the ``library`` and
-the ``cli`` adapters consume it through :func:`~qrcheck.targets.base.decode_returned_image`; the
-dotted ``metadata_map`` lookup, the dotted ``image_field`` and the ``kwargs_map`` projection are
-each one implementation too. Three properties are load-bearing: every delivery mode delivers the
-same bytes, and the four ways that can go wrong -- a missing file, a path that is a directory,
-base64 that does not decode, an empty body -- all arrive as
-:class:`~qrcheck.targets.base.TargetContractError` rather than as the ``OSError`` or
-``binascii.Error`` underneath them; a response's shape comes only from configuration, with
-``_body`` the one sentinel the adapter may know (AAP §0.3.4's MUST NOT on vendor endpoints,
-field names and response shapes), whose mechanical half is the AST deny-list this module runs
-over ``qrcheck/targets/http.py``; and a subprocess is argv-only -- a list of ``str`` words,
-``shell=False`` and the configured ``timeout_s`` handed to ``subprocess.run`` (AAP §0.3.2,
-NFR-7) -- because a missing ``timeout`` would let a hung target hang the whole run.
+:mod:`qrcheck.targets.base` states the ``returns`` contract once and the ``library`` and ``cli``
+adapters consume it through :func:`~qrcheck.targets.base.decode_returned_image`; the dotted
+``metadata_map`` lookup, the dotted ``image_field`` and the ``kwargs_map`` projection are each
+one implementation too. Three properties are load-bearing: every delivery mode delivers the same
+bytes, and the four ways that can go wrong (a missing file, a path that is a directory, base64
+that does not decode, an empty body) all arrive as
+:class:`~qrcheck.targets.base.TargetContractError`, never as the ``OSError`` or
+``binascii.Error`` underneath; a response's shape comes only from configuration, ``_body`` being
+the one sentinel the adapter may know (AAP §0.3.4), whose mechanical half is the AST deny-list
+over ``qrcheck/targets/http.py``; and a subprocess is argv-only -- ``str`` words, ``shell=False``
+and the configured ``timeout_s`` handed to ``subprocess.run`` (AAP §0.3.2, NFR-7), because a
+missing timeout would let a hung target hang the whole run.
 
-Deliberately not asserted: the ``declared_*`` fields of
-:class:`~qrcheck.targets.base.GeneratedSymbol` are the target's own claim, so what is pinned is
-that they carry exactly what the configured path holds and stay ``None`` when nothing is
-configured. No threshold from ``qrcheck.toml`` is read, nothing is skipped, marked, retried or
-timed, no socket is opened (``httpx.MockTransport`` answers every request and ``subprocess.run``
-is replaced by a recorder), and no directory is created outside ``tmp_path``.
-"""
+Deliberately not asserted: the ``declared_*`` fields are the target's own claim, so what is
+pinned is that they carry what the configured path holds and stay ``None`` when nothing is
+configured. No threshold from ``qrcheck.toml`` is read, no socket is opened and no directory is
+created outside ``tmp_path``."""
 
 from __future__ import annotations
 
@@ -65,11 +61,9 @@ from qrcheck.targets.cli import CliAdapter
 from qrcheck.targets.http import HttpAdapter
 from qrcheck.targets.library import LibraryAdapter
 
-# A genuine 1x1 PNG, and the artefact every delivery mode has to reproduce byte for byte.
-# It is a literal rather than something built at import time because that keeps the whole
-# module free of an image-library import; that it really is a PNG is asserted once, in
-# test_the_artefact_fixture_is_a_real_png, so a corrupted literal fails there instead of
-# making every adapter test agree with a broken fixture.
+# A genuine 1x1 PNG, the artefact every delivery mode reproduces byte for byte. A literal keeps
+# the module free of an image-library import, and test_the_artefact_fixture_is_a_real_png proves
+# it is a PNG, so a corrupted one fails there instead of making every test agree with it.
 _PNG_BYTES: Final[bytes] = (
     b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x01\x00\x00\x00"
     b"\x007n\xf9$\x00\x00\x00\nIDATx\x9cch\x00\x00\x00\x82\x00\x81w\xcdr\xb6\x00\x00\x00"
@@ -79,37 +73,32 @@ _PNG_BYTES: Final[bytes] = (
 #: The same artefact as the base64 text a target may hand back instead.
 _PNG_BASE64: Final[str] = base64.b64encode(_PNG_BYTES).decode("ascii")
 
-# A payload with a non-ASCII character, so ``payload_utf8`` and the CLI's bare ``{}`` slot
-# have a real encoding to perform: a payload that happened to be ASCII would let a lossy
-# or latin-1 conversion pass these tests.
+# A payload with a non-ASCII character, so ``payload_utf8`` and the CLI's bare ``{}`` slot have a
+# real encoding to perform: an ASCII payload would let a lossy or latin-1 conversion pass.
 _PAYLOAD_TEXT: Final[str] = "héllo wörld — qrcheck"
 _PAYLOAD: Final[bytes] = _PAYLOAD_TEXT.encode("utf-8")
 
-# The request's two colours, chosen so the expected ``#rrggbb`` text is not the default
-# pair: a transport that dropped colour entirely would otherwise still match.
+# The request's two colours, chosen so the expected ``#rrggbb`` text is not the default pair.
 _FOREGROUND: Final[tuple[int, int, int]] = (0x12, 0x34, 0x56)
 _BACKGROUND: Final[tuple[int, int, int]] = (0xDD, 0xEE, 0xFF)
 
-# A test-local ``timeout_s``, carried into every transport test that can assert it.  It is
-# a value of this module's own configuration records, not a threshold read from
-# ``qrcheck.toml``; nothing here asserts a duration, only that the configured number is the
-# one handed to the transport.
+# A test-local ``timeout_s``, carried into every transport test that can assert it. It is a value
+# of this module's own configuration records, not a threshold read from ``qrcheck.toml``: nothing
+# here asserts a duration, only that the configured number is the one handed to the transport.
 _TIMEOUT_S: Final[float] = 7.5
 
-# The loopback endpoint an HTTP target record carries.  Nothing dials it: every request in
-# this module is answered by ``httpx.MockTransport`` inside the process, so the port is
-# never bound and no packet is sent.
+# The loopback endpoint an HTTP target record carries. Nothing dials it: ``httpx.MockTransport``
+# answers every request in the process, so the port is never bound and no packet is sent.
 _HTTP_URL: Final[str] = "http://127.0.0.1:18000/generate"
 
 #: The sibling configuration record the HTTP adapter is asserted to mirror.
 _HTTP_MODULE_PATH: Final[Path] = Path(http_module.__file__).resolve()
 
-# The vendor field names the HTTP adapter may never name.  A literal equal to one of these
-# anywhere in ``qrcheck/targets/http.py`` means the module learned a response shape of its
-# own, which is the AAP §0.3.4 MUST NOT; the only response-shape vocabulary it may hold is
-# the ``_body`` sentinel and the placeholder tokens of
-# :data:`qrcheck.config.models.TEMPLATE_FIELDS`.  Sorted, so a failure message lists the
-# offenders in one fixed order.
+# The vendor field names the HTTP adapter may never name: a literal equal to one of these anywhere
+# in ``qrcheck/targets/http.py`` means the module learned a response shape of its own, which is the
+# AAP §0.3.4 MUST NOT. The only response-shape vocabulary it may hold is the ``_body`` sentinel and
+# the placeholder tokens of :data:`qrcheck.config.models.TEMPLATE_FIELDS`. Sorted, so a failure
+# message lists the offenders in one fixed order.
 _VENDOR_FIELD_DENYLIST: Final[tuple[str, ...]] = tuple(
     sorted(
         {
@@ -126,23 +115,21 @@ _VENDOR_FIELD_DENYLIST: Final[tuple[str, ...]] = tuple(
     )
 )
 
-# A literal shaped like a dotted path is a hard-coded response key by definition -- the
-# adapter's own response paths arrive from ``image_field`` and ``metadata_map``, so none
-# may appear in its source.
+# A literal shaped like a dotted path is a hard-coded response key by definition: the adapter's own
+# response paths arrive from ``image_field`` and ``metadata_map``, so none may appear in its source.
 _DOTTED_PATH_LITERAL: Final[re.Pattern[str]] = re.compile(
     r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+"
 )
 
 _URL_LITERAL: Final[re.Pattern[str]] = re.compile(r"\bhttps?://", re.IGNORECASE)
 
-#: The one sentinel the HTTP adapter may know, restated here rather than imported so the
-#: scan does not silently follow a rename in the module it audits.
+#: The one sentinel the HTTP adapter may know, restated rather than imported so the scan does not
+#: follow a rename in the module it audits.
 _BODY_SENTINEL: Final[str] = "_body"
 
-#: How each ``returns`` kind carries the artefact, as a value builder over the PNG and the
-#: path it was written to.  Iterated in sorted order and asserted complete against
-#: ``RETURNS_KINDS``, so a fifth kind cannot be added to the configuration vocabulary
-#: without a case here.
+#: How each ``returns`` kind carries the artefact, as a value builder over the PNG and its path.
+#: Iterated in sorted order and asserted complete against ``RETURNS_KINDS``, so a fifth kind cannot
+#: be added to the configuration vocabulary without a case here.
 _RETURN_VALUES: Final[Mapping[str, Callable[[bytes, Path], object]]] = {
     "base64": lambda png, path: base64.b64encode(png).decode("ascii"),
     "bytes_path": lambda png, path: path,
@@ -152,19 +139,14 @@ _RETURN_VALUES: Final[Mapping[str, Callable[[bytes, Path], object]]] = {
 
 
 def _hex_colour(rgb: tuple[int, int, int]) -> str:
-    """Return one colour as the ``#rrggbb`` text the HTTP template documents for it. Derived here,
-    from the request's own tuple, rather than imported from the adapter: a test that reused the
-    adapter's formatter could not notice the formatter changing the documented textual shape.
-    """
+    """Return one colour as the ``#rrggbb`` text the HTTP template documents. Derived from the
+    request's own tuple rather than imported from the adapter, so a formatter change cannot pass."""
     return "#{:02x}{:02x}{:02x}".format(*rgb)
 
 
 def _install_module(monkeypatch: pytest.MonkeyPatch, name: str, **members: object) -> str:
-    """Put a throwaway module named `name` into ``sys.modules`` and return its name. The
-    ``library`` adapter resolves its target through ``importlib.import_module(module)``
-    followed by attribute lookup, so an in-memory module is what lets a test exercise that path
-    with no file on disk and no ``sys.path`` edit.
-    """
+    """Put a throwaway module named `name` into ``sys.modules`` and return its name, so the
+    ``library`` adapter's ``importlib`` path runs with no file on disk and no ``sys.path`` edit."""
     module = types.ModuleType(name)
     for attribute in sorted(members):
         setattr(module, attribute, members[attribute])
@@ -218,10 +200,8 @@ def _cli_target(
 
 
 def _http_target(**overrides: Any) -> HTTPTarget:
-    """Return a resolved ``type = "http"`` target record, overridden per test. The defaults
-    describe the simplest loopback target -- one payload placeholder, the raw body as the image
-    -- so a test that cares about the template or the extraction states only what it changes.
-    """
+    """Return a resolved ``type = http`` record, overridden per test: the defaults describe the
+    simplest loopback target, so a test states only what it changes."""
     values: dict[str, Any] = {
         "name": "example",
         "type": "http",
@@ -242,11 +222,8 @@ def _install_http_client(
     monkeypatch: pytest.MonkeyPatch,
     handler: Callable[[httpx.Request], httpx.Response],
 ) -> tuple[list[httpx.Request], list[dict[str, Any]]]:
-    """Answer every HTTP request in-process and return what the adapter sent. ``httpx.Client`` is
-    replaced inside :mod:`qrcheck.targets.http` with a factory that injects an
-    ``httpx.MockTransport`` over the test's `handler`, so the adapter's own construction -- its
-    timeout, its redirect and proxy settings -- stays live while no socket is touched.
-    """
+    """Answer every HTTP request in-process and return what the adapter sent: ``httpx.Client`` is
+    replaced by a factory injecting an ``httpx.MockTransport``, so no socket is touched."""
     requests: list[httpx.Request] = []
     client_kwargs: list[dict[str, Any]] = []
     real_client = httpx.Client
@@ -271,12 +248,8 @@ def _install_fake_process(
     stdout: bytes = b"",
     write_at: Callable[[list[str]], str] | None = None,
 ) -> list[tuple[list[str], dict[str, Any]]]:
-    """Replace ``subprocess.run`` in the ``cli`` adapter with a recorder. No child process is
-    started: the recorder captures the argument vector and keyword arguments the adapter
-    passed, optionally writes the artefact where a path-bearing ``output_arg`` said it would be
-    -- which is what a conforming target does -- and returns a zero-status
-    ``CompletedProcess``.
-    """
+    """Replace ``subprocess.run`` in the ``cli`` adapter with a recorder: no child starts, the
+    vector and keywords are captured, and a zero-status ``CompletedProcess`` comes back."""
     calls: list[tuple[list[str], dict[str, Any]]] = []
 
     def fake_run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
@@ -290,12 +263,8 @@ def _install_fake_process(
 
 
 def _assert_argv_only(calls: list[tuple[list[str], dict[str, Any]]]) -> list[str]:
-    """Assert the one recorded invocation is argv-only, and return its argument vector. The three
-    properties AAP §0.3.2 and NFR-7 require of every subprocess this product starts: the vector
-    is a list (never a command string a shell would split), every word is text, no shell is
-    interposed, and the configured timeout is handed to ``subprocess.run`` so a hung target is
-    killed rather than waited on.
-    """
+    """Assert the one recorded invocation is argv-only and return its vector -- the three properties
+    AAP §0.3.2 and NFR-7 require: a list of text words, no shell, and the configured timeout."""
     assert len(calls) == 1, f"expected exactly one invocation, recorded {len(calls)}"
     argv, kwargs = calls[0]
     assert isinstance(argv, list), f"argv must be a list, not {type(argv).__name__}"
@@ -311,11 +280,8 @@ def _assert_argv_only(calls: list[tuple[list[str], dict[str, Any]]]) -> list[str
 
 @pytest.fixture
 def private_tempdir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
-    """Point :mod:`tempfile` at a directory inside the test, and return it. Redirecting
-    ``tempfile.tempdir`` keeps that inside ``tmp_path`` rather than the host's shared temporary
-    directory, where a sibling checkout's leftovers would otherwise be visible to -- and
-    pollute -- the ``CL-ARTIFACTS`` snapshot the suite takes of the same directory.
-    """
+    """Point :mod:`tempfile` at a directory inside the test and return it, so nothing lands in the
+    host's shared temporary directory that ``CL-ARTIFACTS`` snapshots."""
     directory = tmp_path / "tempdir"
     directory.mkdir()
     monkeypatch.setattr(tempfile, "tempdir", str(directory))
@@ -334,10 +300,8 @@ def _written_path_after(prefix: str) -> Callable[[list[str]], str]:
 
 
 def _string_literals() -> list[tuple[int, str]]:
-    """Return every string literal in ``qrcheck/targets/http.py`` as ``(lineno, text)``. Read from
-    the module's own resolved path, never from the working directory, and sorted by line so a
-    failure names its offenders in source order.
-    """
+    """Return every string literal in ``qrcheck/targets/http.py`` as ``(lineno, text)``, sorted by
+    line so a failure names its offenders in source order."""
     source = _HTTP_MODULE_PATH.read_text(encoding="utf-8")
     tree = ast.parse(source, filename=str(_HTTP_MODULE_PATH))
     return sorted(
@@ -359,16 +323,12 @@ def _host_of(literal: str) -> str | None:
     return urllib.parse.urlsplit(literal).hostname
 
 
-# ---------------------------------------------------------------------------
 # The artefact fixture, and the four kinds of `returns`
-# ---------------------------------------------------------------------------
 
 
 def test_the_artefact_fixture_is_a_real_png() -> None:
-    """The literal every delivery mode reproduces really is a 1x1 PNG. Without this, a corrupted
-    byte string would make every adapter test below agree with a broken fixture: the adapters
-    sniff (or pass through) bytes, so nothing else in this module would notice.
-    """
+    """The literal every delivery mode reproduces really is a 1x1 PNG: a corrupted fixture would
+    otherwise make every adapter test below agree with it."""
     assert mux.mime_type(_PNG_BYTES) == mux.MIME_PNG
     assert mux.decode_base64(_PNG_BASE64) == _PNG_BYTES
     image = mux.decode_image(_PNG_BYTES)
@@ -376,11 +336,8 @@ def test_the_artefact_fixture_is_a_real_png() -> None:
 
 
 def test_returns_kinds_cover_the_configuration_enum() -> None:
-    """Every ``returns`` token the configuration accepts has a case in this module. The
-    parametrization below is driven by :data:`_RETURN_VALUES`, so this is what keeps a fifth
-    ``returns`` kind from being added to the configuration vocabulary while no test covers it
-    -- the delivery contract would otherwise grow silently.
-    """
+    """Every ``returns`` token the configuration accepts has a case here, so a fifth kind cannot
+    join the vocabulary while no test covers it."""
     assert sorted(_RETURN_VALUES) == sorted(RETURNS_KINDS)
     assert sorted(RETURNS_KINDS) == ["base64", "bytes_path", "file_path", "raw_bytes"]
 
@@ -389,13 +346,8 @@ def test_returns_kinds_cover_the_configuration_enum() -> None:
 def test_every_returns_kind_delivers_the_artefact_byte_for_byte(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, returns: str
 ) -> None:
-    """Each of the four delivery modes yields the artefact the target wrote, unchanged.
-    ``raw_bytes`` hands the artefact back itself, ``base64`` hands back its base64 text,
-    ``file_path`` names a path the framework supplied, and ``bytes_path`` a path the target
-    chose; all four converge on one ``decode_returned_image`` call in the port, so a mode that
-    copied, re-encoded or truncated the bytes would show up here rather than in the check
-    layer.
-    """
+    """Each of the four delivery modes yields the artefact unchanged -- ``raw_bytes`` itself,
+    ``base64`` its text, the two path kinds a path -- through the port's single decoder."""
     artefact = tmp_path / "symbol.png"
     artefact.write_bytes(_PNG_BYTES)
     value = _RETURN_VALUES[returns](_PNG_BYTES, artefact)
@@ -439,13 +391,8 @@ def test_a_relative_path_is_resolved_against_the_given_base_dir(tmp_path: Path) 
 def test_a_returns_failure_arrives_as_a_contract_error(
     returns: str, build_value: Callable[[Path], object], tmp_path: Path
 ) -> None:
-    """Every way a delivery mode can fail surfaces as ``TargetContractError``. A missing file, a
-    directory instead of a file, text that is not base64 and an empty body are the four the
-    adapter must convert: letting the ``OSError``, the ``IsADirectoryError`` or the
-    ``binascii.Error`` underneath them escape would report an unusable response as an internal
-    framework fault (``error``) instead of a contract failure (``failed``), which is exactly
-    the distinction AAP §0.3.4 draws.
-    """
+    """Every way a delivery mode can fail surfaces as ``TargetContractError``: an escaping
+    ``OSError`` or ``binascii.Error`` would report the response as an internal fault."""
     (tmp_path / "a-directory").mkdir()
 
     with pytest.raises(TargetContractError) as raised:
@@ -461,11 +408,8 @@ def test_an_empty_base64_body_is_a_contract_error() -> None:
 
 
 def test_an_unknown_returns_kind_is_a_framework_defect() -> None:
-    """A token outside the four is the schema's to refuse, so it raises ``ValueError``.
-    ``qrcheck.config.schema`` rejects an out-of-enum ``returns`` at load time with exit 2, so a
-    kind reaching the port is a framework defect rather than a target failure and must not be
-    reported as one.
-    """
+    """A token outside the four raises ``ValueError``: the schema rejects an out-of-enum ``returns``
+    at load time, so a kind reaching the port is a framework defect, not a target failure."""
     with pytest.raises(ValueError) as raised:
         decode_returned_image(_PNG_BYTES, "stdout")
 
@@ -484,14 +428,11 @@ def test_ensure_image_bytes_refuses_a_body_of_the_wrong_format() -> None:
     assert raised.value.body_prefix == svg
 
 
-# ---------------------------------------------------------------------------
 # metadata_map: the configured dotted path decides, and nothing is defaulted
-# ---------------------------------------------------------------------------
 
-# A response shape with one shallow path, one nested path, two different paths to a mask,
-# a null, and a sequence: every case the dotted lookup has to distinguish.  Its key names
-# are this fixture's own -- the point of the tests below is that the adapter knew none of
-# them until configuration named them.
+# A response shape with one shallow path, one nested path, two different paths to a mask, a null
+# and a sequence. Its key names are this fixture's own: the point of the tests below is that the
+# adapter knew none of them until configuration named them.
 _RESPONSE: Final[Mapping[str, object]] = {
     "images": [{"png": "first"}, {"png": "second"}],
     "metadata": {"deep": {"mask": 3}, "level": " Q ", "null_mask": None, "version": 7},
@@ -511,10 +452,8 @@ _RESPONSE: Final[Mapping[str, object]] = {
 def test_metadata_map_reads_the_configured_dotted_path(
     field: str, path: str, expected: object
 ) -> None:
-    """The value recorded is the one at the configured path, coerced to the field's type. ``mask``
-    is reachable two ways here, so a mapper that guessed a key instead of walking the
-    configured one could not return both 3 and 5.
-    """
+    """The value recorded is the one at the configured path, coerced to the field's type: ``mask``
+    is reachable two ways here, so a mapper that guessed a key could not return both 3 and 5."""
     assert apply_metadata_map(_RESPONSE, {field: path}) == {field: expected}
 
 
@@ -524,11 +463,8 @@ def test_an_empty_metadata_map_reads_nothing() -> None:
 
 
 def test_metadata_map_reports_a_field_the_response_does_not_carry() -> None:
-    """A configured path the response lacks is a contract error naming field and path. This is AAP
-    §0.3.4's "missing field named in config" trigger: the adapter promised to read
-    ``metadata.mask`` and the response does not carry it, so the response is unusable and the
-    diagnostic has to say which field and which path a reader should fix.
-    """
+    """A configured path the response lacks is a contract error naming field and path -- AAP
+    §0.3.4's "missing field named in config" trigger, so the diagnostic says what to fix."""
     with pytest.raises(TargetContractError) as raised:
         apply_metadata_map(_RESPONSE, {"mask": "metadata.mask"})
 
@@ -561,11 +497,8 @@ def test_resolve_dotted_path_reads_mapping_keys_and_sequence_indices() -> None:
 
 
 def test_the_body_sentinel_is_not_a_dotted_path() -> None:
-    """``_body`` names a transport's raw body, so the dotted walk does not reach it. The HTTP
-    adapter resolves that one sentinel itself; if this walk also special-cased it, the
-    ``library`` and ``cli`` adapters would inherit a notion of "raw body" they have no use for,
-    and the sentinel would stop being the single name the HTTP layer owns.
-    """
+    """``_body`` names a transport's raw body, so the dotted walk does not reach it: special-casing
+    it here would give the ``library`` and ``cli`` adapters a notion of raw body they never use."""
     with pytest.raises(KeyError) as raised:
         resolve_dotted_path(_RESPONSE, _BODY_SENTINEL)
 
@@ -575,11 +508,8 @@ def test_the_body_sentinel_is_not_a_dotted_path() -> None:
 def test_metadata_reaches_the_symbol_as_evidence_only(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The four ``declared_*`` fields carry the configured paths and nothing else. They are the
-    target's own claim: ``SY-EC-MATCH`` reads the primary decoder and the format information,
-    ``SY-MASK`` the format information and ``SY-VERSION-MIN`` the sampled module count, so
-    believing these values would let a target that lies about its metadata pass.
-    """
+    """The four ``declared_*`` fields carry the configured paths and nothing else: they are the
+    target's own claim, and believing them would let a target that lies about its metadata pass."""
 
     def generate() -> tuple[bytes, Mapping[str, object]]:
         return _PNG_BYTES, _RESPONSE
@@ -605,10 +535,8 @@ def test_metadata_reaches_the_symbol_as_evidence_only(
 def test_a_metadata_map_beside_a_bare_artefact_is_a_contract_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """With ``metadata_map`` configured the callable owes an ``(image, metadata)`` pair. Returning
-    the artefact alone would leave the adapter reading a PNG as if it were a mapping, so the
-    shape is refused explicitly instead of failing somewhere deeper.
-    """
+    """With ``metadata_map`` configured the callable owes an ``(image, metadata)`` pair: the
+    artefact alone would leave the adapter reading a PNG as if it were a mapping."""
     module = _install_module(monkeypatch, "transport_bare_target", generate=lambda: _PNG_BYTES)
     adapter = LibraryAdapter(
         _library_target(
@@ -624,18 +552,14 @@ def test_a_metadata_map_beside_a_bare_artefact_is_a_contract_error(
     assert "metadata_map" in str(raised.value)
 
 
-# ---------------------------------------------------------------------------
 # kwargs_map: the framework's field, the target's keyword argument
-# ---------------------------------------------------------------------------
 
 
 def test_kwargs_map_projects_each_configured_field_onto_its_kwarg(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Each mapped request field arrives as the kwarg the configuration names. The values are the
-    request's own: ``payload`` travels as the exact bytes (a transport may not guess an
-    encoding for the framework), ``module_size_px`` as the integer the request pinned.
-    """
+    """Each mapped request field arrives as the kwarg the configuration names, with the request's
+    own value: ``payload`` as the exact bytes, ``module_size_px`` as the pinned integer."""
     received: list[dict[str, object]] = []
 
     def generate(**kwargs: object) -> bytes:
@@ -674,10 +598,8 @@ def test_kwargs_map_projects_each_configured_field_onto_its_kwarg(
 
 
 def test_kwargs_map_names_request_fields_not_template_tokens() -> None:
-    """``payload_utf8`` is a template token, not a request field, and is refused. The two
-    vocabularies are deliberately different: ``kwargs_map`` keys are :class:`GenerateRequest`
-    field names, while ``payload_utf8`` belongs to the CLI and HTTP template vocabulary.
-    """
+    """``payload_utf8`` is a template token, not a request field, and is refused: ``kwargs_map``
+    keys are :class:`GenerateRequest` field names."""
     with pytest.raises(ValueError) as raised:
         LibraryAdapter(
             _library_target(
@@ -704,19 +626,14 @@ def test_kwargs_map_refuses_two_fields_on_one_kwarg() -> None:
     assert "value" in str(raised.value)
 
 
-# ---------------------------------------------------------------------------
 # The CLI adapter: both template shapes, an argv list, no shell, the timeout
-# ---------------------------------------------------------------------------
 
 
 def test_a_flag_payload_template_pipes_the_bytes_on_stdin(
     monkeypatch: pytest.MonkeyPatch, private_tempdir: Path
 ) -> None:
-    """A bare flag names the child's stdin convention; the payload travels as raw bytes. A
-    template that starts with ``-`` and carries no placeholder is one argv word, and the
-    payload is written to the child's standard input -- which is the only way to deliver a
-    payload no argv word can hold, since an argument vector cannot carry arbitrary bytes.
-    """
+    """A template that starts with ``-`` and carries no placeholder is one argv word, and the
+    payload travels as raw bytes on the child's stdin -- the only way to deliver arbitrary bytes."""
     calls = _install_fake_process(
         monkeypatch, written=_PNG_BYTES, write_at=_written_path_after("--out=")
     )
@@ -743,11 +660,8 @@ def test_a_flag_payload_template_pipes_the_bytes_on_stdin(
 def test_positional_templates_carry_the_payload_and_the_output_path(
     monkeypatch: pytest.MonkeyPatch, private_tempdir: Path
 ) -> None:
-    """A bare ``{}`` slot renders the payload as UTF-8 text and the path as one word. The other
-    permitted shape: both templates are placeholders with no flag around them, so the payload
-    is an argv word and the child inherits ``DEVNULL`` on standard input rather than a pipe
-    nobody would read.
-    """
+    """A bare ``{}`` slot renders the payload as UTF-8 text and the path as one word, and the child
+    inherits ``DEVNULL`` on standard input rather than a pipe nobody would read."""
     calls = _install_fake_process(
         monkeypatch, written=_PNG_BYTES, write_at=_written_path_after("")
     )
@@ -814,11 +728,8 @@ def test_a_named_payload_template_renders_the_shared_vocabulary(
 def test_an_unpinned_geometry_renders_as_an_empty_word_never_as_none(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A geometry the request pins nothing for renders empty, not as the text ``"None"``. This is
-    the bug the omission rule exists to prevent, in its argv spelling: a target handed
-    ``"None"`` for a margin would parse it as a number and either fail for the wrong reason or
-    draw a symbol the framework never asked for.
-    """
+    """A geometry the request pins nothing for renders empty, never the text ``"None"``: a target
+    handed ``"None"`` for a margin would fail for the wrong reason or draw an unasked-for symbol."""
     calls = _install_fake_process(monkeypatch, written=_PNG_BYTES, stdout=_PNG_BYTES)
     adapter = CliAdapter(
         _cli_target(payload_arg="{size}", output_arg="", returns="raw_bytes")
@@ -839,11 +750,8 @@ def test_an_unpinned_geometry_renders_as_an_empty_word_never_as_none(
 def test_a_stdout_returns_kind_reads_the_child_stdout(
     monkeypatch: pytest.MonkeyPatch, returns: str, stdout: bytes
 ) -> None:
-    """With no ``output_arg`` the artefact arrives on stdout, in the configured form. An empty
-    ``output_arg`` passes no path, so only the two stdout kinds can read the answer; ``base64``
-    arrives as text and is decoded by the port's one base64 decoder, so a target that wrote
-    something else is refused rather than half-read.
-    """
+    """With no ``output_arg`` only the two stdout kinds can read the answer: ``base64`` arrives
+    as text and is decoded by the port's one decoder."""
     calls = _install_fake_process(monkeypatch, written=_PNG_BYTES, stdout=stdout)
     adapter = CliAdapter(_cli_target(payload_arg="{}", output_arg="", returns=returns))
 
@@ -859,11 +767,8 @@ def test_the_timeout_the_transport_receives_is_the_resolved_configurations(
     monkeypatch: pytest.MonkeyPatch,
     config_factory: Callable[..., Any],
 ) -> None:
-    """The ``timeout_s`` handed to the transport is the resolved record's, not a literal. This is
-    the property NFR-7 and AAP §0.3.2 rest on: an adapter that kept a ceiling of its own would
-    kill a slow target the user had allowed more time for, or -- worse -- wait forever on one
-    the user had bounded.
-    """
+    """The ``timeout_s`` handed to the transport is the resolved record's, not a literal -- the
+    property NFR-7 and AAP §0.3.2 rest on."""
     target = CLITarget(
         name="cli",
         type="cli",
@@ -885,14 +790,11 @@ def test_the_timeout_the_transport_receives_is_the_resolved_configurations(
     assert calls[0][1]["shell"] is False
 
 
-# ---------------------------------------------------------------------------
 # The HTTP adapter: the eight placeholders, and a shape that comes from configuration
-# ---------------------------------------------------------------------------
 
-# A template naming every placeholder the configuration contract defines, plus one
-# placeholder embedded in literal text.  The eight-token coverage is asserted before the
-# substitution is, so a placeholder quietly dropped from this fixture fails as a fixture
-# fault rather than letting the substitution test pass on a shorter vocabulary.
+# A template naming every placeholder the contract defines plus one embedded in literal text. The
+# eight-token coverage is asserted before the substitution, so a dropped placeholder fails as a
+# fixture fault rather than letting the substitution test pass on a shorter vocabulary.
 _FULL_TEMPLATE: Final[Mapping[str, object]] = {
     "payload_b64": "{payload_b64}",
     "payload_utf8": "{payload_utf8}",
@@ -941,10 +843,8 @@ def _envelope_response(request: httpx.Request) -> httpx.Response:
 def test_the_post_template_substitutes_all_eight_placeholders(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Every documented placeholder carries the request's own value into the request body. Each
-    expectation is computed from the request rather than written down, so the assertion is
-    about the mapping and not about a hard-coded string.
-    """
+    """Every documented placeholder carries the request's own value into the body, each expectation
+    computed from the request rather than written down."""
     referenced = {
         name for text in _FULL_TEMPLATE.values() for name in re.findall(r"{([a-z0-9_]+)}", text)
     }
@@ -978,11 +878,8 @@ def test_the_post_template_substitutes_all_eight_placeholders(
 def test_a_get_carries_the_template_as_query_parameters(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A ``GET`` sends the same rendered table as query text, in its textual spelling. Query
-    parameters are scalars only, so the geometry arrives as text rather than as a number -- the
-    one place the two methods differ in what they put on the wire, and the reason the adapter
-    refuses a structured template for a ``GET`` instead of stringifying it.
-    """
+    """A ``GET`` sends the same rendered table as query text: parameters are scalars only, which is
+    why a structured template is refused for a ``GET`` instead of stringified."""
     requests, _ = _install_http_client(monkeypatch, _png_response)
     adapter = HttpAdapter(
         _http_target(method="GET", request_template=dict(_FULL_TEMPLATE)), name="example"
@@ -1010,11 +907,8 @@ def test_a_get_carries_the_template_as_query_parameters(
 def test_an_unpinned_optional_is_omitted_instead_of_rendering_none(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A placeholder whose value the request leaves unset drops its key entirely. Rendering
-    ``"None"`` would hand a target a literal it would try to parse as a number or a string;
-    dropping the key is the documented rule, and it applies to a placeholder embedded in
-    literal text exactly as it does to a whole-string one.
-    """
+    """A placeholder whose value the request leaves unset drops its key entirely: rendering
+    ``"None"`` would hand a target a literal to parse."""
     requests, _ = _install_http_client(monkeypatch, _png_response)
     adapter = HttpAdapter(
         _http_target(
@@ -1058,10 +952,8 @@ def test_the_body_sentinel_yields_the_response_body(
 def test_a_dotted_image_field_yields_the_decoded_image(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A configured dotted path plus ``base64`` reaches the image and its envelope. The metadata
-    read through the map lands on the ``declared_*`` fields only, so a target's claim is
-    recorded and never believed.
-    """
+    """A configured dotted path plus ``base64`` reaches the image and its envelope; the metadata
+    lands on the ``declared_*`` fields only, so a target's claim is recorded and never believed."""
     requests, _ = _install_http_client(monkeypatch, _envelope_response)
     adapter = HttpAdapter(
         _http_target(
@@ -1085,11 +977,8 @@ def test_a_dotted_image_field_yields_the_decoded_image(
 def test_the_client_carries_the_configured_timeout_and_no_proxy_route(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The client holds three properties of the offline contract only the transport can hold.
-    ``timeout_s`` is the only ceiling on a target, ``follow_redirects=False`` keeps a redirect
-    from carrying the request to a host the product forbids, and ``trust_env=False`` keeps an
-    ``HTTP_PROXY`` variable from routing a loopback call off the machine (AAP §0.3.2, NFR-2).
-    """
+    """The client holds three properties only the transport can: ``timeout_s`` is the only
+    ceiling, ``follow_redirects=False`` and ``trust_env=False``."""
     _, client_kwargs = _install_http_client(monkeypatch, _png_response)
     adapter = HttpAdapter(_http_target(), name="example")
 
@@ -1102,11 +991,8 @@ def test_the_client_carries_the_configured_timeout_and_no_proxy_route(
 
 
 def test_a_placeholder_the_configuration_does_not_define_is_a_configuration_error() -> None:
-    """A placeholder outside the eight is a configuration fault, not a traceback. The schema
-    rejects it at load time with exit 2 naming the key; constructing the adapter from a
-    hand-built record must not turn the same mistake into an internal error, so the adapter
-    raises the schema's own ``ConfigError`` naming ``targets.<name>.request_template``.
-    """
+    """A placeholder outside the eight raises the schema's own ``ConfigError`` naming
+    ``targets.<name>.request_template`` rather than becoming an internal error."""
     with pytest.raises(http_module.ConfigError) as raised:
         HttpAdapter(
             _http_target(
@@ -1126,17 +1012,12 @@ def test_a_template_without_a_payload_placeholder_is_a_configuration_error() -> 
     assert "payload" in str(raised.value)
 
 
-# ---------------------------------------------------------------------------
 # The HTTP module's own vocabulary: no vendor field, no hard-coded response path
-# ---------------------------------------------------------------------------
 
 
 def test_the_scan_reads_the_http_module_and_finds_its_vocabulary() -> None:
-    """The scan is not vacuous: it parsed the module and sees the vocabulary it permits. Without
-    this guard every assertion below would also pass on an empty parse -- a moved file, a
-    renamed module, a walk that collected nothing -- and the MUST NOT would look enforced while
-    enforcing nothing.
-    """
+    """The scan is not vacuous: it parsed the module and sees the vocabulary it permits, so a moved
+    file or an empty walk fails here instead of letting every assertion below pass on nothing."""
     literals = _string_literals()
     texts = {text for _, text in literals}
 
@@ -1151,11 +1032,8 @@ def test_the_scan_reads_the_http_module_and_finds_its_vocabulary() -> None:
 
 
 def test_the_http_module_names_no_vendor_field() -> None:
-    """No string literal in the HTTP adapter is a vendor-ish response field name. The adapter's
-    response shape is configuration: ``image_field`` names the image and ``metadata_map`` names
-    the metadata, so a literal equal to one of the deny-listed names anywhere in the module
-    would mean the module had learned a vendor's key.
-    """
+    """No string literal in the HTTP adapter is a vendor-ish response field name: a literal equal to
+    one of the deny-listed names would mean the module had learned a vendor's key."""
     offenders = [
         (lineno, text) for lineno, text in _string_literals() if text in _VENDOR_FIELD_DENYLIST
     ]
@@ -1167,10 +1045,8 @@ def test_the_http_module_names_no_vendor_field() -> None:
 
 
 def test_the_http_module_hard_codes_no_response_path() -> None:
-    """No literal in the adapter is shaped like a dotted path, so no response key is baked in.
-    ``image_field`` and ``metadata_map`` are dotted paths a user writes down; one appearing in
-    the source would be a hard-coded response key with extra steps.
-    """
+    """No literal in the adapter is shaped like a dotted path: ``image_field`` and ``metadata_map``
+    are paths a user writes down, and one in the source would be a hard-coded response key."""
     offenders = [
         (lineno, text)
         for lineno, text in _string_literals()
@@ -1184,12 +1060,8 @@ def test_the_http_module_hard_codes_no_response_path() -> None:
 
 
 def test_the_http_module_names_no_endpoint_outside_loopback() -> None:
-    """A URL literal may only name a loopback host, and the adapter holds none at all. A URL
-    literal is a hard-coded endpoint however well it is spelled, so this is the endpoint half
-    of the same MUST NOT: the only host the framework may talk to is one of
-    :data:`qrcheck.config.LOOPBACK_HOSTS`, and a vendor's address in this module would be a
-    remote endpoint with a loopback check layered over it.
-    """
+    """A URL literal may only name a loopback host, and the adapter holds none at all: a vendor's
+    address here would be a remote endpoint with a loopback check layered over it."""
     offenders = [
         (lineno, text)
         for lineno, text in _string_literals()

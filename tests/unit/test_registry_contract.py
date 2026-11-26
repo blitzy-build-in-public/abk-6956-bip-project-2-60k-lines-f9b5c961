@@ -1,27 +1,24 @@
 """Contract test: check identity, the fields each check declares, and resolution to skips.
 
-``qrcheck/registry/check.py`` is the single owner of check identity and ordering and
-``qrcheck/registry/resolve.py`` the single place a shortfall becomes a skip (AAP §0.3.4
-"Identity and selection"). A check that exists but never runs, one registered under an
-identifier nobody declared, a requirement that quietly disappears, or a shortfall counted as a
-pass would each let a report describe a run that never happened, so the registry must hold
-**exactly** the twenty-one identifiers with no duplicate and a duplicate registration raising;
-iteration must be ascending by identifier even after a separate process imports the families in
-reverse :data:`FAMILY_MODULES` order (AAP §0.5.3); the nine families, every check's capability
-requirements and its optional runtime dependency must be the plan's; an unmet capability must
-resolve to ``skipped``/``unsupported_capability``, a missing runtime dependency to
-``skipped``/``missing_dependency``, the capability reason outranking the dependency one (AAP
-§0.6.6 row 9), with ``resolve`` raising for neither; and each built-in target's expected
-failing set -- empty for ``reference``, the nine identifiers of AAP §0.4.2 for ``defective`` --
-must validate against the real registry.
+``qrcheck/registry/check.py`` owns check identity and ordering and
+``qrcheck/registry/resolve.py`` is the single place a shortfall becomes a skip (AAP §0.3.4). A
+check that never runs, an undeclared identifier or a shortfall counted as a pass lets a report
+describe a run that never happened:
 
-The dependency column is asserted as the AAP's table writes it, not as a one-line summary of the
-row reads: ``PF-DECODE`` needs the primary decoder to decode its fixed probe image, while
-``CL-ARTIFACTS`` touches neither decoder nor target and declares no token, and both require no
-capability. Nothing here drives a target, decodes a symbol, reads a corpus record or writes a
-file, and the executed-set half of ``qrcheck list --json`` belongs to
-``tests/integration/test_registry_reachability.py``.
-"""
+* the registry holds **exactly** the twenty-one identifiers, and duplication raises;
+* every contract carries the declared fields; iteration is by identifier ascending, also after a
+  child process imports the families in reverse :data:`FAMILY_MODULES` order (§0.5.3);
+* the nine family modules, their identifier ownership and every check's requirements are the
+  plan's;
+* an unmet capability is ``unsupported_capability``, a missing dependency
+  ``missing_dependency``, with the capability reason outranking and ``passed`` staying at zero
+  (AAP §0.6.6 row 9);
+* each built-in target's expected failing set is the declared one and ``list --json`` lists
+  them.
+
+The dependency column follows the AAP's table: ``PF-DECODE`` decodes a fixed probe image and
+``CL-ARTIFACTS`` observes the run, both carrying the primary decoder as their optional
+dependency, which can never become a skip for either (AAP §0.6.6 row 3)."""
 
 from __future__ import annotations
 
@@ -194,7 +191,7 @@ _PRIMARY_DECODER_ONLY: Final[tuple[str, ...]] = (DEPENDENCY_PRIMARY_DECODER,)
 # a check reaching for a tool through a route the layering test forbids.
 _EXPECTED_DEPENDENCIES: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType(
     {
-        "CL-ARTIFACTS": (),
+        "CL-ARTIFACTS": _PRIMARY_DECODER_ONLY,
         "DM-RESILIENCE": _PRIMARY_DECODER_ONLY,
         "DM-SEEDED": _PRIMARY_DECODER_ONLY,
         "DT-DETERMINISTIC": _PRIMARY_DECODER_ONLY,
@@ -290,33 +287,23 @@ _REVERSE_IMPORT_SCRIPT: Final[str] = (
 _SUBPROCESS_TIMEOUT_S: Final[float] = 300.0
 
 
-# ---------------------------------------------------------------------------
 # Registration belongs to the entry points, so it is triggered here
-# ---------------------------------------------------------------------------
 
 
 def _no_cases(_ctx: object) -> Iterator[object]:
-    """Yield nothing: the stub contracts this module registers contribute no case.
-    ``CheckContract`` requires only that ``cases`` be callable, and the stubs below exist to
-    exercise the registration and expectation rules rather than to run a check, so the
-    generator is empty.
-    """
+    """Yield nothing: the stub contracts this module registers contribute no case, since
+    ``CheckContract`` requires only that ``cases`` be callable."""
     return iter(())
 
 
 @pytest.fixture(autouse=True)
 def _families_loaded() -> tuple[str, ...]:
-    """Import the nine check families before every case, as an entry point does.
-    ``qrcheck.registry`` deliberately leaves the registry empty, because a package that
-    populated it on import would make the executed set depend on whether some unrelated module
-    happened to import it.
-    """
+    """Import the nine check families before every case, as an entry point does:
+    ``qrcheck.registry`` stays empty on import, so the executed set cannot drift."""
     return load_families()
 
 
-# ---------------------------------------------------------------------------
 # Identity: the twenty-one identifiers, and registration that refuses a duplicate
-# ---------------------------------------------------------------------------
 
 
 def test_the_registry_holds_exactly_the_declared_check_ids() -> None:
@@ -392,9 +379,7 @@ def test_an_unknown_check_id_is_a_named_key_error() -> None:
     assert "XX-NOT-A-CHECK" in str(raised.value), "the diagnostic must name the identifier"
 
 
-# ---------------------------------------------------------------------------
 # The contract shape every check carries
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("check_id", sorted(_EXPECTED_CHECK_IDS))
@@ -423,9 +408,7 @@ def test_a_contract_carries_the_six_fields_the_registry_declares(check_id: str) 
     assert callable(contract.cases), f"{check_id}: cases is not callable"
 
 
-# ---------------------------------------------------------------------------
 # A malformed declaration is refused, never registered as a plausible check
-# ---------------------------------------------------------------------------
 
 # One field broken per row, everything else valid, so the refusal that fires is the one under
 # test: ``id``, ``family``, ``title``, ``cases``, ``requires`` and ``dependencies`` are each
@@ -499,9 +482,7 @@ def test_registering_something_that_is_not_a_contract_is_refused() -> None:
     )
 
 
-# ---------------------------------------------------------------------------
 # Ordering: import order can never reach an artefact
-# ---------------------------------------------------------------------------
 
 
 def test_iteration_is_by_identifier_ascending_everywhere() -> None:
@@ -539,9 +520,7 @@ def test_a_process_importing_the_families_in_reverse_order_holds_the_same_regist
     )
 
 
-# ---------------------------------------------------------------------------
 # The nine family modules and the identifiers each owns
-# ---------------------------------------------------------------------------
 
 
 def test_the_nine_family_modules_are_the_ones_the_plan_names() -> None:
@@ -582,9 +561,7 @@ def test_the_declared_tables_cover_every_check_identifier() -> None:
 
 
 
-# ---------------------------------------------------------------------------
 # What each check requires of a target and of the host
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("check_id", sorted(_EXPECTED_CHECK_IDS))
@@ -621,8 +598,9 @@ def test_the_two_target_independent_checks_require_nothing_of_the_target() -> No
         "PF-DECODE decodes its own probe image, so it declares the primary decoder "
         "(AAP §0.3.4, 'primary decoder (decode only)')"
     )
-    assert get_check("CL-ARTIFACTS").dependencies == (), (
-        "CL-ARTIFACTS observes the process and touches no decoder, so it declares no token"
+    assert get_check("CL-ARTIFACTS").dependencies == _PRIMARY_DECODER_ONLY, (
+        "CL-ARTIFACTS declares the primary decoder that AAP §0.3.4's row gives it, and that "
+        "token can never skip it: a run without the decoder exits 2 before resolution"
     )
 
 
@@ -638,9 +616,7 @@ def test_a_target_declaring_everything_satisfies_every_check() -> None:
     assert resolution.runnable_ids == CHECK_IDS, "every check must be runnable"
 
 
-# ---------------------------------------------------------------------------
 # Resolution: a shortfall is a skip, and a skip is never a pass
-# ---------------------------------------------------------------------------
 
 
 def test_a_capability_shortfall_resolves_to_a_skip_and_never_to_a_pass() -> None:
@@ -733,17 +709,30 @@ def test_a_capability_shortfall_outranks_a_missing_runtime_dependency() -> None:
     assert outcome.missing == (Capability.svg.value,)
 
 
-def test_a_target_declaring_nothing_leaves_only_the_target_independent_check_runnable() -> None:
-    """No check can be silently passed: with nothing declared, only CL-ARTIFACTS can run."""
-    resolution = resolve(iter_checks(), capabilities=frozenset(), availability={})
-    assert resolution.runnable_ids == ("CL-ARTIFACTS",), (
-        "the one check needing neither a capability nor a runtime dependency must stand alone"
+def test_a_target_declaring_nothing_leaves_only_the_capability_free_checks_runnable() -> None:
+    """No check can be silently passed: without a capability only the capability-free pair runs."""
+    resolution = resolve(
+        iter_checks(), capabilities=frozenset(), availability=_EVERY_DEPENDENCY_AVAILABLE
     )
-    reasons = {outcome.check_id: outcome.reason for outcome in resolution.skipped}
-    assert len(reasons) == _EXPECTED_CHECK_COUNT - 1, "every other check must be skipped"
+    assert resolution.runnable_ids == ("CL-ARTIFACTS", "PF-DECODE"), (
+        "the two checks declaring no capability are all a capability-free target can run"
+    )
+    assert len(resolution.skipped) == _EXPECTED_CHECK_COUNT - 2, (
+        "every check that declares a capability must be skipped"
+    )
+
+    starved = resolve(iter_checks(), capabilities=frozenset(), availability={})
+    assert starved.runnable_ids == (), (
+        "with no probe answering a token, even the capability-free pair must skip"
+    )
+    reasons = {outcome.check_id: outcome.reason for outcome in starved.skipped}
+    assert len(reasons) == _EXPECTED_CHECK_COUNT, "every check must be skipped"
     assert reasons["RT-ROUNDTRIP"] is Reason.UNSUPPORTED_CAPABILITY, "RT-ROUNDTRIP needs png"
     assert reasons["PF-DECODE"] is Reason.MISSING_DEPENDENCY, (
         "PF-DECODE requires no capability, so its only possible shortfall is the decoder"
+    )
+    assert reasons["CL-ARTIFACTS"] is Reason.MISSING_DEPENDENCY, (
+        "CL-ARTIFACTS declares the primary decoder as its optional dependency (AAP §0.3.4)"
     )
     for check_id, reason in sorted(reasons.items()):
         assert reason in {Reason.UNSUPPORTED_CAPABILITY, Reason.MISSING_DEPENDENCY}, (
@@ -751,9 +740,7 @@ def test_a_target_declaring_nothing_leaves_only_the_target_independent_check_run
         )
 
 
-# ---------------------------------------------------------------------------
 # A malformed resolution argument is named, never turned into a skip
-# ---------------------------------------------------------------------------
 
 # One field broken per row. A skip that names no cause, carries a reason no resolution may
 # produce, or lists no missing requirement is indistinguishable from a check that was quietly
@@ -877,9 +864,7 @@ def test_an_availability_source_must_project_a_mapping() -> None:
     assert "mapping" in str(raised.value), "the refusal must say what it expected"
 
 
-# ---------------------------------------------------------------------------
 # Expectations: what each built-in self-check target must produce
-# ---------------------------------------------------------------------------
 
 
 def test_the_conforming_target_declares_no_expected_failure() -> None:
@@ -961,11 +946,8 @@ def test_an_expectation_for_an_unregistered_check_is_rejected() -> None:
 def test_a_doctored_expectation_declaration_is_rejected_at_validation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The guard names each inconsistency, so a doctored declaration cannot pass unnoticed.
-    ``SELF_CHECK_TARGETS`` is doctored on the module that owns it rather than mutated, because
-    the real table is read-only and must stay that way: what is asserted is the four checks
-    ``validate_against_registry`` makes of whatever declaration it is handed.
-    """
+    """The guard names each inconsistency, so a doctored declaration cannot pass unnoticed:
+    ``SELF_CHECK_TARGETS`` is doctored on its owning module, the table being read-only."""
     doctored: tuple[tuple[Mapping[str, frozenset[str]], str], ...] = (
         ({" ": frozenset()}, "blank"),
         (
@@ -997,17 +979,12 @@ def test_a_target_with_no_declared_expectation_answers_none() -> None:
     )
 
 
-# ---------------------------------------------------------------------------
 # Reachability: the machine-readable surface criterion 8 reads
-# ---------------------------------------------------------------------------
 
 
 def test_the_list_command_publishes_every_registered_check_as_json(cli_runner) -> None:
-    """``qrcheck list --json`` is the cheap half of the registry-reachability gate. A check
-    importable only from a test would fail the executed-set half in
-    ``tests/integration/test_registry_reachability.py``; it fails here first, because a check
-    the listing omits is a check no CI consumer can trend.
-    """
+    """``qrcheck list --json`` is the cheap half of the registry-reachability gate: a check the
+    listing omits is one no CI consumer can trend."""
     result = cli_runner.invoke(cli, ["list", "--json"])
     assert result.exit_code == 0, f"qrcheck list --json exited {result.exit_code}: {result.stderr}"
     rows = json.loads(result.stdout)

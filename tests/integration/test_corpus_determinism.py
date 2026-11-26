@@ -1,27 +1,16 @@
 """The corpus drift gate: rebuild from the committed seed and compare bytes, never rewrite.
 
-``corpus/default.jsonl`` is a committed repository file and the fixed input every corpus-driven
-case is built from, so AAP §0.5.4 promises it is **byte-identical** when regenerated from
-``--seed``, and the §0.6.4 CI drift step re-runs exactly that regeneration, compares the fresh
-rendering with the committed bytes and fails on any difference *before* anything is replaced.
-This module is the executable form of that step: it drives the real command line, builds into
-``tmp_path`` and compares **bytes**, so a change to a payload generator, to the class inventory
-or to the writer's canonical form fails here instead of silently redefining the baseline every
-check reads. It asserts the drift gate itself; the committed file held to the canonical form of
-§0.5.3 and §0.5.4 -- UTF-8, LF endings, one trailing newline, sorted keys on every line, the
-240-record 14-class inventory of §0.8.2 with its 40-record boundary subset, one payload field
-per record and capacity arithmetic in every boundary record's ``notes``; the compare-then-fail
-ordering of ``corpus build``, which refuses a differing destination with exit 2 and leaves it
-untouched unless ``--force`` is given; the writer's canonical form in isolation; the seed
-reaching generation in both directions, since a builder that ignored its seed could not produce
-a different file; and the guard that nothing here writes the committed corpus, because a
-rewritten baseline would make the drift check compare a file against itself.
+``corpus/default.jsonl`` is a committed repository file and the fixed input every
+corpus-driven case is built from, so AAP §0.5.4 promises it is **byte-identical** when
+regenerated from ``--seed``, and the §0.6.4 CI drift step re-runs exactly that. This module
+is the executable form of that step: it drives the real command line, builds into
+``tmp_path`` and compares **bytes**.
 
-It registers no marker -- it belongs to the fast job, generating and comparing text only -- and
-skips nothing, retries nothing, monkeypatches nothing and carries no threshold. The seed and the
-class inventory are the plan's own numbers, cited once below; every other value is read from the
-committed file.
-"""
+It also holds the committed file to the canonical form of §0.5.3 and §0.5.4, the
+compare-then-fail ordering of ``corpus build`` (exit 2 unless ``--force``), the writer's
+canonical form in isolation, the seed reaching generation in both directions, and the guard
+that nothing here writes the committed corpus. No marker, skip, retry, monkeypatch or
+threshold appears."""
 
 from __future__ import annotations
 
@@ -40,33 +29,29 @@ import pytest
 from qrcheck.corpus.builder import CorpusRecord
 from qrcheck.corpus.io import load_corpus, write_corpus
 
-# The plan's numbers, written out once. AAP §0.3.4 declares the configured default seed and
-# §0.8.2 the corpus inventory, and the seed is also the value the §0.6.4 CI drift step
-# rebuilds with, so the two must be the same number: a test using a different seed would
-# disagree with CI about what drift means.
+# The plan's numbers, written out once: AAP §0.3.4 declares the default seed and §0.8.2 the corpus
+# inventory, and the seed is also what the §0.6.4 CI drift step rebuilds with, so a test using a
+# different seed would disagree with CI about what drift means.
 
-#: The configured default seed (AAP §0.3.4): the seed the committed corpus was built from and the
-#: one the §0.6.4 CI drift step regenerates it with, so a test using another would disagree with CI
-#: about what drift means.
+#: The configured default seed (AAP §0.3.4): the corpus was built from it and CI regenerates it
+#: with it, so a test using another would disagree with CI about what drift means.
 PLAN_SEED: Final[int] = 20240101
 
-#: A seed the committed bytes must **not** be reproducible from: two seeds producing the same file
-#: would let a builder that ignored its seed pass every byte-identity assertion.
+#: A seed the committed bytes must **not** be reproducible from, or a seed-ignoring builder passes.
 OTHER_SEED: Final[int] = 7
 
 #: The committed corpus, relative to the repository root (AAP §0.9.2).
 COMMITTED_CORPUS_RELPATH: Final[Path] = Path("corpus") / "default.jsonl"
 
-#: The class-name prefix of the three classes that make the 40-record boundary subset (AAP §0.8.2),
-#: which is the record set success criterion 2 runs at EC L, Q and H.
+#: The class-name prefix of the three classes making the 40-record boundary subset (AAP §0.8.2).
 BOUNDARY_CLASS_PREFIX: Final[str] = "boundary-"
 
 #: AAP §0.8.2: 240 records in total, of which the boundary subset is 40.
 PLAN_TOTAL_RECORDS: Final[int] = 240
 PLAN_BOUNDARY_RECORDS: Final[int] = 40
 
-#: AAP §0.8.2's full 14-class inventory, compared as a whole mapping so a re-balance that moves
-#: records between classes fails loudly instead of passing on a total that happens to be unchanged.
+#: AAP §0.8.2's 14-class inventory, compared as a mapping so moving records between classes fails
+#: instead of passing on an unchanged total.
 PLAN_CLASS_COUNTS: Final[dict[str, int]] = {
     "boundary-alphanumeric": 12,
     "boundary-byte": 16,
@@ -87,46 +72,38 @@ PLAN_CLASS_COUNTS: Final[dict[str, int]] = {
 #: AAP §0.8.2: the three values a record's ``expected_mode`` may hold.
 EXPECTED_MODES: Final[frozenset[str]] = frozenset({"numeric", "alphanumeric", "byte"})
 
-#: AAP §0.8.2: a record id is ``<class>-<3-digit index>``, so the captured class group must equal
-#: the record's own ``class`` field.
+#: AAP §0.8.2: an id is ``<class>-<3-digit index>``, so the captured group must equal the class.
 RECORD_ID: Final[re.Pattern[str]] = re.compile(
     r"(?P<class_name>[a-z0-9][a-z0-9-]*)-(?P<index>\d{3})"
 )
 
 #: AAP §0.8.2: a boundary record's ``notes`` states the capacity arithmetic that produced its
-#: length, exactly as ``qrcheck/corpus/builder.py`` writes it, for instance
-#: ``max_payload_bytes(2, 'L', 'byte') = 32; minimal version L=2, M=3, H=4``. The same pattern is
-#: how a non-boundary record is shown **not** to claim a boundary note.
+#: length, exactly as ``qrcheck/corpus/builder.py`` writes it, e.g.
+#: ``max_payload_bytes(2, 'L', 'byte') = 32; minimal version L=2, M=3, H=4``; the same pattern
+#: shows a non-boundary record claims no such note.
 CAPACITY_ARITHMETIC: Final[re.Pattern[str]] = re.compile(
     r"max_payload_bytes\(\d{1,2}, '[LMQH]', '(?:numeric|alphanumeric|byte)'\) = \d+; "
     r"minimal version L=\d{1,2}, M=\d{1,2}, H=\d{1,2}"
 )
 
-#: How many bytes of context a byte-difference diagnostic quotes around the first difference, which
-#: keeps the message readable while still showing what actually changed.
+#: How many bytes of context a byte-difference diagnostic quotes, keeping the message readable.
 _DIAGNOSTIC_BYTES: Final[int] = 40
 
 
-# Byte comparison and canonical-line helpers. A byte-identity assertion whose message says only
-# "not equal" costs the next reader an hour, so every comparison here reports the first
-# differing offset, the line it falls on in each rendering, both lengths and a window of context
-# from each side.
+# Byte comparison and canonical-line helpers: a byte-identity assertion whose message says only
+# "not equal" costs the next reader an hour, so every comparison reports the first differing offset,
+# the line it falls on in each rendering, both lengths and a window of context from each side.
 
 
 def _line_number(data: bytes, offset: int) -> int:
-    """Return the 1-based line number of ``offset`` within ``data``.
-
-    ``offset`` may be one past the end, when one rendering is a prefix of the other.
-    """
+    """Return the 1-based line number of ``offset``
+    within ``data``, which may be one past the end."""
     return data.count(b"\n", 0, min(offset, len(data))) + 1
 
 
 def _difference(expected: bytes, actual: bytes, what: str) -> str:
-    """Describe where two renderings of the same corpus first diverge.
-
-    Names the first differing byte offset, the line it falls on in each rendering, both lengths and
-    a window of context from each side, so a byte-identity failure costs a reader no investigation.
-    """
+    """Describe where two renderings first diverge: the offset, both lengths and a window of
+    context."""
     shared = min(len(expected), len(actual))
     offset = next(
         (index for index in range(shared) if expected[index] != actual[index]), shared
@@ -148,11 +125,7 @@ def _assert_same_bytes(actual: bytes, expected: bytes, what: str) -> None:
 
 
 def _canonical_record(line: str, number: int) -> dict[str, Any]:
-    """Return the record on corpus line ``number``, asserting that line's canonical form.
-
-    A line carrying trailing whitespace, holding no JSON object, or stating its keys out of order
-    fails the test.
-    """
+    """Return the record on corpus line ``number``, asserting that line's canonical form."""
     assert line == line.rstrip(), (
         f"corpus line {number} ends with whitespace: {line[-20:]!r}; trailing space is not "
         f"canonical and would make a regenerated corpus differ from the committed one"
@@ -169,20 +142,13 @@ def _canonical_record(line: str, number: int) -> dict[str, Any]:
     return dict(pairs)
 
 
-# Fixtures. Every path a test writes to is under ``tmp_path``, and the configuration is
-# generated by the integration layer's writer, so it carries the declared default for everything
-# this module does not choose and no value is restated here.
+# Fixtures: every path a test writes to is under ``tmp_path``, and the configuration comes from the
+# integration layer's writer, so it carries the declared default for everything not chosen here.
 
 
 @pytest.fixture(scope="module")
 def committed_corpus_path(repo_root: Path) -> Path:
-    """Return the committed corpus's path, derived from the repository root.
-
-    Module-scoped because it cannot change within a module and every test compares against the same
-    file, and derived from :func:`repo_root` so a session started anywhere compares the right
-    baseline. A missing file fails the test: it is a defective checkout, not a reason to skip,
-    because every assertion here compares against it.
-    """
+    """Return the committed corpus's path, derived from :func:`repo_root`."""
     path = repo_root / COMMITTED_CORPUS_RELPATH
     assert path.is_file(), (
         f"the committed corpus is missing: {path}. This module compares every regeneration "
@@ -197,11 +163,7 @@ def corpus_config(
     write_config: Callable[..., Path],
     committed_corpus_path: Path,
 ) -> Path:
-    """Return a schema-valid configuration whose every path lives under ``tmp_path``.
-
-    The report root is absolute and private to the test, so a build never writes into the
-    repository's own ``reports/``.
-    """
+    """Return a schema-valid configuration whose every path lives under ``tmp_path``."""
     return write_config(
         tmp_path / "qrcheck.toml",
         default_adapter="reference",
@@ -213,12 +175,7 @@ def corpus_config(
 
 @pytest.fixture
 def differing_corpus(tmp_path: Path, committed_corpus_path: Path) -> Path:
-    """Return a destination holding different but valid-looking content.
-
-    The content is the committed corpus's first record alone: a well-formed line that is
-    nevertheless not the corpus, so the comparison inside ``corpus build`` has a real difference to
-    refuse or to replace.
-    """
+    """Return a destination holding valid-looking content that is nevertheless not the corpus."""
     first_record = committed_corpus_path.read_bytes().split(b"\n", 1)[0] + b"\n"
     destination = tmp_path / "corpus.jsonl"
     destination.write_bytes(first_record)
@@ -233,15 +190,7 @@ def _fingerprint(path: Path) -> tuple[int, str]:
 
 @pytest.fixture(scope="module", autouse=True)
 def corpus_fingerprint(committed_corpus_path: Path) -> Iterator[tuple[int, str]]:
-    """Guard the committed corpus for the whole module and expose its opening fingerprint.
-
-    Autouse and module-scoped, so the fingerprint is taken before this module's first test and
-    re-checked after its last: a test that regenerated into the repository is then reported as a
-    failure instead of being left to corrupt the baseline the drift step compares against on the
-    next run. The opening value is yielded to
-    :func:`test_committed_corpus_is_never_modified_by_the_suite`, which asserts the same thing from
-    inside the run.
-    """
+    """Guard the committed corpus for the whole module, exposing its opening fingerprint."""
     before = _fingerprint(committed_corpus_path)
     yield before
     after = _fingerprint(committed_corpus_path)
@@ -252,9 +201,7 @@ def corpus_fingerprint(committed_corpus_path: Path) -> Iterator[tuple[int, str]]
     )
 
 
-# ---------------------------------------------------------------------------
 # The drift gate (AAP §0.5.4, §0.6.4)
-# ---------------------------------------------------------------------------
 
 
 def test_build_reproduces_committed_corpus_byte_for_byte(
@@ -263,12 +210,7 @@ def test_build_reproduces_committed_corpus_byte_for_byte(
     corpus_config: Path,
     run_cli: Callable[..., Any],
 ) -> None:
-    """``corpus build --seed 20240101`` must equal the committed file byte for byte.
-
-    Catches exactly the drift the §0.6.4 CI step exists to catch: a payload generator, a class
-    count or the canonical writer changed while the committed corpus was not regenerated, so
-    every comparison and every downstream check would read a baseline that nothing produces.
-    """
+    """``corpus build --seed 20240101`` must equal the committed file byte for byte."""
     built = tmp_path / "corpus.jsonl"
     result = run_cli(
         "corpus",
@@ -387,13 +329,7 @@ def _assert_notes(records: Sequence[Mapping[str, Any]]) -> None:
 
 
 def test_committed_corpus_is_canonically_formed(committed_corpus_path: Path) -> None:
-    """The committed file must itself be the canonical corpus, read without the CLI.
-
-    Catches a committed file that would pass the byte comparison only because both sides are wrong:
-    CRLF endings, a lost final newline, unsorted keys, a record claiming two payload fields, a class
-    inventory that no longer matches AAP §0.8.2, or a boundary record whose ``notes`` no longer
-    states the capacity arithmetic that produced its length.
-    """
+    """The committed file must itself be the canonical corpus of §0.5.3 and §0.5.4."""
     data = committed_corpus_path.read_bytes()
     assert b"\r" not in data, (
         f"{committed_corpus_path} contains a carriage return; the corpus is written with \\n "
@@ -423,9 +359,7 @@ def test_committed_corpus_is_canonically_formed(committed_corpus_path: Path) -> 
     _assert_notes(records)
 
 
-# ---------------------------------------------------------------------------
 # Compare then fail, never overwrite first (AAP §0.6.4, §0.8.3)
-# ---------------------------------------------------------------------------
 
 
 def test_build_refuses_to_overwrite_without_force(
@@ -433,12 +367,7 @@ def test_build_refuses_to_overwrite_without_force(
     corpus_config: Path,
     run_cli: Callable[..., Any],
 ) -> None:
-    """A differing destination without ``--force`` must exit 2 and stay byte-identical.
-
-    Catches the drift step's ordering being inverted: a build that replaced the destination
-    before comparing would destroy the baseline it is meant to report a difference against,
-    turning every drift into a silent acceptance.
-    """
+    """A differing destination without ``--force`` must exit 2 and stay byte-identical."""
     before = differing_corpus.read_bytes()
     result = run_cli(
         "corpus",
@@ -475,12 +404,7 @@ def test_force_flag_overwrites_with_the_canonical_bytes(
     corpus_config: Path,
     run_cli: Callable[..., Any],
 ) -> None:
-    """``--force`` must replace a differing destination with the committed bytes exactly.
-
-    Catches an overwrite path that installs a different rendering than the one compared -- a
-    stale temporary file, a partial write, or a second formatter bypassing
-    ``qrcheck.corpus.io`` -- which would leave the corpus unreproducible.
-    """
+    """``--force`` must replace a differing destination with the committed bytes exactly."""
     result = run_cli(
         "corpus",
         "build",
@@ -502,20 +426,13 @@ def test_force_flag_overwrites_with_the_canonical_bytes(
     )
 
 
-# ---------------------------------------------------------------------------
 # The writer's canonical form on its own (AAP §0.5.4)
-# ---------------------------------------------------------------------------
 
 
 def test_load_write_round_trip_is_byte_stable(
     tmp_path: Path, committed_corpus_path: Path
 ) -> None:
-    """Reading and re-writing the committed corpus must reproduce it byte for byte.
-
-    Catches the writer drifting from the text it wrote: a missing final newline, an unsorted
-    key or an escaped non-ASCII character shows up here on its own, with no payload generator
-    and no command line in the way, which is what makes the failing half identifiable.
-    """
+    """Reading and re-writing the committed corpus must reproduce it byte for byte."""
     records: list[CorpusRecord] = load_corpus(committed_corpus_path)
     assert len(records) == PLAN_TOTAL_RECORDS, (
         f"load_corpus read {len(records)} record(s) from {committed_corpus_path}; the plan's "
@@ -530,9 +447,7 @@ def test_load_write_round_trip_is_byte_stable(
     )
 
 
-# ---------------------------------------------------------------------------
 # The seed reaches generation (AAP §0.5.1, §0.5.4)
-# ---------------------------------------------------------------------------
 
 
 def test_seed_is_actually_wired_into_the_generated_content(
@@ -541,12 +456,7 @@ def test_seed_is_actually_wired_into_the_generated_content(
     corpus_config: Path,
     run_cli: Callable[..., Any],
 ) -> None:
-    """A different seed must produce different bytes; the committed seed the committed file.
-
-    Catches a builder that accepts a seed and ignores it: such a builder satisfies every
-    byte-identity assertion because it always produces the same corpus, while making the
-    reproducibility promise of AAP §0.5.1 vacuous.
-    """
+    """A different seed must produce different bytes; the committed seed the committed file."""
     committed = committed_corpus_path.read_bytes()
     other = tmp_path / "seed-other.jsonl"
     other_result = run_cli(
@@ -581,22 +491,13 @@ def test_seed_is_actually_wired_into_the_generated_content(
     )
 
 
-# ---------------------------------------------------------------------------
 # The guard: the suite never writes the baseline (AAP §0.11.1)
-# ---------------------------------------------------------------------------
 
 
 def test_committed_corpus_is_never_modified_by_the_suite(
     committed_corpus_path: Path, corpus_fingerprint: tuple[int, str]
 ) -> None:
-    """The committed corpus's size and digest must be what they were before the module ran.
-
-    Catches a test that regenerated into the repository -- by naming the committed path
-    instead of one under ``tmp_path``, for instance -- which would rewrite the drift baseline
-    and make the next run's byte comparison compare the file with itself. The autouse guard
-    makes the same assertion again after the module's last test, so a late write cannot slip
-    past this one.
-    """
+    """The committed corpus's size and digest must be what they were before the module ran."""
     current = _fingerprint(committed_corpus_path)
     assert current == corpus_fingerprint, (
         f"{committed_corpus_path} changed while this module ran: (size, sha256) was "

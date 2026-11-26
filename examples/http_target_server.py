@@ -1,41 +1,15 @@
-"""Loopback-only HTTP QR generator: the working counterpart of the http adapter.
+"""Loopback-only HTTP QR generator: the working counterpart of the ``http`` adapter, one of the
+repository's two load-bearing examples. ``tests/integration/conftest.py`` starts it and
+``tests/integration/test_http_adapter.py`` drives it through the ``http`` adapter, so the
+configurations below are executed rather than described; ``docs/targets.md`` quotes both.
 
-One of the repository's two load-bearing examples. ``tests/integration/conftest.py``
-starts it and ``tests/integration/test_http_adapter.py`` drives it through the
-framework's ``http`` adapter, so the configuration quoted below is executed
-rather than merely described; ``docs/targets.md`` quotes the same two blocks. It
-imports nothing from ``qrcheck`` by design -- an example that imported the
-framework under test would hide the coupling the adapter contract forbids -- and
-needs nothing beyond the standard library and ``segno`` 1.6.6.
+Process contract: run ``python examples/http_target_server.py``. It binds ``127.0.0.1`` on an
+ephemeral port, prints that port as the only line it writes to stdout, and logs to stderr. No
+option, argument or environment variable changes the address, so the process cannot leave
+loopback. Exit status 0 on ``SIGTERM`` or ``SIGINT``; no credential is read, no outbound
+connection made and no file written. ``PORT`` below is the port this process printed.
 
-Process contract
-----------------
-Run it as ``python examples/http_target_server.py``. It binds the literal address
-``127.0.0.1`` on an ephemeral port, prints that port as the one and only line it
-ever writes to stdout, and sends request logging to stderr. The address is not
-configurable: there is no option, argument or environment variable for host or
-port, so the process cannot be pointed at a non-loopback interface. ``SIGTERM``
-and ``SIGINT`` stop it with exit status 0.
-
-No credential is required or read, no outbound connection is made, and no file is
-written: every symbol is rendered into memory. The plan defines no
-declared-rejection transport for an HTTP target, so a rejected request is
-answered with a ``400`` JSON object, which the adapter classifies as a contract
-error (``TargetContractError``); the ``IV-*`` checks are therefore never pointed
-at this example. ``qrcheck doctor`` probes the adapter with an ordinary request,
-which this server answers like any other -- there is no warm-up endpoint and no
-session state.
-
-Canonical configurations
-------------------------
-``PORT`` is the integer this process prints on stdout; a test reads it instead of
-hard-coding a port. Both blocks are valid TOML and both load through the
-configuration schema: the request template is written as a
-``[...request_template]`` sub-table, which the adapter sends as exactly the JSON
-object its keys spell, and the metadata map is a sub-table keyed by the
-framework's own field names (``version``, ``ec``, ``mask``, ``mode``). The arrays
-and tables are wrapped to respect the repository's 100-column limit, which
-changes no TOML or JSON semantics.
+Canonical configurations, both valid TOML and both loaded through the configuration schema:
 
     # base64 envelope: image_field is a dotted path into the JSON response
     [targets.example_http]
@@ -91,60 +65,17 @@ changes no TOML or JSON semantics.
     foreground = "{fg}"
     background = "{bg}"
 
-Request fields
---------------
-The same names on both routes and both methods; ``POST`` fields take precedence
-over query-string fields.
+Request fields on both routes: ``payload_b64`` (base64) or ``payload_utf8``, exactly one and
+non-empty; ``ec_level`` (default ``M``); ``format`` (png only); ``module_size`` (8),
+``quiet_zone`` (4), ``foreground`` and ``background``; and optional ``version`` and ``mask``
+pins, which no placeholder conveys. A ``POST`` body's fields win over the query string's.
 
-| field        | default   | meaning                                                  |
-|--------------|-----------|----------------------------------------------------------|
-| payload_b64  | --        | base64 of the payload bytes; one payload field required   |
-| payload_utf8 | --        | the payload text, encoded UTF-8                           |
-| ec_level     | "M"       | one of L, M, Q, H                                         |
-| format       | "png"     | png only; any other value is rejected                    |
-| module_size  | 8         | module edge in pixels, > 0 -- where {size} lands          |
-| quiet_zone   | 4         | quiet zone in modules, >= 0 -- where {margin} lands       |
-| foreground   | "#000000" | #RRGGBB or #RGB -- the {fg} placeholder                   |
-| background   | "#FFFFFF" | #RRGGBB or #RGB -- the {bg} placeholder                   |
-| version      | absent    | optional version pin, 1..40; not conveyable over http    |
-| mask         | absent    | optional mask pin, 0..7; not conveyable over http        |
-
-The adapter's request template can carry only the eight placeholders the
-configuration contract allows -- one for each of the first eight fields above --
-and none of them carries a version or a mask; neither pin is therefore declared
-in the capability lists, so a check that needs one reports ``skipped`` with
-``unsupported_capability`` before execution instead of running against an
-unpinned symbol.
-
-An integer field accepts a JSON number or a numeric string, because the
-template's substitution may still arrive stringified.
-
-Wire protocol
--------------
-The path is compared after the query string is split off.
-
-* ``POST /generate`` and ``GET /generate`` answer ``200`` ``application/json``:
-  ``{"image_b64": "<base64 of the PNG>", "metadata": {"version": int,
-  "ec_level": str, "mask": int, "mode": str, "format": "png", "width": int,
-  "height": int}}``. Every metadata value is read back from the encoded symbol,
-  never echoed from the request, so the example can still expose a generator
-  defect.
-* ``POST /raw`` and ``GET /raw`` answer ``200`` ``image/png`` with the raw PNG
-  bytes as the body, no JSON envelope.
-* Any other path answers ``404`` ``application/json``
-  ``{"error": "not found: <path>"}``.
-
-A ``POST`` body is read only when ``Content-Length`` is present and is never
-above 1 MiB; it must be a JSON object, and its fields then win over the query
-fields, so a body-less ``POST`` behaves like the equivalent ``GET``. A rejected
-request answers ``400`` ``application/json`` ``{"error": "<reason>"}`` and the
-server keeps serving: the reasons are a missing, ambiguous, empty or undecodable
-payload; an invalid error correction level; an unsupported output format; a
-module size of zero or less; a negative quiet zone; a version outside 1..40; a
-mask outside 0..7; an invalid colour; and data that does not fit the pinned
-version at the requested error level. An unexpected failure answers ``500``, so
-a client never sees a dropped connection in place of an error it can report.
-"""
+Wire protocol: ``POST`` and ``GET`` on ``/generate`` answer ``200`` with ``{"image_b64":
+<PNG>, "metadata": {...}}``, every metadata value read back from the symbol so a generator
+defect stays visible; on ``/raw`` they answer the raw PNG; any other path ``404``. A rejected
+request answers ``400`` and the server keeps serving -- an HTTP target has no
+declared-rejection channel, so that is ``TargetContractError`` and the ``IV-*`` checks are
+never pointed here -- while an unexpected failure answers ``500`` rather than a dead socket."""
 
 import base64
 import binascii

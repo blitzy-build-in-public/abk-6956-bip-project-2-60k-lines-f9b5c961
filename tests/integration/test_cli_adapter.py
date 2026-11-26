@@ -1,38 +1,19 @@
 """The ``cli`` adapter against its shipped example target, over a real process boundary.
 
-The integration gate for AAP §0.3.3's ``cli`` contract -- ``command``, ``payload_arg``,
-``output_arg``, ``returns`` and ``metadata_map`` -- and for AAP §0.9.2's rule that
-``examples/cli_target.py`` is load-bearing: the example's documented configuration executes
-here, so it either keeps working or CI fails. Nothing is mocked -- every case spawns the example
-or ``python -m qrcheck`` as a subprocess and judges the artefact with the pinned real decoders.
+This module is the integration gate for AAP §0.3.3's ``cli`` target contract and for AAP
+§0.9.2's rule that ``examples/cli_target.py`` is load-bearing: the example's documented
+configuration is executed here, so it either keeps working or CI fails. Nothing is mocked --
+every case spawns a real process and the decoders that judge the artefact are the pinned real
+ones.
 
-The eight cases: a legal request yielding a PNG that decodes back to the requested bytes at the
-capacity tables' version, with ``close()`` safe twice; shell metacharacters reaching the target
-byte for byte, the behavioural proof of the argv-only ``shell = False`` control (AAP §0.3.2); a
-declared rejection becoming ``TargetRejected`` carrying the target's own text; a non-zero exit
-with no rejection as ``TargetContractError``, which keeps that trigger "exactly one"; an
-over-time target killed and reported ``TargetTimeout`` naming the timeout; an unspawnable
-command as ``TargetUnavailable``, never an escaped ``OSError``; a bounded run driving every
-``otp`` record through adapter, decoders and writers; and an stdout-based ``returns`` refused as
-a contract error.
-
-Only ``returns = "file_path"`` can be exercised end to end, because the example writes its
-symbol to ``--output`` and nothing to stdout; ``bytes_path``, ``raw_bytes`` and ``base64`` are
-held at unit level by ``tests/unit/test_targets_transport.py`` rather than by a second example
-invented here. ``CliAdapter.generate`` gates every optional field the caller actually set, so a
-request pinning ``module_size_px`` or ``quiet_zone_modules`` needs the matching declared
-capability: the example's templates carry neither and its canonical table declares only ``png``,
-which is why case 1 supplies both as static words of its own ``command`` and declares the two
-capabilities it honours.
-
-Every case spawns its target by the absolute path in ``cli_target.script`` and writes under
-``tmp_path``, no duration is asserted (AAP §0.5.5 keeps wall-clock assertions to the ``PF-*``
-checks), every adapter is closed by its ``with`` block, and the process table is never inspected
-because another checkout on this host may run the same example. No ``e2e`` marker: the module is
-bounded by ``--checks``/``--class`` and belongs in the fast job (AAP §0.6.4), and a missing
-example script fails rather than skips. AAP §0.12's ``MUST``/``MUST NOT`` list and §0.4.3's
-ban on skipping, ``xfail``, retry and threshold relaxation bind every case.
-"""
+The cases: a legal request produces a PNG decoding back to the requested bytes; shell
+metacharacters reach the target byte for byte (AAP §0.3.2's argv-only control); a declared
+rejection is ``TargetRejected`` with the target's own text while a non-zero exit that
+declares nothing is ``TargetContractError``; a target outliving ``timeout_s`` is
+``TargetTimeout``; an unspawnable command is ``TargetUnavailable``; a bounded run drives
+every ``otp`` record through the pipeline; and an stdout-based ``returns`` is a contract
+error on this example. No duration is asserted (AAP §0.5.5), the module carries no ``e2e``
+marker, and a missing example script fails rather than skips (AAP §0.4.3)."""
 
 from __future__ import annotations
 
@@ -112,13 +93,7 @@ _BASE64_PAYLOAD: Final[bytes] = b"qrcheck-cli-base64"
 
 
 def _table(base: Mapping[str, Any], **overrides: Any) -> dict[str, Any]:
-    """Return the shipped example's target table with ``overrides`` applied.
-
-    A fresh mapping, so a case that replaces the command line or an argument template cannot reach
-    the fixture's table or another case's. ``base`` mirrors the canonical block in
-    ``examples/cli_target.py``'s own docstring; the overrides are the keys this case changes -- a
-    different ``command``, or the bare-text ``payload_arg`` case 2 sends metacharacters through.
-    """
+    """Return the shipped example's target table with ``overrides`` applied, as a fresh mapping."""
     table = dict(base)
     table.update(overrides)
     return table
@@ -131,12 +106,7 @@ def _write_cli_config(
     *,
     name: str = _TARGET_NAME,
 ) -> tuple[Path, Path]:
-    """Write a schema-valid document declaring ``name`` as a ``cli`` target.
-
-    The ``write_config`` fixture fills every key the caller did not choose from
-    :data:`qrcheck.config.schema.SCHEMA`'s declared defaults, so no threshold, sample count or
-    timeout is restated in this module (AAP §0.12).
-    """
+    """Write a schema-valid document declaring ``name`` as a ``cli`` target."""
     report_dir = directory / _REPORT_DIR_NAME
     config_path = write_config(
         directory / _CONFIG_FILE_NAME,
@@ -155,16 +125,7 @@ def _open_adapter(
     *,
     name: str = _TARGET_NAME,
 ) -> Iterator[Adapter]:
-    """Build the ``cli`` adapter from a real configuration and close it on the way out.
-
-    The adapter is resolved through :func:`qrcheck.config.load.load_config` and
-    ``ADAPTER_TYPES["cli"]`` exactly as ``qrcheck run`` and ``qrcheck doctor`` resolve one, so every
-    case exercises the configuration schema and the factory as well as the transport: a table the
-    schema rejects fails here instead of being hand-constructed past it. The adapter is asserted to
-    satisfy the :class:`~qrcheck.targets.base.Adapter` port, so a factory returning something else
-    fails before a single request is built; nothing is opened at construction time, and ``close``
-    runs in a ``finally`` so no case can leave a child behind.
-    """
+    """Build the ``cli`` adapter from a real configuration and close it on the way out."""
     config_path, _ = _write_cli_config(write_config, directory, table, name=name)
     config = load_config(config_path)
     adapter = ADAPTER_TYPES["cli"](config.targets[name], name=name)
@@ -181,16 +142,7 @@ def _open_adapter(
 def test_generate_returns_a_decodable_png(
     cli_target: Any, write_config: Callable[..., Path], tmp_path: Path
 ) -> None:
-    """A legal request yields a PNG that decodes back to the requested bytes.
-
-    Catches an adapter that assembles the wrong argv, a template whose placeholders are never
-    substituted, a missing artefact read, a symbol rendered at a version the capacity tables do not
-    prescribe, and a ``close`` that is not safe to call twice. The geometry comes from the case's
-    own ``command`` as two static words and the two capabilities it implies are declared, because
-    the example's templates carry neither (see the module docstring); the ``declared_*`` fields are
-    asserted ``None``, because the example writes nothing to stdout and a target that reports no
-    metadata is recorded as reporting none rather than believed.
-    """
+    """A legal request yields a PNG that decodes back to the requested bytes."""
     request = build_request(
         _DEFAULT_PAYLOAD,
         "M",
@@ -242,16 +194,7 @@ def test_generate_returns_a_decodable_png(
 def test_payload_reaches_the_target_verbatim_through_argv(
     cli_target: Any, write_config: Callable[..., Path], tmp_path: Path
 ) -> None:
-    """Shell metacharacters reach the target byte for byte, as one literal argv word.
-
-    Catches the defect that matters most in this layer: an adapter that renders a command *string*
-    and lets a shell interpret it, which AAP §0.3.2 forbids (argv only, ``shell = False``). A shell
-    would have expanded ``$(echo pwned)`` and the backtick before the target ever saw the payload,
-    so the decoded bytes would differ from the requested ones. The payload travels through the bare
-    ``{}`` placeholder rather than ``{payload_b64}``, because that spelling puts the raw characters
-    into the argument vector and the base64 form would encode them first and prove nothing about a
-    shell; nothing here inspects the adapter's internals, because the round trip is the evidence.
-    """
+    """Shell metacharacters reach the target byte for byte, as one literal argv word."""
     payload = _METACHARACTER_PAYLOAD
     assert b"$(echo pwned)" in payload
     assert b"`id`" in payload
@@ -269,16 +212,7 @@ def test_payload_reaches_the_target_verbatim_through_argv(
 def test_declared_rejection_becomes_TargetRejected_with_the_text_verbatim(
     cli_target: Any, write_config: Callable[..., Path], tmp_path: Path
 ) -> None:
-    """A declared rejection becomes ``TargetRejected`` carrying the target's own text.
-
-    Catches an adapter that maps exit 2 to a generic failure, paraphrases, prefixes or truncates the
-    target's message, or looks for the rejection on the wrong stream. The expected text is captured
-    by running the example once with the argument vector the adapter builds, so the assertion stays
-    verbatim without freezing a message the example owns. The request is the deliberate
-    out-of-contract probe of AAP §0.8.2 -- an empty payload -- constructed through
-    :class:`GenerateRequest` and not :func:`build_request`, because ``IV-EMPTY`` exists to prove a
-    target refuses exactly that, so the builder's validation is bypassed on purpose.
-    """
+    """A declared rejection becomes ``TargetRejected`` carrying the target's own text."""
     request = GenerateRequest(payload=b"", ec_level="M", output_format="png")
     captured = tmp_path / "captured.png"
     completed = subprocess.run(
@@ -304,13 +238,7 @@ def test_declared_rejection_becomes_TargetRejected_with_the_text_verbatim(
 def test_non_zero_exit_without_a_rejection_is_a_contract_error(
     cli_target: Any, write_config: Callable[..., Path], tmp_path: Path
 ) -> None:
-    """A non-zero exit that declares no rejection is a ``TargetContractError``.
-
-    Catches an adapter that treats every non-zero exit as a declared rejection, which would make the
-    ``IV-*`` checks vacuous: they pass on a rejection, so a fabricated one would let any broken
-    target through. With the case above it pins the trigger to "exactly one" -- a rejection is what
-    a target *says*, never what its exit status implies.
-    """
+    """A non-zero exit declaring no rejection is a ``TargetContractError``."""
     table = _table(
         cli_target.target_config,
         command=[sys.executable, "-c", "import sys; sys.exit(3)"],
@@ -329,14 +257,7 @@ def test_non_zero_exit_without_a_rejection_is_a_contract_error(
 def test_hung_target_times_out(
     cli_target: Any, write_config: Callable[..., Path], tmp_path: Path
 ) -> None:
-    """A target outliving ``timeout_s`` is killed and reported as ``TargetTimeout``.
-
-    Catches an adapter that lets ``subprocess.TimeoutExpired`` escape unwrapped, that passes no
-    timeout at all -- in which case this case would hang for the sleeper's full length instead of
-    failing -- or that reports the failure without the configured number a reader needs to fix it.
-    No elapsed duration is asserted: the case finishing at all is the evidence that the timeout
-    fired, because AAP §0.5.5 keeps wall-clock assertions out of all but the ``PF-*`` checks.
-    """
+    """A target outliving ``timeout_s`` is killed and reported as ``TargetTimeout``."""
     table = _table(
         cli_target.target_config,
         command=[sys.executable, "-c", "import time; time.sleep(30)"],
@@ -356,14 +277,7 @@ def test_hung_target_times_out(
 def test_missing_executable_is_TargetUnavailable(
     cli_target: Any, write_config: Callable[..., Path], tmp_path: Path
 ) -> None:
-    """A command that cannot be spawned is ``TargetUnavailable``, not an escaped ``OSError``.
-
-    Catches an adapter that lets :class:`FileNotFoundError` -- which ``subprocess.run`` raises from
-    ``execvp`` alone, before any pipe is read -- reach the caller unwrapped. The five-error
-    vocabulary of AAP §0.3.4 is closed and "the process cannot be spawned" is
-    ``TargetUnavailable``'s single trigger, so the exception type is asserted to be that one and
-    explicitly not an :class:`OSError`.
-    """
+    """A command that cannot be spawned is ``TargetUnavailable``, never an escaped ``OSError``."""
     missing = "/nonexistent/qrcheck-no-such-target"
     table = _table(cli_target.target_config, command=[missing])
     request = build_request(_UNAVAILABLE_PAYLOAD, "M")
@@ -384,16 +298,7 @@ def test_bounded_run_through_the_cli_adapter_passes(
     run_cli: Callable[..., Any],
     tmp_path: Path,
 ) -> None:
-    """A bounded run drives every ``otp`` record through the adapter and passes all twelve.
-
-    Catches a break anywhere on the real path -- the document a run loads, the registry's selection,
-    the runner's capability resolution, the adapter's spawn and artefact read, the decoders that
-    judge the symbol, and the three writers -- none of which a per-request test of the adapter alone
-    can see. ``otp`` holds exactly twelve corpus records (AAP §0.8.2) and the selection is bounded
-    to one check, so the module stays in the fast CI job instead of paying for a full run. The
-    counts are asserted as four separate integers, so a ``skipped`` or an ``error`` result cannot
-    hide behind a passing tally: every record must genuinely round-trip.
-    """
+    """A bounded run drives every ``otp`` record through adapter, decoders and writers."""
     config_path, report_dir = _write_cli_config(
         write_config, tmp_path, cli_target.target_config
     )
@@ -430,20 +335,7 @@ def test_bounded_run_through_the_cli_adapter_passes(
 def test_stdout_based_returns_is_a_contract_error_on_this_example(
     cli_target: Any, write_config: Callable[..., Path], tmp_path: Path
 ) -> None:
-    """An stdout-based ``returns`` is refused rather than read from the wrong stream.
-
-    Catches an adapter that would hand a zero-exit, path-writing target's empty stdout to a decoder
-    and report the resulting confusion as a symbol defect: ``examples/cli_target.py`` writes its PNG
-    to ``--output`` and nothing to stdout when it succeeds, so ``returns = "base64"`` miswires the
-    target, and AAP §0.3.4 lists "empty body" among ``TargetContractError``'s triggers -- a loud
-    failure rather than a symbol read from the wrong place.
-
-    This is the honest scope of the ``returns`` coverage: ``file_path`` is the one delivery mode the
-    shipped example can serve end to end, and ``bytes_path``, ``raw_bytes`` and ``base64`` are
-    decoded by :func:`qrcheck.targets.base.decode_returned_image` and held at unit level by
-    ``tests/unit/test_targets_transport.py``. No second example script is invented here to widen
-    that coverage, because it would document a shape the shipped example does not have.
-    """
+    """An stdout-based ``returns`` is refused rather than read from the wrong stream."""
     table = _table(cli_target.target_config, returns="base64")
     request = build_request(_BASE64_PAYLOAD, "M")
 

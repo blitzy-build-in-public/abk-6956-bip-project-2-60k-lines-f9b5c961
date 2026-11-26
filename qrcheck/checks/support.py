@@ -1,65 +1,27 @@
 """Shared support for the twenty-one checks: case identity, one request path, one error table.
 
 Case iteration over corpus records, request construction through the port's builder, the
-deterministic sampling helpers, the documented-recovery budget helper several families share,
-the ``CaseResult`` factories, and the single translation of an adapter error into a status.
-This module is **not** a check family: it registers nothing, owns no check ID and asserts
-nothing about a symbol.  Every module under ``qrcheck/checks/`` imports it, which is why each
-rule below exists here once instead of nine times across the families.
+deterministic sampling helpers, the documented-recovery budget helper, the ``CaseResult`` factories,
+and the single translation of an adapter error into a status. This module is **not** a check family:
+it registers nothing, owns no check ID and asserts nothing about a symbol.
 
-Owns case identity -- ``corpus:<record-id>`` for a corpus-driven case and ``synthetic:<name>``
-for one the framework constructs, both built through the registry's own
-:class:`~qrcheck.registry.check.Case` -- the deterministic sampling helpers
-(:func:`first_records`, :func:`records_by_class`), the single adapter-error translation
-(:func:`case_status_for_error`), the single definition of the documented error-correction
-recovery fractions (:func:`recovery_fraction`), the ``CaseResult`` factories
-(:func:`pass_`, :func:`fail`, :func:`skip`) and the only call site of
-:meth:`qrcheck.report.evidence.EvidenceStore.record` outside ``qrcheck/report/``.
+It never owns request validation (the port's :func:`~qrcheck.targets.base.build_request`), the
+result vocabulary and failure identifier (:mod:`qrcheck.report.model`), the evidence layout
+(:mod:`qrcheck.evidence.naming` and the evidence store), the case type and run context
+(:mod:`qrcheck.registry.check`), or any threshold -- each limit lives in ``qrcheck.toml``.
 
-Never owns request validation (the port's :func:`~qrcheck.targets.base.build_request`), the
-result vocabulary, status and reason coercion and the failure identifier
-(:mod:`qrcheck.report.model`), the evidence layout and the closed artefact set
-(:mod:`qrcheck.evidence.naming` and the evidence store), the case type and the run context
-(:mod:`qrcheck.registry.check`), or any threshold -- each limit lives in ``qrcheck.toml`` and
-is read from the resolved configuration by the family that asserts it.  No numeric threshold,
-tolerance, sample size or retry policy appears in this file.
+The adapter-error translation, following AAP §0.3.4 exactly (see :func:`case_status_for_error`), is
+closed at five: ``TargetRejected``, ``TargetContractError`` and ``TargetUnsupported`` become
+results, and ``TargetUnavailable`` and ``TargetTimeout`` are propagated unchanged because
+:mod:`qrcheck.runner` owns the one-error-result-per-check target-loss policy. No bare ``except``, no
+retry and no swallowed exception exists here (AAP §0.5.6).
 
-The adapter-error translation table, which follows AAP §0.3.4 exactly.  ``TargetRejected`` on
-an ``IV-*`` check is **passed**, with the target's text verbatim in ``decoded["rejection"]``,
-because a declared rejection is the expected outcome of an invalid-input probe; on any other
-check it is **failed** with reason ``target_rejected`` and the same verbatim text.
-``TargetContractError`` is **failed** with reason ``contract_error``, the diagnostic verbatim
-in ``decoded["error_text"]`` and the first 256 bytes of the unusable body in
-``decoded["hex_prefix"]`` as 512 hex characters when the body is that long, what exists when it
-is shorter, and the empty string when the adapter had no body.  ``TargetUnsupported`` is
-**skipped** with reason ``unsupported_capability`` -- the belt-and-braces path, since
-``qrcheck/registry/resolve.py`` normally pre-resolves an unmet requirement before execution.
-``TargetUnavailable`` and ``TargetTimeout`` are **propagated unchanged**: ``qrcheck.runner``
-owns the one-error-result-per-check target-loss policy, so this module neither catches,
-converts, logs nor retries them.
-
-No bare ``except``, no ``except Exception``, no retry and no swallowed exception anywhere in
-this file: the only handlers translate a framework-side caller defect into a diagnostic naming
-the offending value, and no adapter error is ever absorbed.  A check that fails intermittently
-is a framework defect to fix, never one to suppress (AAP §0.5.6).  An ``error`` result is the
-runner's alone, so no factory for one exists here.
-
-Determinism: nothing here reads a clock, a random source, ``hash()``, ``id()`` or the
-filesystem, and nothing sorts by anything but an identifier; a helper that needs randomness
-takes its seed from the caller, which derives it through :mod:`qrcheck.config.seeding`, and
-this module only passes that seed into the record that reproduces the case.
-
-Two names differ from the plan's prose, and the owners win: the run's evidence store is
-:attr:`qrcheck.registry.check.RunContext.evidence`, not ``ctx.evidence_store``; and
-:meth:`qrcheck.report.evidence.EvidenceStore.record` returns ``None`` for a passing case (that
-is the persistence policy), so :func:`record_evidence` returns a passing result unchanged
-rather than inventing a directory for it.
-
-Import cost: this module imports the standard library, the adapter port, the registry's case
-and context and the result model for their own contents alone -- :mod:`qrcheck.decode` and
-:mod:`qrcheck.corpus.builder` are loaded at the point of use -- so no decoder, encoder, image
-library, HTTP client or CLI framework enters its own import graph.  It moves bytes and records
-outcomes; it processes no image.
+Nothing here reads a clock, a random source, ``hash()``, ``id()`` or the filesystem, and nothing
+sorts by anything but an identifier. Two names differ from the plan's prose and the owners win: the
+evidence store is :attr:`qrcheck.registry.check.RunContext.evidence`, and
+:meth:`qrcheck.report.evidence.EvidenceStore.record` returns ``None`` for a passing case, so
+:func:`record_evidence` returns a passing result unchanged. :mod:`qrcheck.decode` and
+:mod:`qrcheck.corpus.builder` load at the point of use.
 """
 
 from __future__ import annotations
@@ -136,12 +98,10 @@ _ENVELOPE_KEYS: Final[frozenset[str]] = frozenset({"case_id", "check_id", "seed"
 _DEFAULT_FOREGROUND: Final[tuple[int, int, int]] = (0, 0, 0)
 _DEFAULT_BACKGROUND: Final[tuple[int, int, int]] = (255, 255, 255)
 
-# The documented, approximate error-correction recovery capacity of each level, as a
-# fraction of the symbol's codewords (ISO/IEC 18004 §7.5; the figures AAP §0.2.1 and §0.6.5
-# record). They are properties of the standard rather than thresholds this product chooses,
-# which is why they live here and not in ``qrcheck.toml``: a check spends them as a budget
-# and subtracts the configured absolute safety margin, because the real tolerance of a
-# symbol can be lower than the documented percentage.
+# The documented, approximate recovery capacity of each level, as a fraction of the symbol's
+# codewords (ISO/IEC 18004 §7.5; the figures AAP §0.2.1 and §0.6.5 record).  Properties of the
+# standard, not thresholds this product chooses, which is why they live here and not in
+# ``qrcheck.toml``; a check spends them as a budget and subtracts the configured safety margin.
 _RECOVERY_FRACTIONS: Final[Mapping[str, float]] = MappingProxyType(
     {"L": 0.07, "M": 0.15, "Q": 0.25, "H": 0.30}
 )
@@ -165,18 +125,14 @@ def build(
     A thin delegation to :func:`qrcheck.targets.base.build_request`, the single definition of "the
     framework considers this request valid": an error level outside ``L``/``M``/``Q``/``H``, a
     version outside 1..40, a mask outside 0..7, a non-positive module size, a negative quiet zone, a
-    colour channel outside 0..255, or a payload that does not fit the requested symbol is refused
-    there, before any target sees it.  Nothing is re-validated, re-derived or relaxed here -- a
-    second gate would be a second definition, and the ``IV-*`` checks exist precisely to prove that
-    the target rejects what only that gate would have stopped.  ``bytearray`` and ``memoryview``
-    payloads are normalised by the port; text is refused there, so a caller's encoding choice stays
-    visible in its own code.
+    colour channel outside 0..255, or a payload that does not fit the symbol is refused there.
+    Nothing is re-validated here -- a second gate would be a second definition, and the ``IV-*``
+    checks exist to prove the target rejects what only that gate would have stopped.
 
     Raises:
         ValueError: A field is outside its documented range or the payload does not fit the symbol;
-            the message names the offending field.  This is a framework-side programming defect
-            rather than an adapter error, so the runner records an ``error`` result carrying its
-            traceback.
+            the message names the offending field. A framework-side defect rather than an adapter
+            error, so the runner records an ``error`` result with its traceback.
     """
     return build_request(
         payload,
@@ -207,21 +163,13 @@ def construct_out_of_contract(
 ) -> GenerateRequest:
     """Build a deliberately illegal request, with no validation at all.
 
-    The documented bypass of :func:`build` (AAP §0.8.2) and the only one in the product.
-    ``IV-EMPTY``, ``IV-OVERCAPACITY`` and the four ``IV-BAD-OPTION`` probes exist to prove that a
-    target *rejects* a request breaking exactly the rules the builder enforces, so they cannot go
-    through the builder: this function hands the same frozen
-    :class:`~qrcheck.targets.base.GenerateRequest` to a target with ``ec_level="X"``,
+    The documented bypass of :func:`build` (AAP §0.8.2) and the only one in the product: the
+    ``IV-*`` probes must prove that a target *rejects* a request breaking exactly the rules the
+    builder enforces, so this hands a target the same frozen request with ``ec_level="X"``,
     ``module_size_px=0``, ``quiet_zone_modules=-1``, a below-floor colour pair, or a version or mask
-    pin outside its range.  ``GenerateRequest`` validates nothing itself precisely so that this is
-    possible -- the gate is the builder, not the record -- and every value is passed through
-    untouched, including the ones the record's annotations do not cover, so nothing is raised here.
-
-    Calling this for an ordinary case is a defect: it would send an unvalidated request to a
-    conforming target and report the target's refusal as if the target were at fault.  Pass
-    ``out_of_contract=True`` to :func:`record_evidence` for these cases, so ``request.json`` carries
-    ``out_of_contract: true`` and no reader mistakes an intentionally illegal request for a
-    framework defect.
+    pin outside its range. ``GenerateRequest`` validates nothing itself precisely so this is
+    possible. Calling it for an ordinary case is a defect; pass ``out_of_contract=True`` to
+    :func:`record_evidence` for these cases.
     """
     # The deliberately out-of-vocabulary values are exactly what this constructor exists to
     # accept: GenerateRequest has no __post_init__ and coerces nothing (see its docstring),
@@ -249,19 +197,14 @@ def corpus_cases(
 ) -> Iterator[Case]:
     """Yield one :class:`~qrcheck.registry.check.Case` per corpus record, in ``id`` order.
 
-    The registry's own ``Case`` type, never a second one: the runner walks what this yields without
-    knowing which family produced it, and the case identifier is the stable name AAP §0.3.4 fixes,
-    ``corpus:<record-id>``.  Records are sorted by ``id`` here, so the order a family received them
-    in (a dict, a set difference, a filtered tuple) can never reach a report or an evidence
-    directory.  ``ctx`` is accepted so every helper in this module shares one calling convention and
-    nothing is read from it -- the records and the identifier are given explicitly, and the runner,
-    not this helper, decides which cases execute.  ``execute_factory`` is called once per record,
-    which is what lets a family close over that record's payload and expectations without a lookup.
+    The registry's own ``Case`` type, named ``corpus:<record-id>`` as AAP §0.3.4 fixes. Records are
+    sorted by ``id`` here, so the order a family received them in can never reach a report.
+    ``execute_factory`` is called once per record, which lets a family close over that record's
+    payload and expectations.
 
     Raises:
         ValueError: ``check_id`` is not a non-empty string, or two records would register the same
-            case identifier -- which would make two results share one evidence directory and one
-            entry in every report.
+            case identifier -- which would make two results share one evidence directory.
         TypeError: ``execute_factory`` (or what it returns) is not callable.
     """
     _require_check_id(check_id)
@@ -297,18 +240,14 @@ def synthetic_case(
 
     For the cases the framework builds rather than draws from the corpus: the invalid-input probes,
     the logo overlay, the pinned-matrix set, the colour pair, the performance probes, the
-    determinism pair.  Their identifiers are ``synthetic:<name>`` by AAP §0.3.4, and the prefix is
-    checked rather than trusted, because it is what tells a reader of ``summary.json`` that no
-    corpus record stands behind the case.  ``synthetic:target`` is refused: the
-    one-error-result-per-check result on target loss is constructed by :mod:`qrcheck.runner`, which
-    owns that policy, and a check that invented one would report a target failure as its own
-    finding.
+    determinism pair. Their identifiers are ``synthetic:<name>`` by AAP §0.3.4, and the prefix is
+    checked rather than trusted. ``synthetic:target`` is refused: the one-error-result-per-check
+    result on target loss belongs to :mod:`qrcheck.runner`.
 
     Raises:
         ValueError: ``case_id`` does not start with ``synthetic:``, carries no name after the
-            prefix, or is the runner's own ``synthetic:target``; or ``check_id`` is not a non-empty
-            string.
-        TypeError: ``execute`` is not callable.
+        prefix, or is the runner's own ``synthetic:target``; or ``check_id`` is not a non-empty
+        string. TypeError: ``execute`` is not callable.
     """
     _require_check_id(check_id)
     if not isinstance(case_id, str) or not case_id.startswith(_SYNTHETIC_CASE_PREFIX):
@@ -334,14 +273,13 @@ def first_records(records: Iterable[CorpusRecord], count: int) -> tuple[CorpusRe
     """Return the first `count` records in ascending ``id`` order.
 
     AAP §0.8.1 fixes several case samples as "the first N records in ``id`` order", which is
-    reproducible only if every family applies the same rule; this is that rule.  Fewer records than
+    reproducible only if every family applies the same rule; this is that rule. Fewer records than
     `count` yields all of them rather than raising, because a filtered corpus is a legitimate input
-    and the filter's emptiness is decided by the runner.
+    and the runner decides whether an empty filter is an error.
 
     Raises:
-        TypeError: ``count`` is not an integer.  A ``bool`` is refused even though it is an ``int``
-            subclass, because ``True`` as a sample size is a caller mistake that would otherwise
-            validate silently.
+        TypeError: ``count`` is not an integer. A ``bool`` is refused even though it is an ``int``
+            subclass, because ``True`` as a sample size would otherwise validate silently.
         ValueError: ``count`` is negative.
     """
     if isinstance(count, bool) or not isinstance(count, int):
@@ -357,20 +295,18 @@ def records_by_class(
 ) -> tuple[CorpusRecord, ...]:
     """Return the records of `classes`, in ascending ``id`` order.
 
-    The class-name filter behind the fixed samples of AAP §0.8.1, and the same rule for every
-    family that needs one.  Exact class names are taken, not globs: the run-time ``--class`` glob
-    is parsed and applied by the runner before a check sees the corpus, so a check can rely on
-    exact names and a typo in one is a defect worth naming.
+    The class-name filter behind the fixed samples of AAP §0.8.1. Exact class names are taken, not
+    globs: the run-time ``--class`` glob is applied by the runner before a check sees the corpus, so
+    a check may rely on exact names and a typo in one is a defect worth naming.
 
     Raises:
         TypeError: A name is not a string.
         ValueError: A name is outside the corpus's class vocabulary, and the message names it and
             the vocabulary.
     """
-    # Read from its owner at call time rather than copied into a second list here: the corpus
-    # class vocabulary has one definition.  The import stays inside the function because
-    # qrcheck.corpus.builder reaches numpy through the seeded payload generators, and nothing
-    # this module does needs that loaded.
+    # Read from its owner at call time rather than copied here: the class vocabulary has one
+    # definition.  The import stays inside the function because qrcheck.corpus.builder reaches
+    # numpy through its payload generators.
     from qrcheck.corpus.builder import CLASS_NAMES
 
     names = (classes,) if isinstance(classes, str) else tuple(classes)
@@ -400,13 +336,9 @@ def generate(ctx: RunContext, request: GenerateRequest) -> GeneratedSymbol:
 
     :func:`qrcheck.targets.base.require_capabilities` runs first and raises
     :class:`~qrcheck.targets.base.TargetUnsupported` **before any I/O**, so a request the target
-    never declared is refused without a process, a socket or a file being touched.  The adapter
-    applies the same gate itself when it is called; this one exists so the refusal happens before
-    the check layer reaches the transport at all, which is what keeps an unsupported request from
-    consuming the target's ``timeout_s``.  No adapter error is caught here: every one of the five
-    must reach the check, which decides through :func:`case_status_for_error` (or the runner, for
-    the two that propagate).  The returned symbol's ``declared_*`` fields are evidence only and are
-    never the assertion.
+    never declared is refused without a process, a socket or a file being touched and without
+    consuming the target's ``timeout_s``. No adapter error is caught here: every one of the five
+    reaches the check, or the runner, for the two that propagate.
 
     Raises:
         TargetUnsupported: The target does not declare a capability this request needs.
@@ -424,18 +356,14 @@ def decode(ctx: RunContext, image_bytes: bytes, request: GenerateRequest) -> Dec
 
     A delegation to :func:`qrcheck.decode.decode_symbol`, called exactly once per symbol: the
     primary decoder is the authority for every check (AAP §0.3.2), so nothing here reads
-    ``per_decoder`` to rescue a payload, prefer the secondary decoder's answer or reconcile the two,
-    and a symbol the primary could not read yields ``payload_bytes is None`` -- which the check
-    reports rather than a verdict built on the corroborating decoder.  The run's resolved fact about
-    the secondary decoder is passed through when the runner recorded one
-    (``RunContext.availability``), so the recorded degradation and the resolution that decided the
-    run's skips cannot disagree; when the runner recorded no fact -- a direct call from a test, say
-    -- ``None`` lets the decode layer probe for itself.  An absent key is not read as "available".
+    ``per_decoder`` to rescue a payload or reconcile the two. The run's resolved fact about the
+    secondary decoder is passed through when ``RunContext.availability`` holds one, so the recorded
+    degradation and the resolution that decided the run's skips cannot disagree.
 
     Raises:
-        ValueError: ``image_bytes`` is not bytes, or ``request`` carries no colours -- both caller
-            defects.  Unusable bytes, an SVG artefact, an unreadable symbol and an unsamplable grid
-            return a result instead of raising.
+            ValueError: ``image_bytes`` is not bytes, or ``request`` carries no colours -- both
+            caller defects. Unusable bytes, an SVG artefact, an unreadable symbol and an unsamplable
+            grid return a result instead of raising.
     """
     # Imported inside the call: qrcheck.decode loads numpy for its decoders, and importing
     # this module must not start a native image stack in a process that only lists checks.
@@ -454,16 +382,12 @@ def generate_and_decode(
 ) -> tuple[GeneratedSymbol, DecodeResult]:
     """Generate one symbol and decode it: the single path every image check uses.
 
-    Saves a family from repeating the two calls in the only order that is correct, and keeps "one
-    decode per symbol" a property of one function rather than a convention each family is trusted to
-    follow.
+    Keeps "one invocation, one decode" a property of one function rather than a convention each
+    family is trusted to follow.
 
     Raises:
-        TargetUnsupported: Exactly as :func:`generate`.
-        TargetUnavailable: Exactly as :func:`generate`.
-        TargetTimeout: Exactly as :func:`generate`.
-        TargetRejected: Exactly as :func:`generate`.
-        TargetContractError: Exactly as :func:`generate`.
+        TargetUnsupported, TargetUnavailable, TargetTimeout, TargetRejected, TargetContractError:
+            Exactly as :func:`generate`.
         ValueError: Exactly as :func:`decode`.
     """
     symbol = generate(ctx, request)
@@ -473,18 +397,16 @@ def generate_and_decode(
 def recovery_fraction(ec_level: str) -> float:
     """Return the documented error-correction recovery fraction of `ec_level`.
 
-    The single definition in the product of the approximate recovery capacity each level promises:
-    ``L`` 7 %, ``M`` 15 %, ``Q`` 25 %, ``H`` 30 % of the symbol's codewords (AAP §0.2.1, §0.3.4
-    ``[checks.damage]``, §0.6.5).  ``qrcheck.checks.damage`` and ``qrcheck.checks.render`` both
-    budget against it and neither may carry a copy, which would let a damage case and a logo case
-    disagree about how much of a symbol may be lost.  The figures are documented and approximate --
-    real tolerance can be lower, and a 1-L symbol corrects at most two of its twenty-six codewords
-    -- which is why a caller subtracts the configured absolute ``occlusion_margin`` from this
-    fraction instead of trusting the percentage, and why this module holds no threshold of its own.
+    The single definition in the product of the recovery capacity each level promises: ``L`` 7 %,
+    ``M`` 15 %, ``Q`` 25 %, ``H`` 30 % of the symbol's codewords (AAP §0.2.1, §0.3.4
+    ``[checks.damage]``, §0.6.5). ``qrcheck.checks.damage`` and ``qrcheck.checks.render`` both
+    budget against it and neither may carry a copy. The figures are approximate -- a 1-L symbol
+    corrects at most two of its twenty-six codewords -- so a caller subtracts the configured
+    absolute ``occlusion_margin``.
 
     Raises:
         KeyError: `ec_level` is not one of the four levels, and the message names the value it was
-            given and the levels it accepts.
+        given and the levels it accepts.
     """
     try:
         return _RECOVERY_FRACTIONS[ec_level]
@@ -507,31 +429,22 @@ def case_status_for_error(
 ) -> CaseResult:
     """Translate one adapter error into the result AAP §0.3.4 prescribes for it.
 
-    The only translation of an adapter failure into a status in the product, closed at five:
+    The product's only translation of an adapter failure into a status, closed at five.
     ``TargetRejected`` on an ``IV-*`` check is a **pass** -- a declared rejection is what those
     probes exist to observe -- with the target's text verbatim in ``decoded["rejection"]``, and a
-    **failure** with reason ``target_rejected`` on any other check, because a target that refuses a
-    request the framework considers valid has broken its contract.  ``TargetContractError`` is a
-    **failure** with reason ``contract_error``, the diagnostic verbatim in
-    ``decoded["error_text"]`` and the first 256 bytes of the unusable body in
-    ``decoded["hex_prefix"]`` (512 hex characters when the body is that long, what exists when it
-    is shorter, the empty string when the adapter had no body); the body's leading bytes travel on
-    :attr:`~qrcheck.targets.base.TargetContractError.body_prefix`, so a tool parsing the field reads
-    the target's bytes rather than the diagnostic's.  ``TargetUnsupported`` is a **skip** with
-    reason ``unsupported_capability``, the belt-and-braces path since
-    ``qrcheck/registry/resolve.py`` normally resolves an unmet requirement before execution.
-
-    The request that caused the failure travels with the result, marked ``out_of_contract: true``
-    for a deliberate probe, so a reader of the evidence can reproduce it without consulting the
-    check's source.  Never an ``error`` result: the runner alone constructs one.
+    **failure** with reason ``target_rejected`` on any other check. ``TargetContractError`` is a
+    **failure** with reason ``contract_error``, the diagnostic in ``decoded["error_text"]`` and the
+    first 256 bytes of the unusable body in ``decoded["hex_prefix"]``. ``TargetUnsupported`` is a
+    **skip** with reason ``unsupported_capability``. The request travels with the result, marked
+    ``out_of_contract: true`` for a deliberate probe, and no ``error`` result is ever built: the
+    runner alone constructs one.
 
     Raises:
-        TargetUnavailable: Re-raised unchanged when that is the error supplied.
-        TargetTimeout: Re-raised unchanged when that is the error supplied.
-        TypeError: ``error`` is not one of the five adapter errors, ``request`` is not a request
-            record, or a result mapping is not a mapping.  All are caller defects.
-        ValueError: A field of the result is outside its documented range, or
-            ``check_id``/``case_id`` is not a non-empty string.
+        TargetUnavailable: Re-raised unchanged when that is the error supplied. TargetTimeout: Re-
+        raised unchanged when that is the error supplied. TypeError: ``error`` is not one of the
+        five adapter errors, ``request`` is not a request record, or a result mapping is not a
+        mapping. All are caller defects. ValueError: A field of the result is outside its documented
+        range, or ``check_id``/``case_id`` is not a non-empty string.
     """
     _require_identity(check_id, case_id)
     if isinstance(error, (TargetUnavailable, TargetTimeout)):
@@ -608,13 +521,12 @@ def pass_(
 
     A passing case writes no evidence and the model therefore refuses one, so this factory offers no
     way to attach an evidence directory; :func:`record_evidence` returns a passing result unchanged
-    for the same reason, since a run of a few thousand cases would otherwise bury the failing ones
-    under tens of thousands of files.
+    for the same reason.
 
     Raises:
         TypeError: A record field is not a mapping or a number, or an identifier is not a string.
         ValueError: An identifier is empty, ``duration_ms`` is negative or not finite, or ``seed``
-            is negative.
+        is negative.
     """
     return _case_result(
         Status.PASSED,
@@ -647,9 +559,8 @@ def fail(
 
     Raises:
         TypeError: ``reason`` is not one of the accepted forms, or a record field has the wrong
-            type.
-        ValueError: ``reason`` is not a :class:`~qrcheck.report.model.Reason` member, or another
-            field is outside its documented range.
+        type. ValueError: ``reason`` is not a :class:`~qrcheck.report.model.Reason` member, or
+        another field is outside its documented range.
     """
     return _case_result(
         Status.FAILED,
@@ -678,17 +589,14 @@ def skip(
     """Return a skipped result carrying the machine-readable reason it did not run.
 
     A skip is a real outcome and never a flavoured pass: ``counts.skipped`` is its own integer and
-    the exit code reads only ``failed`` and ``error``, so a run that skipped a check can never look
-    green because of it.  ``reason`` is ``unsupported_capability``, ``missing_dependency`` or
-    ``unsupported_platform`` -- any other member is accepted by the model and means something else,
-    so callers pass the one that applies -- and ``decoded`` carries any evidence the skip rests on,
-    such as the discovery order a rasterizer probe attempted.
+    the exit code reads only ``failed`` and ``error``. ``reason`` is ``unsupported_capability``,
+    ``missing_dependency`` or ``unsupported_platform``, and ``decoded`` carries any evidence the
+    skip rests on, such as the discovery order a rasterizer probe attempted.
 
     Raises:
         TypeError: ``reason`` is not one of the accepted forms, or a record field has the wrong
-            type.
-        ValueError: ``reason`` is not a :class:`~qrcheck.report.model.Reason` member, or another
-            field is outside its documented range.
+        type. ValueError: ``reason`` is not a :class:`~qrcheck.report.model.Reason` member, or
+        another field is outside its documented range.
     """
     return _case_result(
         Status.SKIPPED,
@@ -717,27 +625,19 @@ def record_evidence(
     """Persist this case's evidence and return the result carrying its directory.
 
     The only call site of :meth:`qrcheck.report.evidence.EvidenceStore.record` outside
-    ``qrcheck/report/``.  The store owns the policy and the closed artefact set, the naming module
-    owns the layout and the file names, and this function owns the one thing the two cannot: the
-    shape of ``request.json``'s envelope, the case's identity plus whatever the check resolved for
-    the case.  Two additions reach it through the result's own request projection, which the store
-    writes verbatim: ``out_of_contract: true`` when the case sent a deliberately illegal request
-    through :func:`construct_out_of_contract`, and the ``request_extra`` entries -- the resolved
-    damage kind and its thresholds, the quiet-zone request, the contrast request -- so the artefact
-    records the values actually applied rather than the configuration a later run might have
-    changed.  A **passing** result is returned unchanged: the store persists nothing for a pass,
-    the policy that keeps a few thousand passing cases from writing tens of thousands of files, and
-    the model forbids a passing result from carrying an evidence directory.
+    ``qrcheck/report/``. The store owns the policy and the artefact set, the naming module the
+    layout, and this function the envelope of ``request.json``: the case's identity plus whatever
+    the check resolved for it -- ``out_of_contract: true`` for a deliberate probe, and the
+    ``request_extra`` entries. A
+    **passing** result is returned unchanged: the store persists nothing for a pass.
 
     Raises:
-        TypeError: A persisted mapping holds a value the canonical writer cannot serialise, or a
-            supplied artefact's bytes are not bytes-like.
-        ValueError: ``request_extra`` names one of the keys the identity envelope owns
-            (``check_id``, ``case_id``, ``seed``), or an artefact format or damage kind is not one
-            the naming module declares.
-        OSError: The case directory cannot be created or an artefact cannot be written.  Propagated
-            untouched, because ``qrcheck.cli.run`` is the single place that turns an unwritable
-            report directory into exit code 3.
+            TypeError: A persisted mapping holds a value the writer cannot serialise, or an
+            artefact's bytes are not bytes-like. ValueError: ``request_extra`` names one of the keys
+            the identity envelope owns (``check_id``, ``case_id``, ``seed``), or an artefact format
+            or damage kind is not one the naming module declares. OSError: The case directory cannot
+            be created or an artefact cannot be written. Propagated untouched, because
+            ``qrcheck.cli.run`` turns an unwritable report directory into exit 3.
     """
     extra = _as_mapping("request_extra", request_extra)
     clashes = sorted(set(extra) & _ENVELOPE_KEYS)
@@ -825,12 +725,7 @@ def _case_result(
 def _request_projection(request: GenerateRequest, out_of_contract: bool) -> dict[str, Any]:
     """Return the JSON-ready projection of `request`, marked when it is a probe.
 
-    Args:
-        request: The request to project.
-        out_of_contract: ``True`` when the request was built without validation.
-
-    Returns:
-        The projection the result and ``request.json`` carry.
+    `out_of_contract` marks a request built without validation, so ``request.json`` says so.
 
     Raises:
         TypeError: `request` is not a :class:`~qrcheck.targets.base.GenerateRequest`.
@@ -848,9 +743,8 @@ def _request_projection(request: GenerateRequest, out_of_contract: bool) -> dict
 def _require_identity(check_id: str, case_id: str) -> None:
     """Reject an empty check or case identifier, naming the field that carries the defect.
 
-    The result model validates its status, reason, duration and evidence path but not its
-    two identifiers, and an empty identifier would produce an evidence directory named for
-    nothing; the check lives here, at the point the result is built.
+    The result model validates its status, reason, duration and evidence path but not its two
+    identifiers, and an empty identifier would produce an evidence directory named for nothing.
 
     Raises:
         TypeError: An identifier is not a string.
@@ -879,9 +773,8 @@ def _require_check_id(check_id: str) -> None:
 def _as_mapping(field: str, value: Mapping[str, Any] | None) -> dict[str, Any]:
     """Return `value` as a plain dict, or an empty one when it is ``None``.
 
-    A plain dict, never the mapping that was passed: the report writers serialise these mappings
-    with ``json``, which cannot emit a mapping proxy or any other ``Mapping`` implementation, and a
-    defect that reached a writer as a serialisation TypeError would be blamed on the writer.
+    A plain dict, never the mapping that was passed: the report writers serialise these with
+    ``json``, which cannot emit a mapping proxy or any other ``Mapping`` implementation.
 
     Raises:
         TypeError: `value` is neither a mapping nor ``None``.
@@ -899,13 +792,12 @@ def _as_mapping(field: str, value: Mapping[str, Any] | None) -> dict[str, Any]:
 def _checked_duration(duration_ms: float) -> float:
     """Return `duration_ms` as a finite, non-negative float.
 
-    The model already refuses a negative duration; finiteness is added here because a
-    ``nan`` or an ``inf`` would reach ``summary.json`` as a token no JSON consumer accepts,
-    and the report would then be unreadable rather than merely surprising.
+    The model already refuses a negative duration; finiteness is added here because a ``nan`` or an
+    ``inf`` would reach ``summary.json`` as a token no JSON consumer accepts.
 
     Raises:
-        TypeError: `duration_ms` is not a number.  A ``bool`` is refused even though it is an
-            ``int`` subclass.
+        TypeError: `duration_ms` is not a number. A ``bool`` is refused even though it is an ``int``
+            subclass.
         ValueError: `duration_ms` is negative or not finite.
     """
     if isinstance(duration_ms, bool) or not isinstance(duration_ms, (int, float)):
@@ -921,12 +813,11 @@ def _checked_duration(duration_ms: float) -> float:
 def _checked_seed(seed: int | None) -> int:
     """Return `seed`, or ``0`` when the case has none, refusing a negative value.
 
-    The model stores the seed without validating it; a negative seed cannot be derived from
-    the run seed by :func:`qrcheck.config.seeding.derive_seed`, so it is a caller defect
-    rather than a value to record.
+    The model stores the seed without validating it; a negative seed cannot be derived from the run
+    seed by :func:`qrcheck.config.seeding.derive_seed`.
 
     Raises:
-        TypeError: `seed` is neither ``None`` nor an integer.  A ``bool`` is refused.
+        TypeError: `seed` is neither ``None`` nor an integer. A ``bool`` is refused.
         ValueError: `seed` is negative.
     """
     if seed is None:
@@ -941,19 +832,15 @@ def _checked_seed(seed: int | None) -> int:
 def _request_capabilities(request: GenerateRequest) -> frozenset[Capability]:
     """Return the capabilities `request` itself asks for, for the gate before any I/O.
 
-    Only a field that positively asks for an operation can be read off a request: the output
-    format, and the version pin, mask pin, module size, quiet zone, non-default colour pair and
-    logo overlay, each of which is unset unless the caller asked for it.  ``ec_level`` is
-    deliberately not among them: every request carries a level, so requiring the capability here
-    would refuse every request to a target that supports the format but not level selection -- a
-    check that asserts error-level conformance declares ``ec_level`` itself, and
-    ``qrcheck/registry/resolve.py`` resolves it to a skip before a request is built.  This mirrors
-    what the configurable adapters require of a request, so the pre-gate can never refuse
-    something an adapter would have accepted.
+    Only a field that positively asks for an operation can be read off a request: the output format,
+    and the version pin, mask pin, module size, quiet zone, non-default colour pair and logo
+    overlay. ``ec_level`` is deliberately not among them: every request carries a level, so
+    requiring the capability here would refuse every request to a target that supports the format
+    but not level selection.
 
     Raises:
         ValueError: ``request.output_format`` is neither ``png`` nor ``svg``, which means the
-            request bypassed :func:`build` without being an ``IV-*`` probe.
+        request bypassed :func:`build` without being an ``IV-*`` probe.
     """
     try:
         needed: set[Capability] = {Capability(request.output_format)}
@@ -983,8 +870,8 @@ def _request_capabilities(request: GenerateRequest) -> frozenset[Capability]:
 def _by_record_id(record: CorpusRecord) -> str:
     """Return the sort key of a corpus record: its identifier.
 
-    The one sort key in this module, so every helper that promises ``id`` order promises the
-    same order.
+    The one sort key in this module, so every helper that promises ``id`` order promises the same
+    order.
     """
     return record.id
 

@@ -1,52 +1,40 @@
 """Resolve a check selection against what a target and a host can actually do.
 
 Nothing in qrcheck may decide *while running* that a check cannot run: a check that turned out to be
-impossible half-way through a case would produce a failure that describes the host rather than the
+impossible half-way through a case would produce a failure describing the host rather than the
 target, and a check that was quietly dropped would let a run look complete when it covered less.
 This module makes that decision once, before execution, from the two facts the runner already holds:
 the capabilities the adapter declares, intersected with each
 :class:`~qrcheck.registry.check.CheckContract`'s own ``requires`` set, and the availability of the
 optional runtime dependencies the host provides, keyed by the
-:data:`~qrcheck.registry.check.DEPENDENCY_TOKENS` tokens a contract declares in its
-``dependencies``.  Its output is a :class:`Resolution`: the checks that will run and the checks that
-will not, each skip carrying the reason and the exact requirements it lacks.
+:data:`~qrcheck.registry.check.DEPENDENCY_TOKENS` tokens a contract declares. Its output is a
+:class:`Resolution`: the checks that will run and the checks that will not, each skip carrying the
+reason and the exact requirements it lacks.
 
-Every shortfall becomes a :class:`SkipOutcome`, and the runner turns those into ``skipped``
-:class:`~qrcheck.report.model.CaseResult` records through :func:`skip_case_results`; nothing here
-raises because a target cannot do something, and nothing here decides an exit code.  Exactly two
-reasons exist, and this module produces no other.
-:attr:`~qrcheck.report.model.Reason.UNSUPPORTED_CAPABILITY` -- the target did not declare a
-capability the check requires: the configuration is valid and this target simply cannot serve this
-check, which is why it is a skip rather than the exit-code-2 configuration error an unknown
-capability *name* is (the configuration schema rejects that far earlier, where it is wrong in
-itself).  :attr:`~qrcheck.report.model.Reason.MISSING_DEPENDENCY` -- the check needs an optional
-runtime dependency the host does not provide (the SVG rasterizer), so its assertion could not be
-made at all; the platform file-descriptor directory is deliberately not one of these, because that
-check reports the handle half per case as ``unsupported_platform`` while its temporary-file half
-still asserts (AAP §0.8.1), which a whole-check skip here would drop.  A capability shortfall
-outranks a missing dependency: a check whose target cannot even produce the artefact would not
-become runnable by installing the missing tool, so one skip per check is the honest description and
-the capability reason is the true one.
+A shortfall is never an exception. Every shortfall becomes a :class:`SkipOutcome`, which the runner
+turns into ``skipped`` results through :func:`skip_case_results`; nothing here raises because a
+target cannot do something, and nothing here decides an exit code. Exactly two reasons exist:
+:attr:`~qrcheck.report.model.Reason.UNSUPPORTED_CAPABILITY`, where the target did not declare a
+capability the check requires and the configuration is valid, so this target simply cannot serve
+this check (an unknown capability *name* is the exit-code-2 configuration error instead, rejected
+far earlier by the schema); and :attr:`~qrcheck.report.model.Reason.MISSING_DEPENDENCY`, where the
+check needs an optional runtime dependency the host does not provide, such as the SVG rasterizer.
+The platform file-descriptor directory is not one of these: that check reports the handle half per
+case as ``unsupported_platform`` while its temporary-file half still asserts (AAP §0.8.1), which a
+whole-check skip would drop. A capability shortfall outranks a missing dependency, so a check short
+of both is skipped once with the capability reason.
 
 A skip is a real outcome, never a flavoured pass: it is counted in its own integer of
-:class:`~qrcheck.report.model.Counts` and can never produce a passing exit code.  The reference
-target declares all thirteen capabilities, so a conforming run reaches zero skips, which is what
-keeps this module from being a hiding place.
-:func:`qrcheck.targets.base.require_capabilities` refuses an unsupported request before any I/O and
-stays, as the adapter's own guard for a request that reaches it by any other route; this module is
-the pre-execution path that turns the same shortfall into a result a report can show, so the two
-mechanisms answer different questions and neither may be removed in favour of the other.
-
-Determinism: both tuples of a :class:`Resolution` are ordered by check identifier ascending, the
-``missing`` tuple of a skip is sorted and de-duplicated, and no input is mutated, so two resolutions
-of the same selection describe it identically.  Nothing here reads the clock, the environment, the
-filesystem, the network or a random source.
-
-Layering: the only runtime imports are :mod:`qrcheck.registry.check` -- which owns check identity,
-the dependency vocabulary and the capability type -- and :mod:`qrcheck.report.model`, which owns the
-status and reason words.  Neither the check modules, nor an adapter implementation, nor the decode
-layer is imported here: requirements travel on the contract and availability arrives as data, so
-this module has nothing to keep in step when a fourth adapter kind or a fifth check family appears.
+:class:`~qrcheck.report.model.Counts` and can never produce a passing exit code, and since the
+reference target declares all thirteen capabilities a conforming run reaches zero skips.
+:func:`qrcheck.targets.base.require_capabilities` stays as the adapter's own guard for a request
+that reaches it by any other route, so the two mechanisms answer different questions. Both tuples of
+a :class:`Resolution` are ordered by check identifier ascending, a skip's ``missing`` tuple is
+sorted and de-duplicated, and no input is mutated, so two resolutions of one selection describe it
+identically and nothing here reads the clock, the environment, the filesystem, the network or a
+random source. The only runtime imports are :mod:`qrcheck.registry.check` and
+:mod:`qrcheck.report.model`: requirements travel on the contract and availability arrives as data,
+so a fourth adapter kind needs no change here.
 """
 
 from __future__ import annotations
@@ -55,11 +43,11 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Final, Protocol, TypeAlias
 
-# ``Capability`` comes from the registry module's own import of the adapter port's
-# enum, not from ``qrcheck.targets.base`` directly: this module's runtime dependencies
-# are the registry (which owns check identity, the dependency vocabulary and the
-# capability type its contracts already carry) and the result model, so it never grows
-# a second edge into the adapter layer to reach a type it only annotates.
+# ``Capability`` comes from the registry module's own import of the adapter port's enum, not from
+# ``qrcheck.targets.base`` directly: this module's runtime dependencies are the registry (which
+# owns check identity, the dependency vocabulary and the capability type its contracts already
+# carry) and the result model, so it never grows a second edge into the adapter layer to reach a
+# type it only annotates.
 from qrcheck.registry.check import DEPENDENCY_TOKENS, Capability, CheckContract
 from qrcheck.report.model import CaseResult, Reason, Status
 
@@ -75,19 +63,18 @@ __all__ = [
 
 # The case identifier a pre-execution skip result is filed under.
 #
-# One string, defined once, because three artefacts key on it: ``summary.json``
-# carries it as ``case_id``, ``junit.xml`` renders it inside
-# ``name="<CHECK-ID>[<case_id>]"`` and the runner accumulates one such result per
-# unrunnable check.  It is deliberately distinct from the runner's own
-# ``synthetic:target`` case identifier, which describes a *different* condition -- a
-# target that was reachable when the run started and then vanished -- so a reader can
-# tell "this target never promised this" from "this target broke".
+# One string, defined once, because three artefacts key on it: ``summary.json`` carries it as
+# ``case_id``, ``junit.xml`` renders it inside ``name="<CHECK-ID>[<case_id>]"`` and the runner
+# accumulates one such result per unrunnable check.  It is deliberately distinct from the runner's
+# own ``synthetic:target`` case identifier, which describes a *different* condition -- a target
+# that was reachable when the run started and then vanished -- so a reader can tell "this target
+# never promised this" from "this target broke".
 CAPABILITY_CASE_ID: Final[str] = "synthetic:capability"
 
-# The only two reasons a resolution may skip a check with.  Anything else -- an
-# unsupported platform, a decoder disagreement, a target rejection -- describes
-# something that happens *to a case while it runs*, and a resolution that claimed one
-# would be inventing an observation it never made.
+# The only two reasons a resolution may skip a check with.  Anything else -- an unsupported
+# platform, a decoder disagreement, a target rejection -- describes something that happens *to a
+# case while it runs*, and a resolution that claimed one would be inventing an observation it
+# never made.
 _SKIP_REASONS: Final[frozenset[Reason]] = frozenset(
     {Reason.UNSUPPORTED_CAPABILITY, Reason.MISSING_DEPENDENCY}
 )
@@ -96,10 +83,10 @@ _SKIP_REASONS: Final[frozenset[Reason]] = frozenset(
 class _DeclaresCapabilities(Protocol):  # pragma: no cover - declaration, never executed
     """The one attribute resolution reads from an adapter.
 
-    Declared so the accepted input can be annotated precisely without importing the
-    adapter port: this module needs to know that *something* publishes a
-    ``capabilities`` collection and nothing else about it, so an adapter, a resolved
-    target record or a test double all satisfy this structurally.
+    Declared so the accepted input can be annotated precisely without importing the adapter port:
+    this module needs to know that *something* publishes a ``capabilities`` collection and nothing
+    else about it, so an adapter, a resolved target record or a test double all satisfy this
+    structurally.
     """
 
     @property
@@ -124,17 +111,17 @@ class _AvailabilityQuery(Protocol):  # pragma: no cover - declaration, never exe
         ...
 
 
-# What the ``capabilities`` argument may be: a collection of members or their names
-# (what the configuration resolves to, and what a test passes), or any object that
-# declares a ``capabilities`` attribute (an adapter -- what the runner passes).  A
-# member of :class:`Capability` is itself a string, so a bare name is read as one
-# capability rather than as an iterable of characters.
+# What the ``capabilities`` argument may be: a collection of members or their names (what the
+# configuration resolves to, and what a test passes), or any object that declares a
+# ``capabilities`` attribute (an adapter -- what the runner passes).  A member of
+# :class:`Capability` is itself a string, so a bare name is read as one capability rather than as
+# an iterable of characters.
 CapabilitySource: TypeAlias = Iterable[Capability | str] | _DeclaresCapabilities | None
 
 # What the ``availability`` argument may be: a mapping keyed by the
-# :data:`~qrcheck.registry.check.DEPENDENCY_TOKENS` values (what the runner builds
-# from its probes), an object that exposes ``as_mapping()`` or ``available(token)``,
-# or ``None`` for "nothing beyond the mandatory dependencies is available".
+# :data:`~qrcheck.registry.check.DEPENDENCY_TOKENS` values (what the runner builds from its
+# probes), an object that exposes ``as_mapping()`` or ``available(token)``, or ``None`` for
+# "nothing beyond the mandatory dependencies is available".
 AvailabilitySource: TypeAlias = (
     Mapping[str, bool] | _AvailabilityProbe | _AvailabilityQuery | None
 )
@@ -153,23 +140,15 @@ _AVAILABILITY_FORMS: Final[str] = (
 class SkipOutcome:
     """One check that will not execute, why, and which requirements it lacks.
 
-    Three fields, each a public surface that reaches an artefact: ``check_id`` names
-    the check, ``reason`` is the machine-readable cause ``summary.json`` and the JUnit
-    ``<skipped message="..."/>`` carry, and ``missing`` is the list of absent
-    requirements -- capability names for an ``unsupported_capability`` skip, dependency
-    tokens for a ``missing_dependency`` one -- so a reader learns what to add rather
-    than only that something was skipped.
-
-    Construction normalises and validates rather than trusting the caller: ``missing``
-    is sorted and de-duplicated (two resolutions of one selection then describe it
-    identically), ``reason`` is narrowed to a :class:`~qrcheck.report.model.Reason`
-    member, and a skip that names no cause is refused.  An unexplained skip would be
-    exactly the quiet gap the zero-skip reference gate exists to catch, and it would
-    also be the shape a weakened check takes when someone tries to silence it.
-
-    Raises:
-        ValueError: ``check_id`` is empty, ``reason`` is not one of the two skip
-            reasons, or ``missing`` is empty or not a collection of names.
+    Three fields, each a public surface that reaches an artefact: ``check_id`` names the check,
+    ``reason`` is the machine-readable cause ``summary.json`` and the JUnit ``<skipped
+    message="..."/>`` carry, and ``missing`` lists the absent requirements -- capability names for
+    an ``unsupported_capability`` skip, dependency tokens for a ``missing_dependency`` one -- so a
+    reader learns what to add rather than only that something was skipped. Construction normalises
+    and validates: ``missing`` is sorted and de-duplicated, ``reason`` is narrowed to a
+    :class:`~qrcheck.report.model.Reason` member, and a skip that names no cause raises
+    :exc:`ValueError`, because an unexplained skip is exactly the quiet gap the zero-skip reference
+    gate exists to catch.
     """
 
     check_id: str
@@ -221,21 +200,15 @@ class SkipOutcome:
 class Resolution:
     """The selection split into what will run and what will not, ordered by check id.
 
-    Two tuples, and a check is in exactly one of them: a check is runnable or skipped,
-    never both and never twice, which :meth:`__post_init__` enforces because a double
-    entry would make the runner execute a check once while a report counted it twice.
-    Both tuples are sorted by check identifier ascending on construction, so import
-    order, set iteration and the order the caller happened to pass cannot reach
-    ``summary.json``, ``junit.xml`` or the HTML report through this object.
-
-    The instance is frozen and the two fields are tuples rather than lists so a caller
-    cannot append to a resolution it has been handed -- the runner decides execution
-    from this record, and a mutated copy would let the executed set and the reported
-    set disagree.
-
-    Raises:
-        ValueError: One check identifier appears more than once across ``runnable`` and
-            ``skipped``.
+    Two tuples, and a check is in exactly one of them: runnable or skipped, never both and never
+    twice, which :meth:`__post_init__` enforces because a double entry would make the runner execute
+    a check once while a report counted it twice. Both tuples are sorted by check identifier
+    ascending on construction, so import order, set iteration and the order the caller happened to
+    pass cannot reach ``summary.json``, ``junit.xml`` or the HTML report through this object. The
+    instance is frozen and both fields are tuples, so a caller cannot append to a resolution it has
+    been handed: the runner decides execution from this record, and a mutated copy would let the
+    executed set and the reported set disagree. A check identifier appearing twice raises
+    :exc:`ValueError`.
     """
 
     runnable: tuple[CheckContract, ...] = ()
@@ -265,9 +238,8 @@ class Resolution:
     def is_complete(self) -> bool:
         """Return whether every selected check will run, i.e. nothing was skipped.
 
-        The clean-run gate asks exactly this of a conforming target: a run whose
-        resolution is complete cannot report a skip, so a check cannot be made to pass
-        by making it skip.
+        The clean-run gate asks exactly this of a conforming target: a run whose resolution is
+        complete cannot report a skip, so a check cannot be made to pass by making it skip.
         """
         return not self.skipped
 
@@ -285,26 +257,14 @@ class Resolution:
 def _declared_capabilities(source: CapabilitySource) -> frozenset[Capability]:
     """Return the capability set `source` describes, as members.
 
-    Three accepted forms, because the same fact arrives from three places: the
-    configuration and the tests pass a collection of members or their names, the runner
-    passes the adapter itself (which publishes ``capabilities``), and ``None`` stands
-    for a declaration nobody made.  ``None`` resolves to the empty set -- the safe
-    direction -- so a forgotten declaration surfaces as a skip the zero-skip reference
-    gate fails loudly, rather than as a check that ran and counted as a pass.
-
-    Args:
-        source: The collection, the declaring object, or ``None``.
-
-    Returns:
-        The declared capabilities as members, empty when nothing was declared.
-
-    Raises:
-        TypeError: `source` is a string, or is neither a collection nor an object
-            declaring ``capabilities``.  This is a defect in the caller, not a target
-            condition, so it is named rather than turned into a skip.
-        ValueError: A declared name is not a :class:`Capability` member.  The
-            configuration schema rejects an unknown member long before this point, so
-            reaching it here means a declaration was built by hand.
+    Three accepted forms, because the same fact arrives from three places: a collection of members
+    or their names (the configuration and the tests), an object publishing ``capabilities`` (the
+    adapter the runner passes), and ``None`` for a declaration nobody made, which resolves to the
+    empty set -- the safe direction, so a forgotten declaration surfaces as a skip the zero-skip
+    reference gate fails loudly rather than as a check that ran and counted as a pass. Raises
+    :exc:`TypeError` when `source` is a string or neither a collection nor a declaring object, and
+    :exc:`ValueError` when a declared name is not a :class:`Capability` member, which means a
+    declaration was built by hand.
     """
     declared = getattr(source, "capabilities", source)
     if declared is None:
@@ -327,24 +287,13 @@ def _declared_capabilities(source: CapabilitySource) -> frozenset[Capability]:
 def _available_dependencies(source: AvailabilitySource) -> Mapping[str, bool]:
     """Return the dependency availability `source` describes, as a mapping.
 
-    Three accepted forms plus ``None``: a mapping keyed by the
-    :data:`~qrcheck.registry.check.DEPENDENCY_TOKENS` values (what the runner builds
-    from its probes), an object exposing ``as_mapping()``, an object exposing
-    ``available(dependency)`` (queried once per token), and ``None`` for "nothing
-    available".  An **absent token means unavailable** -- this module never assumes a
-    dependency nobody probed, so a forgotten probe becomes a skip the zero-skip
-    reference gate catches instead of a check that ran against something that was never
-    there.
-
-    Args:
-        source: The mapping, the querying object, or ``None``.
-
-    Returns:
-        A mapping that answers ``get(token, False)`` for every token.
-
-    Raises:
-        TypeError: `source` is none of the accepted forms, or its ``as_mapping()``
-            returned something other than a mapping.
+    A mapping keyed by the :data:`~qrcheck.registry.check.DEPENDENCY_TOKENS` values (what the runner
+    builds from its probes), an object exposing ``as_mapping()``, an object exposing
+    ``available(dependency)`` queried once per token, or ``None`` for "nothing available". An
+    **absent token means unavailable** -- this module never assumes a dependency nobody probed, so a
+    forgotten probe becomes a skip the zero-skip reference gate catches instead of a check that ran
+    against something that was never there. Raises :exc:`TypeError` when `source` is none of the
+    accepted forms or its ``as_mapping()`` returned something other than a mapping.
     """
     if source is None:
         return {}
@@ -375,23 +324,12 @@ def unmet_capabilities(
 ) -> tuple[Capability, ...]:
     """Return the capabilities `contract` requires that `capabilities` does not declare.
 
-    Requirement resolution in one direction: what a check needs, read from the
-    contract's own ``requires`` set, against what the target positively declared.
-    Nothing is required that the contract did not ask for, so the table of requirements
-    exists only in the nine check family modules and cannot drift from them.
-
-    Args:
-        contract: The check whose requirements are compared.
-        capabilities: The declared capabilities -- a collection of members or their
-            names, an object declaring ``capabilities``, or ``None`` for none declared.
-
-    Returns:
-        The unmet members, sorted by value, empty when the declaration satisfies the
-        contract.
-
-    Raises:
-        TypeError: `capabilities` is not one of the accepted forms.
-        ValueError: A declared name is not a :class:`Capability` member.
+    Requirement resolution in one direction: what a check needs, read from the contract's own
+    ``requires`` set, against what the target positively declared. Nothing is required that the
+    contract did not ask for, so the table of requirements exists only in the nine check family
+    modules and cannot drift. Returns the unmet members, sorted by value, empty when the declaration
+    satisfies the contract; raises :exc:`TypeError` when `capabilities` is not one of the accepted
+    forms and :exc:`ValueError` when a declared name is not a :class:`Capability` member.
     """
     declared = _declared_capabilities(capabilities)
     return tuple(
@@ -405,20 +343,10 @@ def unmet_dependencies(
 ) -> tuple[str, ...]:
     """Return the dependency tokens `contract` declares that `availability` lacks.
 
-    A token the mapping does not mention is unavailable: the default direction is the
-    safe one, so an unfilled probe skips the check instead of letting it run without the
-    tool it asserts with.
-
-    Args:
-        contract: The check whose ``dependencies`` are looked up.
-        availability: The availability mapping, a querying object, or ``None`` for
-            nothing available.
-
-    Returns:
-        The absent tokens, sorted, empty when every declared dependency is available.
-
-    Raises:
-        TypeError: `availability` is not one of the accepted forms.
+    A token the mapping does not mention is unavailable: the default direction is the safe one, so
+    an unfilled probe skips the check instead of letting it run without the tool it asserts with.
+    Returns the absent tokens, sorted, empty when every declared dependency is available, and raises
+    :exc:`TypeError` when `availability` is not one of the accepted forms.
     """
     resolved = _available_dependencies(availability)
     return tuple(
@@ -433,50 +361,27 @@ def resolve(
 ) -> Resolution:
     """Split `selected` into the checks that can run and the checks that cannot.
 
-    The single pre-execution decision: every selected check is compared against the
-    declared capabilities and the resolved dependency availability, and lands in exactly
-    one tuple of the returned :class:`Resolution`.  A shortfall never raises -- it
-    becomes a :class:`SkipOutcome` with one of two reasons, and no other:
+    The single pre-execution decision: every selected check is compared against the declared
+    capabilities and the resolved dependency availability, and lands in exactly one tuple of the
+    returned :class:`Resolution`. A shortfall never raises -- it becomes a :class:`SkipOutcome` with
+    ``unsupported_capability`` when the target does not declare something the check requires, or
+    ``missing_dependency`` when a declared optional runtime dependency is unavailable, the
+    capability reason winning when a check is short of both.
 
-    * ``unsupported_capability`` when the target does not declare something the check
-      requires;
-    * ``missing_dependency`` when a declared optional runtime dependency is unavailable.
-
-    A capability shortfall outranks a missing dependency, so a check that is short of
-    both is skipped once, with the capability reason.
-
-    Accepted forms, so one function serves the runner, a test and a CLI probe:
-
-    * ``capabilities`` -- a collection of :class:`Capability` members or their names, an
-      object declaring ``capabilities`` (an adapter, which is what the runner passes),
-      or ``None`` for none declared;
-    * ``availability`` -- a mapping keyed by the
-      :data:`~qrcheck.registry.check.DEPENDENCY_TOKENS` values, an object exposing
-      ``as_mapping()`` or ``available(dependency)``, or ``None`` for nothing available.
-      :class:`qrcheck.decode.base.DecoderAvailability` exposes neither method, so the
-      runner translates its probes into
-      ``{DEPENDENCY_PRIMARY_DECODER: ..., DEPENDENCY_SECONDARY_DECODER: ...}`` before
-      calling here.
-
-    Nothing is mutated, no adapter is touched, no probe is run and no result is built:
-    the outcome is a pure function of the three arguments, which is what makes the
-    executed set knowable before the first case runs.
-
-    Args:
-        selected: The contracts to resolve, in any order and from any iterable, or a
-            mapping of identifier to contract (such as the registry).  Duplicates are
-            collapsed, keeping the first occurrence.
-        capabilities: The target's declared capabilities, in any accepted form.
-        availability: The dependency availability, in any accepted form.
-
-    Returns:
-        The resolution, both tuples sorted by check identifier.
-
-    Raises:
-        TypeError: `selected` yields something that is not a
-            :class:`~qrcheck.registry.check.CheckContract`, or `capabilities` or
-            `availability` is not in an accepted form.  Both are defects in the caller.
-        ValueError: A declared capability name is not a :class:`Capability` member.
+    ``selected`` takes any iterable of contracts or a mapping of identifier to contract, duplicates
+    collapsing to the first occurrence; ``capabilities`` a collection of :class:`Capability` members
+    or their names, an object declaring ``capabilities`` (an adapter, which is what the runner
+    passes), or ``None`` for none declared; ``availability`` a mapping keyed by the
+    :data:`~qrcheck.registry.check.DEPENDENCY_TOKENS` values, an object exposing ``as_mapping()`` or
+    ``available(dependency)``, or ``None`` for nothing available --
+    :class:`qrcheck.decode.base.DecoderAvailability` exposes neither method, so the runner
+    translates its probes into a mapping before calling here. Nothing is mutated, no adapter is
+    touched, no probe is run and no result is built, so the executed set is knowable before the
+    first case runs; the resolution returned has both tuples sorted by check identifier. Raises
+    :exc:`TypeError` when an element of `selected` is not a
+    :class:`~qrcheck.registry.check.CheckContract` or `capabilities`/`availability` is not in an
+    accepted form, and :exc:`ValueError` when a declared capability name is not a
+    :class:`Capability` member.
     """
     declared = _declared_capabilities(capabilities)
     available = _available_dependencies(availability)
@@ -524,34 +429,20 @@ def resolve(
 def skip_case_results(resolution: Resolution, seed: int) -> tuple[CaseResult, ...]:
     """Return the ``skipped`` results a run accumulates for its unrunnable checks.
 
-    One :class:`~qrcheck.report.model.CaseResult` per :class:`SkipOutcome`, in check
-    identifier order, and nothing else: the runner adds them to the run's results beside
-    the executed cases so that a selection covering a check the target cannot serve is
-    described rather than silently shortened.  Each carries
-    :attr:`~qrcheck.report.model.Status.SKIPPED`, one of the two skip reasons,
-    ``duration_ms`` of ``0.0`` (nothing ran), no evidence directory and the run's seed.
-
-    There is no evidence to persist: no request was built and no symbol exists, so
-    :class:`qrcheck.report.evidence.EvidenceStore` is deliberately not called and no
-    directory is invented for a case that never produced an artefact.  The
-    machine-readable cause is the record itself -- ``status``, ``reason`` and
-    ``expected["missing"]`` -- which reaches ``summary.json``, the JUnit
-    ``<skipped message="..."/>`` element and the skipped section of the HTML report.
-    ``request`` and ``decoded`` are empty mappings rather than nulls because the record
-    declares both as mappings, so a skip serialises as an empty object that every
-    consumer can read uniformly instead of a null each of them would special-case.
-
-    A skipped result is never a pass: this function sets no passing status, and the
-    four separate tallies of :class:`qrcheck.report.model.Counts` keep it out of
-    ``passed`` so a run that skipped a check cannot look green because of it.
-
-    Args:
-        resolution: The resolution whose skips become results.
-        seed: The run's seed, recorded verbatim so the report says which run this skip
-            belongs to.
-
-    Returns:
-        The skipped results, sorted by check identifier, empty when nothing was skipped.
+    One :class:`~qrcheck.report.model.CaseResult` per :class:`SkipOutcome`, in check identifier
+    order, and nothing else: the runner adds them beside the executed cases so that a selection
+    covering a check the target cannot serve is described rather than silently shortened. Each
+    carries :attr:`~qrcheck.report.model.Status.SKIPPED`, one of the two skip reasons,
+    ``duration_ms`` of ``0.0``, no evidence directory and the run's seed -- ``seed`` is recorded
+    verbatim so the report says which run the skip belongs to. There is no evidence to persist,
+    since no request was built and no symbol exists, so
+    :class:`qrcheck.report.evidence.EvidenceStore` is deliberately not called; the machine-readable
+    cause is the record itself (``status``, ``reason`` and ``expected["missing"]``), which reaches
+    ``summary.json``, the JUnit ``<skipped message="..."/>`` element and the skipped section of the
+    HTML report. ``request`` and ``decoded`` are empty mappings rather than nulls because the record
+    declares both as mappings, so a skip serialises as an empty object every consumer reads
+    uniformly. A skipped result is never a pass: the four separate tallies of
+    :class:`qrcheck.report.model.Counts` keep it out of ``passed``.
     """
     return tuple(
         CaseResult(

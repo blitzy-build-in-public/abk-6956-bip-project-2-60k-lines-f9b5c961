@@ -1,32 +1,22 @@
 """``qrcheck loc``: report per-file line counts and gate on the configured ceiling.
 
-The measurement itself belongs to :func:`qrcheck.loc.count_lines` and is
-deliberately not restated here: this module does not walk a directory tree, read a
-source file, count a line or carry the exclusion list, so the total it prints, the
-``loc_count`` ``summary.json`` records and the number the CI gate compares can never
-disagree about the same tree.
+The measurement belongs to :func:`qrcheck.loc.count_lines` and is deliberately not restated here:
+this module walks no tree, reads no source file, counts no line and carries no exclusion list, so
+the total it prints, the ``loc_count`` ``summary.json`` records and the number the CI gate compares
+cannot disagree about the same tree.
 
-The ceiling has one home as well - ``loc_limit`` in the configured ``qrcheck.toml``,
-whose default ``qrcheck/config/models.py`` owns. ``--limit`` only overrides that
-value for one invocation, and no numeric fallback is defined in this module. The
-outcome is the documented exit-code contract:
+The ceiling has one home as well -- ``loc_limit`` in the configured ``qrcheck.toml`` -- and
+``--limit`` only overrides it for one invocation. The outcome is the documented exit-code contract:
 
 * ``0`` - the total is *under* the limit;
-* ``1`` - the total is *at or above* it, which is what makes
-  ``qrcheck loc --limit $((count - 1))`` fail rather than pass;
-* ``2`` - the configuration file cannot be used, the counted path is missing or is
-  not a directory, or the limit is not a positive integer;
-* ``3`` - an I/O error interrupted the read of a path that exists, or the ``report_dir``
-  probe could not create a writable report directory; the diagnostic names the path.
+* ``1`` - the total is *at or above* it, which is what makes ``qrcheck loc --limit $((count -
+  1))`` fail rather than pass;
+* ``2`` - the configuration file cannot be used, the counted path is missing or is not a
+  directory, or the limit is not a positive integer;
+* ``3`` - an I/O error interrupted the read of a path that exists, or the ``report_dir`` probe
+  could not create a writable report directory; the diagnostic names the path.
 
-The counted root is the directory holding the configuration file, so the committed
-``qrcheck.toml`` at the repository root counts the repository itself whichever
-directory the command was launched from; ``--path`` names another tree, and a
-configuration path with no directory part resolves against the working directory the
-command started in. This command writes no file of its own: the only filesystem
-change it can cause is the ``report_dir`` creation and writability probe that
-loading the configuration performs. Standard output carries the table and nothing
-else, which is what keeps the output greppable.
+The counted root is the directory holding the configuration file; ``--path`` names another tree.
 """
 
 from __future__ import annotations
@@ -61,25 +51,12 @@ def loc(
 ) -> int:
     """Print the line table for one root and return the process exit code.
 
-    Args:
-        limit: Ceiling to compare the total against, or ``None`` to use
-            ``loc_limit`` from the configuration file, which is the only
-            declaration of the product's line budget.
-        path: Tree to measure, or ``None`` for the directory holding the
-            configuration file.
-        config_path: Configuration file to read, supplied by the group's
-            ``--config`` option.
-
-    Returns:
-        :data:`qrcheck.cli.exit.EXIT_OK` when the total is under the limit,
-        :data:`qrcheck.cli.exit.EXIT_FAILED` when it is at or above it,
-        :data:`qrcheck.cli.exit.EXIT_CONFIG` for a configuration fault, an unusable
-        path or a non-positive limit, and :data:`qrcheck.cli.exit.EXIT_INTERNAL` when
-        an I/O error interrupts the read.
-
-    Raises:
-        Nothing. Every failure is reported on stderr and returned as an exit code, so
-        a caller propagates one integer instead of handling this module's faults.
+    ``limit`` defaults to ``loc_limit`` from the configuration file, the only declaration of the
+    product's line budget, and ``path`` to the directory holding that file. Returns ``EXIT_OK`` when
+    the total is under the limit, ``EXIT_FAILED`` when it is at or above it, ``EXIT_CONFIG`` for a
+    configuration fault, an unusable path or a non-positive limit, and ``EXIT_INTERNAL`` when an I/O
+    error interrupts the read. Nothing is raised: every failure is reported on stderr and returned
+    as an exit code.
     """
     try:
         config = load_config(config_path)
@@ -171,13 +148,8 @@ def loc_command(ctx: click.Context, limit: int | None, path: str | None) -> int:
 def _config_path(ctx: click.Context | None) -> str:
     """Return the configuration file the group's ``--config`` option selected.
 
-    ``qrcheck.cli.main`` owns that option, and how it hands the value down is its
-    contract rather than this module's: the group may leave the raw string in the
-    context object, keep a mapping or a namespace there, or hold the value only in
-    its own click parameters. All three are read, in that order, so registering this
-    command under the group needs no adaptation of either module. When none of them
-    carries a value - including a call with no click context at all - the default
-    configuration file name stands.
+    The click context object, a mapping and a namespace there are read in that order; a call with no
+    click context at all falls back to the default configuration file name.
     """
     if ctx is not None:
         found = _config_value(ctx.obj)

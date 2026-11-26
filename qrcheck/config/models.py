@@ -1,32 +1,18 @@
 """Configuration vocabulary, threshold defaults and immutable records for qrcheck.
 
-This module is the deepest foundation of the package: ``qrcheck.targets``,
-``qrcheck.corpus``, ``qrcheck.checks``, ``qrcheck.registry``, ``qrcheck.cli``
-and ``qrcheck.runner`` all read the records defined here, while this module
-imports nothing from ``qrcheck`` at all -- not even inside a type-checking
-guard -- so the dependency direction can never close into a cycle.  That is
-equally why a capability travels here as its member *name* rather than as the
-adapter layer's ``Capability`` enumeration: ``qrcheck.targets`` may import
-``qrcheck.config`` and the reverse would close the cycle.  The adapter converts
-with ``Capability(name)``, and because that enumeration is string-valued the
-converted set compares and hashes equal to the ``frozenset[str]`` kept here, so
-capability intersection and containment work across the seam unchanged.
+The deepest foundation of the package: ``targets``, ``corpus``, ``checks``, ``registry``, ``cli``
+and ``runner`` all read the records defined here, while this module imports nothing from ``qrcheck``
+at all -- not even inside a type-checking guard -- so the dependency direction can never close into
+a cycle. That is equally why a capability travels here as its member *name* rather than as the
+adapter layer's ``Capability`` enumeration: ``targets`` may import ``config`` and the reverse would
+close the cycle, so the adapter converts with ``Capability(name)``, and because that enumeration is
+string-valued the converted set compares and hashes equal to the ``frozenset[str]`` kept here.
 
-Every configurable threshold has one fallback, declared as a ``DEFAULT_*``
-constant below.  ``qrcheck.config.schema`` references these names instead of
-restating the numbers, and no check module carries a numeric threshold
-literal; the effective value a run uses is the committed ``qrcheck.toml``'s, so
-changing a limit means changing that file's entry plus the acceptance criterion
-that reads it.
-
-The dataclasses are plain frozen records: they validate nothing, read neither
-TOML nor the filesystem, and perform no I/O.  Validation is the gate in
-``qrcheck.config.schema.validate``, invoked by ``qrcheck.config.load`` before
-any record is built -- the same split as ``GenerateRequest`` in
-``qrcheck.targets.base``, which validates nothing itself because
-``build_request()`` is its gate.  Nothing here raises a domain error; the only
-failure a caller can provoke is the ordinary
-:class:`dataclasses.FrozenInstanceError` from attempting to mutate a record.
+Every configurable threshold has one fallback, declared as a ``DEFAULT_*`` constant below, and
+``schema`` references these names instead of restating the numbers, so no check module carries a
+numeric threshold literal. The dataclasses are plain frozen records that validate nothing, read
+neither TOML nor the filesystem and raise no domain error -- validation is the gate in
+``schema.validate``, invoked by ``load`` before any record is built.
 """
 
 from __future__ import annotations
@@ -205,11 +191,9 @@ def _empty_mapping() -> Mapping[str, str]:
 class RenderConfig:
     """The ``[render]`` table: how SVG output is rasterized for checking.
 
-    Mirrors the ``[render]`` row of the configuration contract.  Constructing
-    it raises nothing and probes no rasterizer: resolving ``auto`` against the
-    discovery order belongs to the renderer discovery that ``doctor`` and
-    RN-SVG perform, and an unknown name is rejected by
-    ``qrcheck.config.schema.validate``.
+    Constructing it raises nothing and probes no rasterizer: resolving ``auto`` against the
+    discovery order belongs to the renderer discovery that ``doctor`` and ``RN-SVG`` perform, and an
+    unknown name is rejected by ``qrcheck.config.schema.validate``.
     """
 
     svg_rasterizer: SVGRasterizer = DEFAULT_SVG_RASTERIZER
@@ -219,10 +203,9 @@ class RenderConfig:
 class PerformanceLimits:
     """The ``[checks.performance]`` table: the latency and throughput floors.
 
-    The field names are the configuration keys and the attributes
-    ``qrcheck.checks.performance`` reads, so each threshold is named once here
-    and read once there.  Constructing it raises nothing; the lower bounds on
-    the sample counts belong to ``qrcheck.config.schema.validate``.
+    The field names are the configuration keys and the attributes ``qrcheck.checks.performance``
+    reads, so each threshold is named once here and read once there. Constructing it raises nothing;
+    the lower bounds on the sample counts belong to ``schema.validate``.
     """
 
     encode_p95_ms: float = DEFAULT_ENCODE_P95_MS
@@ -238,10 +221,9 @@ class PerformanceLimits:
 class DamageLimits:
     """The ``[checks.damage]`` table: every damage threshold in one record.
 
-    The field names are the configuration keys and the attributes
-    ``qrcheck.checks.damage`` reads.  Constructing it raises nothing; the
-    permitted range of every fraction, angle and quality belongs to
-    ``qrcheck.config.schema.validate``.
+    The field names are the configuration keys and the attributes ``qrcheck.checks.damage`` reads.
+    Constructing it raises nothing; the permitted range of every fraction, angle and quality belongs
+    to ``schema.validate``.
     """
 
     occlusion_margin: float = DEFAULT_OCCLUSION_MARGIN
@@ -258,14 +240,11 @@ class DamageLimits:
 class TargetConfig:
     """One ``[targets.<name>]`` table for an adapter with no per-type keys.
 
-    Used directly by the two built-in targets (``reference`` and
-    ``defective``), which declare no configurable input beyond the common keys.
-    ``capabilities`` holds member names drawn from ``CAPABILITY_NAMES`` and
-    ``type`` one of ``ADAPTER_TYPE_NAMES``; both are validated by
-    ``qrcheck.config.schema.validate``, not here.  Keyword-only construction,
-    because a subclass appends required fields after these defaulted ones and
-    because every call site then reads as the table it came from.
-    Constructing it raises nothing.
+    Used directly by the two built-in targets, which declare no configurable input beyond the common
+    keys. ``capabilities`` holds member names drawn from ``CAPABILITY_NAMES`` and ``type`` one of
+    ``ADAPTER_TYPE_NAMES``, both validated by ``schema.validate`` rather than here. Keyword-only
+    construction, because a subclass appends required fields after these defaulted ones and because
+    every call site then reads as the table it came from. Constructing it raises nothing.
     """
 
     name: str
@@ -279,11 +258,10 @@ class TargetConfig:
 class LibraryTarget(TargetConfig):
     """A ``type = "library"`` target: an in-process import-and-call.
 
-    ``callable`` is the ``module:function`` path, named for its configuration
-    key; ``kwargs_map`` maps framework field names to the callable's keyword
-    arguments; ``returns`` says how the returned value carries the artefact.
-    Constructing it raises nothing; a malformed ``callable`` is rejected by
-    ``qrcheck.config.schema.validate``.
+    ``callable`` is the ``module:function`` path, named for its configuration key; ``kwargs_map``
+    maps framework field names to the callable's keyword arguments; ``returns`` says how the
+    returned value carries the artefact. Constructing it raises nothing; a malformed ``callable`` is
+    rejected by ``schema.validate``.
     """
 
     callable: str
@@ -296,11 +274,10 @@ class LibraryTarget(TargetConfig):
 class CLITarget(TargetConfig):
     """A ``type = "cli"`` target: an argv-only subprocess invocation.
 
-    ``command`` is an immutable argv tuple rather than a list, so a resolved
-    configuration cannot be mutated into a different command line.
-    ``payload_arg`` and ``output_arg`` are the argument templates that receive
-    the payload and name the artefact's path.  Constructing it raises nothing;
-    an empty command is rejected by ``qrcheck.config.schema.validate``.
+    ``command`` is an immutable argv tuple rather than a list, so a resolved configuration cannot be
+    mutated into a different command line; ``payload_arg`` and ``output_arg`` are the argument
+    templates that receive the payload and name the artefact's path. Constructing it raises nothing;
+    an empty command is rejected by ``schema.validate``.
     """
 
     command: tuple[str, ...]
@@ -314,16 +291,13 @@ class CLITarget(TargetConfig):
 class HTTPTarget(TargetConfig):
     """A ``type = "http"`` target reached over loopback HTTP.
 
-    ``request_template`` is the parsed TOML table whose string leaves carry
-    placeholders drawn from ``TEMPLATE_FIELDS``; a ``request_template`` written as a
-    JSON-object string is parsed into the same read-only mapping by
-    ``qrcheck.config.load``, so the record has one shape either way.  ``image_field``
-    is the dotted path to the image inside the response, or ``_body`` for the raw
-    body; ``image_encoding`` says how that field carries the image.  The request and
-    response shape of a vendor lives entirely in this record, which is what keeps the
-    HTTP adapter free of hard-coded field names.  Constructing it raises nothing; a
-    non-loopback host and an unknown placeholder are rejected by
-    ``qrcheck.config.schema.validate``.
+    ``request_template`` is the parsed TOML table whose string leaves carry placeholders drawn from
+    ``TEMPLATE_FIELDS``, a ``request_template`` written as a JSON-object string being parsed into
+    the same read-only mapping by ``load``; ``image_field`` is the dotted path to the image inside
+    the response, or ``_body`` for the raw body, and ``image_encoding`` says how that field carries
+    the image. The request and response shape of a vendor lives entirely in this record, which is
+    what keeps the HTTP adapter free of hard-coded field names. Constructing it raises nothing; a
+    non-loopback host and an unknown placeholder are rejected by ``schema.validate``.
     """
 
     url: str
@@ -338,14 +312,12 @@ class HTTPTarget(TargetConfig):
 class Config:
     """The fully resolved configuration: every default already applied.
 
-    ``path`` is the resolved configuration file path and the base against which
-    every relative path in that file was resolved; ``report_dir`` and
-    ``corpus_path`` are absolute.  ``targets`` maps each declared target name to
-    its record in name order, and ``default_adapter`` names one of those keys.
-    The three limit tables default to their ``DEFAULT_*`` values, so a ``Config``
-    is constructible without a ``qrcheck.toml`` on disk.  Constructing it raises
-    nothing and touches no file; ``report_dir`` is created and probed for
-    writability by ``qrcheck.config.load``.
+    ``path`` is the resolved configuration file path and the base against which every relative path
+    in that file was resolved, so ``report_dir`` and ``corpus_path`` are absolute. ``targets`` maps
+    each declared target name to its record in name order, and ``default_adapter`` names one of
+    those keys. The three limit tables default to their ``DEFAULT_*`` values, so a ``Config`` is
+    constructible without a ``qrcheck.toml`` on disk. Constructing it raises nothing and touches no
+    file; ``report_dir`` is created and probed for writability by ``qrcheck.config.load``.
     """
 
     path: Path

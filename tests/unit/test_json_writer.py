@@ -1,27 +1,21 @@
 """The ``summary.json`` schema, its ordering and its exact volatile-field inventory.
 
 AAP §0.6.1 gate 6 names this module as the gate holding ``summary.json``, the artefact a CI
-consumer, a trend line and a triage script all parse. Every document is written by
-:func:`qrcheck.report.json_report.write_summary` or, for the canonical text form, by
-:func:`~qrcheck.report.json_report.write_canonical_json`, from a
-:class:`~qrcheck.report.model.RunResult` built by the shared factories, so nothing is
-transcribed from a run's output (AAP §0.3.4, §0.5.3, §0.5.4, §0.5.5). Pinned: the nine
-top-level keys by **set equality**; ``counts`` as four separate integers, since folding
-``skipped`` into ``passed`` would satisfy every other assertion here while breaking the
-exit-code rule; ten per-result fields with a passing case's ``reason`` ``null``; ``results[]``
-ordered by ``(check_id, case_id)`` even though the fixture run is deliberately scrambled, so
-both writers present one order by construction; ``evidence_dir`` ``null`` for a pass and a
-relative posix path otherwise, because an absolute path names the clone a run happened in; the
-canonical text form with keys sorted at every depth, two-space indentation, literal UTF-8, LF
-endings and exactly one trailing newline, a value ``json`` cannot carry raising instead of being
-coerced; the volatile inventory of exactly ``started_at``, ``finished_at`` and each
-``results[].duration_ms``, read from :func:`tests.conftest.mask_volatile`'s behaviour rather
-than assumed; and ``run_id`` as a content hash stable for one input and different when the
-selection, the EC level, the seed or the corpus changes.
+consumer, a trend line and a triage script all parse. Every document asserted here is written by
+:func:`qrcheck.report.json_report.write_summary` from a :class:`~qrcheck.report.model.RunResult`
+built by the shared factories, so nothing is transcribed from a run's output and no second
+formatter can drift in (AAP §0.3.4, §0.5.3-§0.5.5).
 
-Every artefact is written under the per-test report root, never the repository's ``reports/``,
-and nothing here reads a clock, the network, the environment or a directory this module did not
-create.
+Pinned: the nine top-level keys by **set equality**; ``counts`` as four separate integers,
+because a tally folding ``skipped`` into ``passed`` would satisfy every other assertion while
+breaking the exit-code rule; the ten per-result fields and their vocabulary, with a pass's
+``reason`` ``null``; ``results[]`` ordered by ``(check_id, case_id)`` though the fixture is
+deliberately scrambled; ``evidence_dir`` ``null`` for a pass and a relative posix path otherwise,
+since an absolute one names the clone; the canonical text form (sorted keys at every depth,
+two-space indent, UTF-8, LF, one trailing newline, unserialisable values raising); the volatile
+inventory of exactly ``started_at``, ``finished_at`` and each ``results[].duration_ms``; and
+``run_id`` as a content hash stable for one input and different for any changed selection, EC
+level, seed or corpus.
 """
 
 import dataclasses
@@ -39,8 +33,8 @@ from qrcheck.report.json_report import dumps_canonical, write_canonical_json, wr
 from qrcheck.report.model import CaseResult, Counts, Reason, RunResult, Status
 from qrcheck.runner import _run_identifier
 
-# The exact schema, stated once. AAP §0.3.4 fixes both key sets as a stable public surface, so
-# each is compared by set equality against the payload a real write produced.
+# The exact schema, stated once. AAP §0.3.4 fixes both key sets as a stable public surface, so each
+# is compared by set equality against the payload a real write produced.
 _TOP_LEVEL_FIELDS: Final[frozenset[str]] = frozenset(
     {
         "adapter",
@@ -69,12 +63,10 @@ _RESULT_FIELDS: Final[frozenset[str]] = frozenset(
     }
 )
 
-# The four tallies, kept separate. Read from nothing but this declaration, so a fifth bucket
-# cannot appear without this assertion changing.
+# The four tallies, kept separate, read from nothing but this declaration.
 _COUNT_FIELDS: Final[frozenset[str]] = frozenset({"error", "failed", "passed", "skipped"})
 
-# The complete volatile inventory of AAP §0.5.4: two run timestamps and each result's
-# duration. Nothing else may join it, and nothing may leave it.
+# The complete volatile inventory of AAP §0.5.4: two run timestamps and each result's duration.
 _VOLATILE_RUN_FIELDS: Final[frozenset[str]] = frozenset({"started_at", "finished_at"})
 _VOLATILE_RESULT_FIELDS: Final[frozenset[str]] = frozenset({"duration_ms"})
 
@@ -86,26 +78,25 @@ _REASON_VALUES: Final[frozenset[str]] = frozenset(member.value for member in Rea
 # The artefact this module writes into the per-test report root.
 _SUMMARY_NAME: Final[str] = "summary.json"
 
-# Payload text carried in the failed case's request mapping. Non-ASCII on purpose: with
-# ``ensure_ascii=False`` it appears as itself in the file, and a writer that escaped it would
-# turn ``emoji``, ``rtl`` and ``utf8-multibyte`` corpus payloads into unreadable evidence.
+# Payload text carried in the failed case's request mapping, non-ASCII on purpose: with
+# ``ensure_ascii=False`` it appears as itself, and a writer that escaped it would turn the
+# ``emoji``, ``rtl`` and ``utf8-multibyte`` payloads into unreadable evidence.
 _NON_ASCII_PAYLOAD: Final[str] = "héllo 🎉 مرحبا"
 
-# The fixture run's two timestamp pairs. Fixed constants, never a clock reading, so two runs
-# built by these helpers are comparable and the only difference between them is deliberate.
+# The fixture run's two timestamp pairs: fixed constants, never a clock reading, so two runs built
+# by these helpers differ only where the test wants them to.
 _BASE_STARTED_AT: Final[str] = "2024-01-01T00:00:00+00:00"
 _BASE_FINISHED_AT: Final[str] = "2024-01-01T00:00:01+00:00"
 _LATER_STARTED_AT: Final[str] = "2025-06-30T12:34:56+00:00"
 _LATER_FINISHED_AT: Final[str] = "2025-06-30T12:35:07+00:00"
 
-# One duration per case, in the role order :func:`_mixed_results` declares. The two tuples hold
-# different values in the same positions, so a masking test differs in this field alone.
+# One duration per case, in the role order :func:`_mixed_results` declares; the two tuples differ in
+# this field alone.
 _BASE_DURATIONS: Final[tuple[float, ...]] = (1.5, 2.25, 12.5, 0.5, 30.0)
 _LATER_DURATIONS: Final[tuple[float, ...]] = (9.75, 4.0, 1.25, 7.5, 0.125)
 
-# The order the fixture run's cases are handed to ``RunResult`` in: deliberately not sorted by
-# ``(check_id, case_id)``, so the ordering assertion compares against an order the model had to
-# produce rather than one it happened to receive.
+# The order the fixture run's cases are handed to ``RunResult`` in: deliberately not sorted, so the
+# ordering assertion compares against an order the model had to produce.
 _CONSTRUCTION_ORDER: Final[tuple[str, ...]] = (
     "skip-symbol",
     "pass-second",
@@ -117,14 +108,12 @@ _CONSTRUCTION_ORDER: Final[tuple[str, ...]] = (
 # The signature of the shared masking helper, as ``tests/conftest.py`` supplies it.
 _MaskVolatile = Callable[[RunResult | Mapping[str, Any]], dict[str, Any]]
 
-# A mutator receives the two result factories, the base run and returns the run with exactly one
+# A mutator receives the two result factories and the base run, and returns the run with exactly one
 # documented non-volatile field changed.
 _Mutation = Callable[[Callable[..., CaseResult], Callable[..., RunResult], RunResult], RunResult]
 
 
-# ---------------------------------------------------------------------------
-# The fixture run: five cases reaching all four statuses
-# ---------------------------------------------------------------------------
+# --- The fixture run: five cases reaching all four statuses ---
 
 
 def _mixed_results(
@@ -132,12 +121,7 @@ def _mixed_results(
     *,
     durations: tuple[float, ...] = _BASE_DURATIONS,
 ) -> dict[str, CaseResult]:
-    """Return the fixture run's five case results, keyed by role. The five reach every
-    :class:`~qrcheck.report.model.Status` member - two passes, one failure, one skip and one
-    error - so a document that confused two tallies cannot match the expected counts, each
-    per-status rule has a case to hold, and every non-passing result carries the relative
-    evidence directory the model requires of it.
-    """
+    """Return the fixture run's five case results keyed by role, reaching all four statuses."""
     roundtrip_pass, second_pass, roundtrip_fail, symbol_skip, cleanup_error = durations
     fail_check, fail_case = "RT-ROUNDTRIP", "corpus:url-003"
     skip_check, skip_case = "SY-MASK", "corpus:url-004"
@@ -207,12 +191,7 @@ def _build_run(
     durations: tuple[float, ...] = _BASE_DURATIONS,
     **overrides: Any,
 ) -> RunResult:
-    """Return the fixture run, with its cases handed over in a scrambled order. ``RunResult``
-    sorts its results by ``(check_id, case_id)`` and derives ``counts`` from them, so the run
-    is always self-consistent; ``overrides`` reaches the remaining run-level fields
-    (``adapter``, ``ec_level``, ``seed``, ``loc_count``, ``run_id``) through the shared
-    factory.
-    """
+    """Return the fixture run with its cases handed over in a scrambled order."""
     cases = _mixed_results(make_case_result, durations=durations)
     return make_run_result(
         tuple(cases[role] for role in _CONSTRUCTION_ORDER),
@@ -228,10 +207,7 @@ def _rebuild(
     base: RunResult,
     **overrides: Any,
 ) -> RunResult:
-    """Return the fixture run with ``overrides`` applied and ``base``'s identity held fixed. The
-    factory derives ``run_id`` from the values it is given, so a change of ``adapter``,
-    ``ec_level``, ``seed`` or ``loc_count`` would move the identity with it.
-    """
+    """Return the fixture run with `overrides` applied and `base`'s identity held fixed."""
     return _build_run(
         make_case_result, make_run_result, run_id=base.run_id, **overrides
     )
@@ -244,10 +220,7 @@ def _run_with_changed_result(
     role: str,
     **changes: Any,
 ) -> RunResult:
-    """Return the fixture run with exactly one case's field(s) altered. The run's identity is held
-    at the unchanged run's value, so the difference is the case field named in ``changes``
-    rather than a re-derived identity.
-    """
+    """Return the fixture run with exactly one case's field(s) altered."""
     unchanged = _build_run(make_case_result, make_run_result)
     cases = _mixed_results(make_case_result)
     cases[role] = dataclasses.replace(cases[role], **changes)
@@ -260,9 +233,8 @@ def _run_with_changed_result(
 
 
 # The documented non-volatile fields and the change that alters each one, exactly once. The
-# identifiers are the field names, so a failing case names the field rather than an index. A
-# ``check_id`` change leaves the result's evidence directory as it was on purpose: exactly one
-# field has to move for the byte comparison to mean anything.
+# identifiers are the field names, so a failing case names the field rather than an index; a
+# ``check_id`` change leaves the evidence directory alone so exactly one field moves.
 _NONVOLATILE_CHANGES: Final[dict[str, _Mutation]] = {
     "adapter": lambda make_case_result, make_run_result, base: _rebuild(
         make_case_result, make_run_result, base, adapter="defective"
@@ -326,9 +298,7 @@ _NONVOLATILE_CHANGES: Final[dict[str, _Mutation]] = {
 }
 
 
-# ---------------------------------------------------------------------------
-# Reading an artefact back
-# ---------------------------------------------------------------------------
+# --- Reading an artefact back ---
 
 
 def _summary_path(report_dir: Path) -> Path:
@@ -345,22 +315,14 @@ def _write_and_load(path: Path, run: RunResult) -> dict[str, Any]:
 
 
 def _masked_text(path: Path, mask_volatile: _MaskVolatile) -> str:
-    """Return ``path``'s payload as canonical text with its volatile fields masked. Masking is
-    applied to the *parsed* payload through the shared helper rather than to the file bytes,
-    because the helper is the product's one definition of which fields are volatile: a textual
-    substitution here would be a second, silently diverging inventory.
-    """
+    """Return `path`'s payload as canonical text with its volatile fields masked."""
     payload = json.loads(path.read_text(encoding="utf-8"))
     assert isinstance(payload, dict)
     return dumps_canonical(mask_volatile(payload))
 
 
 def _assert_every_object_has_sorted_keys(path: Path) -> None:
-    """Fail if any JSON object in ``path`` holds its keys in a non-sorted order.
-    ``object_pairs_hook`` sees each object's pairs in document order, so this reaches every
-    depth - the run, ``counts``, each result, and each result's ``request``/``decoded``/
-    ``expected`` mappings - which a top-level comparison cannot.
-    """
+    """Fail if any JSON object in `path` holds its keys in a non-sorted order."""
     unsorted: list[tuple[str, ...]] = []
 
     def hook(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -374,11 +336,7 @@ def _assert_every_object_has_sorted_keys(path: Path) -> None:
 
 
 def _indents_of(text: str, fragment: str) -> frozenset[int]:
-    """Return the leading-space counts of every line whose content starts with ``fragment``. A
-    fragment that appears at one depth only pins that depth; one that appears at two, such as
-    the run's ``seed`` and each result's, pins the nesting itself - which is how a two-space
-    indentation is asserted rather than a layout copied out of one run's output.
-    """
+    """Return the leading-space counts of every line whose content starts with `fragment`."""
     lines = [line for line in text.splitlines() if line.lstrip(" ").startswith(fragment)]
     assert lines, f"no line starts with {fragment!r}"
     return frozenset(len(line) - len(line.lstrip(" ")) for line in lines)
@@ -391,10 +349,7 @@ def _differing_keys(before: Mapping[str, Any], after: Mapping[str, Any]) -> froz
 
 
 def _scalars_of(payload: Mapping[str, Any]) -> dict[str, Any]:
-    """Return a summary payload's top-level fields other than ``results``. The results are
-    compared element by element instead, so that a per-result difference is reported against
-    the field it belongs to rather than as one opaque ``results`` mismatch.
-    """
+    """Return a summary payload's top-level fields other than ``results``."""
     return {key: value for key, value in payload.items() if key != "results"}
 
 
@@ -403,9 +358,7 @@ def _reread(path: Path) -> bytes:
     return path.read_bytes()
 
 
-# ---------------------------------------------------------------------------
-# The schema, exactly as AAP §0.3.4 states it
-# ---------------------------------------------------------------------------
+# --- The schema, exactly as AAP §0.3.4 states it ---
 
 
 def test_summary_has_exactly_the_documented_top_level_keys(
@@ -416,9 +369,9 @@ def test_summary_has_exactly_the_documented_top_level_keys(
     """The payload holds the nine documented fields and no others."""
     run = _build_run(make_case_result, make_run_result)
     payload = _write_and_load(_summary_path(report_dir), run)
-    # Set equality, never containment: a key this module does not know about is either an
-    # invented field a machine consumer would not expect, or an addition that has to be made
-    # deliberately - by changing this assertion. Future keys may only ever be ADDED.
+    # Set equality, never containment: an unknown key is either an invented field a consumer would
+    # not expect or an addition made deliberately -- by changing this assertion. Future keys are
+    # only ADDED.
     assert set(payload) == _TOP_LEVEL_FIELDS
 
 
@@ -449,8 +402,8 @@ def test_counts_are_four_separate_integers(
         # ``type(...) is int`` rather than ``isinstance``: ``bool`` is an ``int`` subclass, so a
         # tally that had become a truth value would slip past an ``isinstance`` check.
         assert type(counts[name]) is int, (name, type(counts[name]))
-    # The tally is read off the emitted statuses, so a skip folded into a pass is visible here
-    # and nowhere else in this module: every other assertion would still hold.
+    # The tally is read off the emitted statuses, so a skip folded into a pass is visible here and
+    # nowhere else in this module.
     implied = {status.value: 0 for status in Status}
     for result in payload["results"]:
         implied[Status(result["status"]).value] += 1
@@ -518,7 +471,7 @@ def test_evidence_dir_is_null_for_a_pass_and_relative_for_anything_else(
         assert isinstance(value, str)
         assert value
         # No absolute path may reach an artefact (AAP §0.5.5): it would name the clone the run
-        # happened in, and two clones would then disagree about the same case.
+        # happened in, and two clones would disagree about the same case.
         assert not Path(value).is_absolute()
         assert not value.startswith("/")
         assert "\\" not in value
@@ -545,8 +498,8 @@ def test_summary_text_is_canonical_json(
     assert text == dumps_canonical(json.loads(text)) + "\n"
     _assert_every_object_has_sorted_keys(path)
     # Two-space indentation, asserted at three depths and once across two depths at a time: a
-    # top-level field sits two spaces in from the opening brace, a ``counts`` member four, a
-    # result's own field six, and a mapping inside a result eight.
+    # top-level field sits two spaces in, a ``counts`` member four, a result's field six, a nested
+    # mapping eight.
     assert _indents_of(text, '"run_id":') == {2}
     assert _indents_of(text, '"counts": {') == {2}
     assert _indents_of(text, '"results": [') == {2}
@@ -556,8 +509,8 @@ def test_summary_text_is_canonical_json(
     assert _indents_of(text, '"payload_utf8":') == {8}
     assert _indents_of(text, '"seed":') == {2, 6}
     assert "\t" not in text
-    # ``ensure_ascii=False``: the payload appears as itself, not as ``\uXXXX`` escapes, which is
-    # what keeps the ``emoji``, ``rtl`` and ``utf8-multibyte`` corpus evidence readable.
+    # ``ensure_ascii=False``: the payload appears as itself, not as ``\uXXXX`` escapes, which keeps
+    # the ``emoji``, ``rtl`` and ``utf8-multibyte`` evidence readable.
     assert _NON_ASCII_PAYLOAD.encode("utf-8") in data
 
 
@@ -592,9 +545,7 @@ def test_write_canonical_json_creates_a_missing_parent_directory(tmp_path: Path)
     assert path.read_text(encoding="utf-8") == dumps_canonical(payload) + "\n"
 
 
-# ---------------------------------------------------------------------------
-# The volatile-field inventory of AAP §0.5.4
-# ---------------------------------------------------------------------------
+# --- The volatile-field inventory of AAP §0.5.4 ---
 
 
 def test_masking_the_volatile_fields_makes_two_runs_byte_equal(
@@ -614,8 +565,8 @@ def test_masking_the_volatile_fields_makes_two_runs_byte_equal(
     )
     base_path = write_summary(base, report_dir / "base.json")
     later_path = write_summary(later, report_dir / "later.json")
-    # First prove the difference is real and confined to the volatile fields, so the equality
-    # below is the masking at work and not two identical runs agreeing with themselves.
+    # First prove the difference is real and confined to the volatile fields, so the equality below
+    # is the masking at work and not two identical runs agreeing with themselves.
     assert _reread(base_path) != _reread(later_path)
     assert _differing_keys(_scalars_of(base.as_dict()), _scalars_of(later.as_dict())) == (
         _VOLATILE_RUN_FIELDS
@@ -663,9 +614,7 @@ def test_any_non_volatile_change_breaks_the_masked_equality(
     assert _masked_text(changed_path, mask_volatile) != _masked_text(base_path, mask_volatile)
 
 
-# ---------------------------------------------------------------------------
-# ``run_id``: a content hash, never a UUID and never a clock reading
-# ---------------------------------------------------------------------------
+# --- ``run_id``: a content hash, never a UUID and never a clock reading ---
 
 
 def test_the_run_identifier_is_a_content_hash_stable_in_its_inputs(
@@ -673,10 +622,7 @@ def test_the_run_identifier_is_a_content_hash_stable_in_its_inputs(
     make_run_result: Callable[..., RunResult],
     corpus_subset: tuple[Any, ...],
 ) -> None:
-    """The runner's derivation repeats for one input and differs for every changed input.
-    ``corpus_subset`` supplies ``qrcheck.corpus.builder.CorpusRecord`` instances from the
-    shared fixture, which is why this module imports no corpus module of its own.
-    """
+    """The derivation repeats for one input and differs for every changed input."""
     base = _build_run(make_case_result, make_run_result)
     checks = ("RT-ROUNDTRIP", "SY-MASK")
     identifier = _run_identifier("reference", "M", base.seed, checks, corpus_subset)
@@ -685,8 +631,8 @@ def test_the_run_identifier_is_a_content_hash_stable_in_its_inputs(
     assert identifier == _run_identifier(
         "reference", "M", base.seed, ("SY-MASK", "RT-ROUNDTRIP"), corpus_subset
     )
-    # A SHA-256 hex digest, so it can never be the UUID or the timestamp the model refuses - and
-    # the model accepts it, which is the other half of that contract.
+    # A SHA-256 hex digest, so it can never be the UUID or timestamp the model refuses -- and the
+    # model accepts it, which is the other half of that contract.
     assert re.fullmatch(r"[0-9a-f]{64}", identifier) is not None
     assert make_run_result((), run_id=identifier).run_id == identifier
     # Every component the identity covers changes the identity.
@@ -714,19 +660,13 @@ def test_the_result_model_refuses_a_run_id_that_is_not_a_content_hash(
     make_case_result: Callable[..., CaseResult],
     make_run_result: Callable[..., RunResult],
 ) -> None:
-    """An empty, UUID-shaped or timestamp-shaped identity is refused by the model. A clock reading
-    or a UUID would make two identical runs differ, which is exactly the defect the determinism
-    section exists to prevent, so the rejection belongs to this contract even though the runner
-    is what supplies the value.
-    """
+    """An empty, UUID-shaped or timestamp-shaped identity is refused by the model."""
     cases = tuple(_mixed_results(make_case_result).values())
     with pytest.raises(ValueError, match="run_id"):
         make_run_result(cases, run_id=run_id)
 
 
-# ---------------------------------------------------------------------------
-# The writer adds, drops and transforms nothing
-# ---------------------------------------------------------------------------
+# --- The writer adds, drops and transforms nothing ---
 
 
 def test_write_summary_emits_exactly_the_model_projection(

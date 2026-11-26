@@ -1,38 +1,22 @@
 """``qrcheck corpus build``: regenerate the deterministic payload corpus from a seed.
 
-The corpus belongs to two other modules and neither is restated here.
-``qrcheck.corpus.builder.build_corpus`` assembles the records -- the per-class counts, the
-boundary lengths derived from the capacity tables, the stable ``<class>-<3-digit index>``
-identifiers and the invariants the defect-detection contract depends on -- and
-``qrcheck.corpus.io.write_corpus`` owns the canonical JSONL layout: one object per line,
-sorted keys, literal UTF-8 and ``\\n`` endings. This module therefore builds no record, sorts
-nothing and serialises nothing; it decides only *whether* the destination has to change, and
+The corpus belongs to two other modules and neither is restated here:
+``qrcheck.corpus.builder.build_corpus`` assembles the records, and
+``qrcheck.corpus.io.write_corpus`` owns the canonical JSONL layout. This module builds no record,
+sorts nothing and serialises nothing; it decides only *whether* the destination has to change, and
 reports that decision.
 
-That decision is the whole contract, because ``corpus/default.jsonl`` is a committed
-repository file and AAP §0.5.4 promises a regeneration from the same seed is byte-identical to
-it. So the freshly built records are rendered to a sibling temporary file through the same
-writer, the rendered bytes are compared with the destination's current bytes, and only a real
-difference replaces the destination. A matching regeneration leaves the committed file
-untouched -- the path CI takes every run, where the drift check compares rather than rewrites --
-and a difference refuses to overwrite unless ``--force`` is given, so a hand-edited corpus is
-never silently replaced. The temporary file lives beside the destination (never in the shared
-system temporary directory) and is removed in a ``finally``, so an interrupted or refused
-regeneration leaves neither a stray ``qrcheck-`` entry nor a half-written corpus.
+That decision is the whole contract, because ``corpus/default.jsonl`` is a committed repository file
+and AAP §0.5.4 promises a regeneration from the same seed is byte-identical to it. The freshly
+built records are rendered to a sibling temporary file through the same writer, the bytes are
+compared with the destination's, and only a real difference replaces the destination: a matching
+regeneration leaves the committed file untouched, and a difference refuses to overwrite unless
+``--force`` is given.
 
-The outcome is the documented exit-code vocabulary of :mod:`qrcheck.cli.exit`:
-
-* ``0`` -- the corpus was written, or the destination already held exactly these bytes;
-* ``2`` -- a bad argument or an unusable configuration: an unreadable or invalid
-  ``qrcheck.toml``, a negative seed, a destination that is a directory, a parent that is not a
-  writable directory, or an existing destination whose content differs and no ``--force``.
-  Nothing has been written when this code is returned;
-* ``3`` -- the write itself failed, the report directory could not be prepared, or the corpus
-  could not be built at all, which is a framework defect rather than a user error; the
-  diagnostic names the path or the failing invariant.
-
-Exactly one line reaches standard output, free of timings and of any path the caller did not
-name: ``seed=<n> records=<count> status=<written|unchanged|forced>``.
+The outcome is the exit-code vocabulary of :mod:`qrcheck.cli.exit`: ``0`` when the corpus was
+written or already held exactly these bytes; ``2`` for a bad argument or an unusable configuration,
+with nothing written; ``3`` when the write failed or the corpus could not be built at all. Exactly
+one line reaches standard output: ``seed=<n> records=<count> status=<written|unchanged|forced>``.
 """
 
 from __future__ import annotations
@@ -80,9 +64,8 @@ _FALLBACK_UMASK: Final[int] = 0o022
 class _DiffersWithoutForce(Exception):
     """The destination holds different bytes and ``--force`` was not given.
 
-    Private to this module and never leaves it: the writing helper raises it so the compare
-    step can stay one function, and :func:`build` turns it into the exit-2 diagnostic that
-    names the destination and the flag.
+    Private to this module: the writing helper raises it so the compare step stays one function, and
+    :func:`build` turns it into the exit-2 diagnostic naming the destination and the flag.
     """
 
 
@@ -95,25 +78,11 @@ def build(
 ) -> int:
     """Regenerate the corpus and return the process exit code.
 
-    Args:
-        seed: Seed to build from, or ``None`` for the configured ``seed``, which is the only
-            declaration of the default.
-        out: Destination file, or ``None`` for the configured ``corpus_path`` (absolute as
-            the loader resolved it). A supplied value is used exactly as given.
-        force: Replace an existing destination whose content differs from the regenerated
-            corpus. Without it such a destination is left exactly as it is.
-        config_path: Configuration file to read, supplied by the group's ``--config``
-            option.
-
-    Returns:
-        :data:`qrcheck.cli.exit.EXIT_OK` when the corpus was written or already matched,
-        :data:`qrcheck.cli.exit.EXIT_CONFIG` for a bad argument or unusable configuration,
-        and :data:`qrcheck.cli.exit.EXIT_INTERNAL` when the write or the build itself
-        failed.
-
-    Raises:
-        Nothing. Every failure is reported on stderr and returned as an exit code, so a
-        caller propagates one integer instead of handling this module's faults.
+    ``seed`` defaults to the configured ``seed``, ``out`` to the configured ``corpus_path``, and
+    ``force`` allows replacing a destination whose bytes differ. Returns ``EXIT_OK`` when the corpus
+    was written or already matched, ``EXIT_CONFIG`` for a bad argument or unusable configuration,
+    and ``EXIT_INTERNAL`` when the write or the build itself failed. Nothing is raised: every
+    failure is reported on stderr and returned.
     """
     try:
         config = load_config(config_path)
@@ -199,28 +168,15 @@ def build(
 def _regenerate(records: Sequence[CorpusRecord], destination: Path, *, force: bool) -> str:
     """Render ``records`` beside ``destination`` and move them into place if they differ.
 
-    The rendering goes through :func:`qrcheck.corpus.io.write_corpus`, so the bytes compared
-    and the bytes installed are produced by the one writer that defines the format; this
-    function never formats a record itself. Both branches that replace the destination use
-    ``os.replace``, so a reader never observes a partially written corpus, and the temporary
-    file is removed in a ``finally`` -- after a replace it is already gone, and on every other
-    path -- including the refusal -- it is unlinked.
-
-    Args:
-        records: The records ``build_corpus`` returned.
-        destination: The corpus file to create or replace.
-        force: Whether a differing destination may be replaced.
-
-    Returns:
-        ``"written"`` when the destination was absent, ``"unchanged"`` when it already held
-        exactly these bytes, ``"forced"`` when a differing destination was replaced.
+    The rendering goes through :func:`qrcheck.corpus.io.write_corpus`, so the bytes compared and the
+    bytes installed come from the one writer that defines the format. Both replacing branches use
+    ``os.replace``, so a reader never observes a partially written corpus, and the temporary file is
+    removed in a ``finally``. Returns ``"written"``, ``"unchanged"`` or ``"forced"``.
 
     Raises:
-        _DiffersWithoutForce: the destination holds different bytes and ``force`` is false.
-            It is left exactly as it is.
-        OSError: the parent directory cannot be created, the temporary file cannot be written
-            or read, or the replace failed. Raised unwrapped so the diagnostic can name the
-            path; :func:`build` maps it to exit code 3.
+        _DiffersWithoutForce: The destination holds different bytes and ``force`` is false.
+        OSError: The parent directory, temporary file or replace failed, raised unwrapped to name
+        the path.
     """
     parent = destination.parent
     # write_corpus creates missing parents, but the temporary file has to be created in a
@@ -249,24 +205,10 @@ def _regenerate(records: Sequence[CorpusRecord], destination: Path, *, force: bo
 def _process_umask() -> int:
     """Return the umask this process applies, without changing it.
 
-    ``os.umask`` is the only POSIX call that reports the mask, and it reports it by *setting*
-    it first, so the mask is ``0000`` for the two syscalls it takes to put it back and any
-    file another writer created in that window would be world-writable. The kernel publishes
-    the value in the ``Umask:`` field of ``/proc/self/status`` instead, which is one read that
-    touches no process state and therefore has nothing for a concurrent writer to observe.
-
-    Args:
-        No arguments: the process this function runs in is the one being inspected.
-
-    Returns:
-        The octal mask currently applied. ``0o022`` when the field cannot be read or carries
-        no octal number, which is what a platform without ``/proc/self/status`` -- macOS, one
-        of the supported platforms -- reports, and whose ``0o666 & ~mask`` is the ``0o644``
-        a plain ``open()`` produces under the conventional default.
-
-    Raises:
-        Nothing. A missing or unreadable field file and an unparseable field both fall back to
-        ``0o022``, so a caller derives a mode on every supported platform.
+    ``os.umask`` reports the mask only by *setting* it first, which would leave every file another
+    writer created in that window world-writable; the kernel publishes the value in the ``Umask:``
+    field of ``/proc/self/status`` instead. Returns the octal mask applied, ``0o022`` when that
+    field cannot be read or carries no octal number.
     """
     try:
         status = Path("/proc/self/status").read_text(encoding="utf-8", errors="replace")
@@ -285,11 +227,10 @@ def _process_umask() -> int:
 def _place(temporary: Path, destination: Path) -> None:
     """Give ``temporary`` the mode ``destination`` should keep, then move it into place.
 
-    The temporary file comes from ``mkstemp`` with mode ``0600``, so it is re-moded before it
-    becomes the corpus: an existing destination keeps the mode it already had, and a new one
-    gets the mode a plain ``open(path, "w")`` would have created, which is ``0666`` less the
-    process umask. Without this the committed corpus would silently narrow to owner-only on
-    every ``--force`` regeneration.
+    ``mkstemp`` creates mode ``0600``, so the file is re-moded before it becomes the corpus: an
+    existing destination keeps its mode and a new one gets what a plain ``open(path, "w")`` would
+    have created. Without this the committed corpus would silently narrow to owner-only on every
+    ``--force`` regeneration.
     """
     if destination.exists():
         mode = stat.S_IMODE(destination.stat().st_mode)
@@ -305,19 +246,13 @@ def _place(temporary: Path, destination: Path) -> None:
 def _unusable_destination(destination: Path) -> tuple[str, Path] | None:
     """Return the reason ``destination`` cannot be built into, or ``None`` when it can.
 
-    Three conditions are decided before anything is written, and each is exit 2 because each
-    is an argument the caller has to change rather than an environment that failed mid-flight
-    (which is what exit 3 is for): the destination is a directory, the nearest existing
-    ancestor is not a directory -- a parent path that names a regular file -- or that ancestor
-    is not writable.
-
-    Args:
-        destination: The corpus file the caller asked for, as given.
+    Three conditions are decided before anything is written, each exit 2 because each is an argument
+    the caller has to change: the destination is a directory, its nearest existing ancestor is not a
+    directory, or that ancestor is not writable.
 
     Returns:
-        ``(reason, offending path)`` for the first condition that holds, otherwise ``None``.
-        The offending path is the destination for the first condition and the offending
-        ancestor for the other two, so the diagnostic names the entry to change.
+        ``(reason, offending path)`` for the first condition that holds, otherwise ``None``, the
+        path naming the entry to change.
     """
     if destination.exists() and destination.is_dir():
         return "destination is a directory", destination
@@ -332,9 +267,8 @@ def _unusable_destination(destination: Path) -> tuple[str, Path] | None:
 def _nearest_existing_ancestor(start: Path) -> Path:
     """Return ``start`` when it exists, otherwise its nearest existing ancestor.
 
-    A destination several levels deep may not exist yet, which is the ordinary case for
-    ``--out`` naming a fresh directory; the highest ancestor that does exist is the one whose
-    type and permissions decide whether that tree can be created.
+    A destination several levels deep may not exist yet, and the highest ancestor that does is the
+    one whose type and permissions decide whether that tree can be created.
     """
     candidate = start
     while not candidate.exists():
@@ -387,12 +321,8 @@ corpus = corpus_command
 def _config_path(ctx: click.Context | None) -> str:
     """Return the configuration file the group's ``--config`` option selected.
 
-    ``qrcheck.cli.main`` owns that option, and how it hands the value down is its contract
-    rather than this module's: the group may leave the raw string in the context object, keep
-    a mapping or a namespace there, or hold the value only in its own click parameters. All
-    three are read, in that order, so registering this command under the group needs no
-    adaptation of either module. When none of them carries a value -- including a call with no
-    click context at all -- the default configuration file name stands.
+    The click context object, a mapping and a namespace there are read in that order; a call with no
+    click context at all falls back to the default configuration file name.
     """
     if ctx is not None:
         found = _config_value(ctx.obj)

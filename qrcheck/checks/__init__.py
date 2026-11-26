@@ -1,63 +1,25 @@
 """Registration of the twenty-one checks: the nine family modules, and the one loader.
 
-Nothing is checked in this module.  A check lives in the family module that owns its
-identifier prefix -- ``RT-ROUNDTRIP`` in :mod:`qrcheck.checks.roundtrip`, the four
-``SY-*`` checks in :mod:`qrcheck.checks.symbol`, and so on -- and registers itself there
-through :func:`qrcheck.registry.check.check` while that module imports.  What this module
-owns is the only list of those nine modules (:data:`FAMILY_MODULES`) and the single entry
-point that imports them (:func:`load_families`), so *which* checks exist never depends on
-whether some unrelated module happened to import a family.
+Nothing is checked here. A check lives in the family module that owns its identifier prefix and
+registers itself there through :func:`qrcheck.registry.check.check` at import. This module owns
+the only list of those nine modules (:data:`FAMILY_MODULES`) and the single entry point that
+imports them (:func:`load_families`). The tuple is explicit rather than discovered, so a stray
+``.py`` cannot join the run and a missing module raises :class:`ImportError` at import of this
+package instead of shrinking the registry. Import order is not significant:
+:func:`qrcheck.registry.check.iter_checks` sorts by check identifier (AAP §0.3.4, §0.5.3).
 
-Why an explicit tuple rather than discovery
--------------------------------------------
-``pkgutil.iter_modules``, a directory walk and an entry-point group would each make the
-registered set depend on the contents of a directory at run time: a stray ``.py`` would
-join the run, and a missing module would shrink the registry instead of failing the import.
-The tuple is frozen, is reviewable in a diff, and a missing family module raises
-:class:`ImportError` at import of this package -- loudly.  The product's own gate that all
-twenty-one checks exist cannot be met by quietly having fewer of them.
+What a full run costs: 1,283 cases at EC M over the default 240-record corpus, 1,287 target
+invocations and 1,470 primary decodes. Each family publishes its share of the encode count as
+``EXPECTED_ENCODES`` and the sum is that 1,287. The decode count is the 1,462 of AAP §0.8.1's
+case matrix plus eight, because ``DM-RESILIENCE`` also decodes each of its eight sampled
+records' pristine symbol once -- a memoised read the damage budget needs -- so the matrix's
+decode column counts only the damaged reads. A conforming target performs 1,469 of them: the
+over-capacity case it rejects leaves no image to decode.
 
-Import order never reaches an artefact
---------------------------------------
-The nine names below are in the plan's tree order, which is deliberately not the
-alphabetical order of :data:`qrcheck.registry.check.FAMILY_NAMES`.  Import order is
-therefore not significant: :func:`qrcheck.registry.check.iter_checks` sorts by check
-identifier, and that sorted iteration is the only one ``qrcheck list``, the runner's
-execution walk and the three report writers use (AAP §0.3.4, §0.5.3).  Two runs of the
-same configuration describe their checks in the same order whatever order they were
-imported in.
-
-What a full run costs
----------------------
-The twenty-one checks make one full run at EC M over the default 240-record corpus exactly
-1,283 cases, which invoke the target 1,287 times and the primary decoder 1,462 times
-(AAP §0.8.1's case matrix).  Each family module publishes its own share of the encode
-count as ``EXPECTED_ENCODES``, and the sum over the nine modules is that 1,287; a case
-re-run would show up as a count above the declaration rather than as a quiet success.
-
-Layering
---------
-The entry points import this package -- :mod:`qrcheck.runner` before a run, and
-``qrcheck list`` itself -- and this package imports nothing back: no runner, no CLI, no
-concrete adapter, no decoder or image library, and no configuration.  Importing
-``qrcheck.checks`` costs the standard library, a few pure-Python product modules and the
-registration itself.  :mod:`qrcheck.registry` must never import this package in turn: the
-family modules import the registry in order to register, so the reverse import would close
-the registration cycle and run it at whatever point the cycle was cut.
-
-Binding constraints
--------------------
-No project rules exist for this repository; the rules document is empty.  The constraints
-on this module are therefore the plan's own MUST/MUST NOT list: nine named modules, one
-table, no discovery, no conditional or duplicate registration, no ``print``, no file or
-directory creation, and no silent degradation to a smaller registry.
-
-Public surface
---------------
-:data:`FAMILY_MODULES`, :data:`FAMILY_MODULE_OBJECTS` and :func:`load_families`, and
-nothing else.  The checks themselves are reached through :mod:`qrcheck.registry.check` and
-are never re-exported from here: a second name for a check would be a second thing to keep
-in step with the registry.
+Layering: the entry points import this package and this package imports nothing back -- no
+runner, no CLI, no concrete adapter, no decoder or image library, no configuration -- since the
+reverse import would close the registration cycle. Public surface: :data:`FAMILY_MODULES`,
+:data:`FAMILY_MODULE_OBJECTS` and :func:`load_families`, and nothing else.
 """
 
 from __future__ import annotations
@@ -73,16 +35,13 @@ __all__: list[str] = [
     "load_families",
 ]
 
-# The nine check family modules of ``qrcheck/checks/``, each the sole owner of the checks
-# whose identifier prefix maps to it in ``qrcheck.registry.check.FAMILY_BY_PREFIX``:
-# ``RT-ROUNDTRIP``; the four ``SY-*``; ``MD-MODE-OPTIMAL`` and ``MD-CHARSET``; the five
-# ``RN-*``; ``DM-RESILIENCE`` and ``DM-SEEDED``; the three ``IV-*``; ``DT-DETERMINISTIC``;
-# ``PF-ENCODE`` and ``PF-DECODE``; ``CL-ARTIFACTS``.  Twenty-one checks, nine modules, and
-# ``support`` is excluded on purpose: it is the shared helper every family imports, not a
-# family, and it registers nothing.
-#
-# The order is the plan's tree order.  It is not the sorted order and does not need to be:
-# see the module docstring on why registration order cannot reach an artefact.
+# The nine check family modules of ``qrcheck/checks/``, each the sole owner of the checks whose
+# identifier prefix maps to it in ``qrcheck.registry.check.FAMILY_BY_PREFIX``: ``RT-ROUNDTRIP``;
+# the four ``SY-*``; ``MD-MODE-OPTIMAL`` and ``MD-CHARSET``; the five ``RN-*``; ``DM-RESILIENCE``
+# and ``DM-SEEDED``; the three ``IV-*``; ``DT-DETERMINISTIC``; ``PF-ENCODE`` and ``PF-DECODE``;
+# ``CL-ARTIFACTS``.  Twenty-one checks, nine modules; ``support`` is excluded on purpose, being
+# the shared helper every family imports that registers nothing.  The order is the plan's tree
+# order, not the sorted order, and does not need to be: see the module docstring.
 FAMILY_MODULES: tuple[str, ...] = (
     "roundtrip",
     "symbol",
@@ -97,12 +56,11 @@ FAMILY_MODULES: tuple[str, ...] = (
 
 # The imported module objects, keyed by family name in ``FAMILY_MODULES`` order.
 #
-# Populated by importing the package, which is what runs each module's ``@check``
-# decorators, and refreshed by :func:`load_families`.  Held for the tests and diagnostics
-# that need to reach a family module's own declarations -- its ``EXPECTED_ENCODES``, for
-# instance -- without importing a second path to the same file, which would register its
-# checks twice and raise ``CheckRegistrationError``.  Nothing here is a second definition
-# of a check: the objects in it are the modules Python already holds in ``sys.modules``.
+# Populated by importing the package, which runs each module's ``@check`` decorators, and refreshed
+# by :func:`load_families`.  Held for the tests that need a family's own declarations -- its
+# ``EXPECTED_ENCODES`` -- without a second import path, which would register its checks twice and
+# raise ``CheckRegistrationError``.  These are the modules Python already holds: no second
+# definition of a check lives here.
 FAMILY_MODULE_OBJECTS: dict[str, ModuleType] = {
     name: importlib.import_module(f"{__name__}.{name}") for name in FAMILY_MODULES
 }
@@ -111,26 +69,20 @@ FAMILY_MODULE_OBJECTS: dict[str, ModuleType] = {
 def load_families() -> tuple[str, ...]:
     """Import the nine check family modules and return the check identifiers registered.
 
-    The idempotent entry point for the runner and for any test that wants the registry
-    populated without relying on this package's import side effects alone.  ``importlib``
-    caches every module, so calling it again re-binds the same module objects, re-runs no
-    decorator and cannot duplicate a registration; the identifiers it returns are therefore
-    the same tuple every time, and the registry stays at twenty-one entries.
+    The idempotent entry point for the runner and for any test that wants the registry populated
+    without relying on this package's import side effects: ``importlib`` caches every module, so
+    calling it again re-runs no decorator and cannot duplicate a registration.
 
     Returns:
-        Every registered check identifier, ascending -- the twenty-one ``CHECK_IDS`` when
-        all nine families imported.
+        Every registered check identifier, ascending -- the twenty-one ``CHECK_IDS``.
 
     Raises:
-        ImportError: A family module of :data:`FAMILY_MODULES` does not exist or fails to
-            import.  Deliberately not caught: a broken or missing check must fail the
-            process that imports the checks, never degrade to a smaller registry that a
-            report would then describe as complete.
-        CheckRegistrationError: A family module registers an identifier twice, or registers
-            one that contradicts its declaration (see
-            :class:`qrcheck.registry.check.CheckContract`).  Also deliberately uncaught: the
-            executed set, the expected-failure table and ``qrcheck list`` must never
-            disagree about which checks exist.
+            ImportError: A family module of :data:`FAMILY_MODULES` does not exist or fails to
+            import. Deliberately not caught: a broken or missing check must fail the process that
+            imports the checks, never degrade to a smaller registry a report would describe as
+            complete. CheckRegistrationError: A family module registers an identifier twice, or
+            registers one that contradicts its declaration (see
+            :class:`qrcheck.registry.check.CheckContract`).
     """
     for name in FAMILY_MODULES:
         FAMILY_MODULE_OBJECTS[name] = importlib.import_module(f"{__name__}.{name}")

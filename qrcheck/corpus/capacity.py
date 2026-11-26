@@ -1,25 +1,19 @@
-"""ISO/IEC 18004 Model 2 capacity arithmetic: data capacity, codeword blocks, and the
-payload length that each version and error-correction level holds in each mode.
+"""ISO/IEC 18004 Model 2 capacity arithmetic: data capacity, codeword blocks, and the payload length
+that each version and error-correction level holds in each mode.
 
-This module is the single owner of QR capacity arithmetic. Two tables are transcribed
-from the standard — the total codeword count per version (Table 1) and the
-error-correction block structure per version and level (Table 9) — and the third, the
-data capacity in bits (Table 7), is derived from them. Deriving it is what keeps a
-transcription slip from drifting into a plausible-looking boundary length: every
+The single owner of QR capacity arithmetic. Two tables are transcribed from the standard -- the
+total codeword count per version (Table 1) and the error-correction block structure per version and
+level (Table 9) -- and the third, the data capacity in bits (Table 7), is derived from them: every
 codeword a symbol holds is either a data codeword or an error-correction codeword, so
-``capacity_bits = (total_codewords - blocks * ecc_per_block) * 8`` for all 40 versions
-and 4 levels. ``tests/unit/test_capacity_oracle.py`` asserts the derived result equals
-``segno.consts.SYMBOL_CAPACITY`` and asserts ``ECC_BLOCKS`` against ``segno.consts.ECC``,
-which is the independent check on the two transcribed tables.
+``capacity_bits = (total_codewords - blocks * ecc_per_block) * 8``. Deriving it keeps a
+transcription slip from drifting into a plausible-looking boundary length, and
+``tests/unit/test_capacity_oracle.py`` asserts the result equals ``segno.consts.SYMBOL_CAPACITY``
+and ``ECC_BLOCKS`` equals ``segno.consts.ECC``.
 
-Scope is Model 2 QR, Versions 1-40, exactly as the product requires: Micro QR (M1-M4)
-and Structured Append are out of scope, so no Micro version appears in any table and
-the version keys of every table are exactly ``range(1, 41)``.
-
-Standard library only: the module is pure data plus pure functions, with no I/O, no
-configuration, no logging and no third-party import, so a consumer that needs only
-capacity arithmetic — the corpus builder and the oracle test above all — does not drag
-in an image or decoding stack.
+Scope is Model 2 QR, Versions 1-40: Micro QR (M1-M4) and Structured Append are out of scope, so no
+Micro version appears in any table and the version keys are exactly ``range(1, 41)``. Standard
+library only -- pure data plus pure functions, with no I/O, no configuration, no logging and no
+third-party import.
 """
 
 # The public surface is exactly these ten names; everything else here is private.
@@ -180,12 +174,11 @@ _MODE_INDICATOR_BITS: int = 4
 def capacity_bits(version: int, ec: str) -> int:
     """Return the data capacity, in bits, of a symbol at `version` and `ec`.
 
-    Guarantees the ISO/IEC 18004 Table 7 figure, that is
-    ``(TOTAL_CODEWORDS[version] - blocks * ecc_per_block) * 8``, which is always a
-    whole number of codewords for a Model 2 symbol.
+    Guarantees the ISO/IEC 18004 Table 7 figure, ``(TOTAL_CODEWORDS[version] - blocks *
+    ecc_per_block) * 8``.
 
-    Raises ValueError, naming the offending value, when `version` is not an integer in
-    1..40 or `ec` is not one of `EC_LEVELS`.
+    Raises:
+    ValueError: `version` is not an integer in 1..40, or `ec` is not one of `EC_LEVELS`.
     """
     _require_version(version)
     _require_ec(ec)
@@ -195,12 +188,10 @@ def capacity_bits(version: int, ec: str) -> int:
 def data_codewords(version: int, ec: str) -> int:
     """Return the number of data codewords of a symbol at `version` and `ec`.
 
-    Guarantees ``TOTAL_CODEWORDS[version] - blocks * ecc_per_block``, so the value is
-    ``capacity_bits(version, ec) // 8`` — the capacity expressed in codewords rather
-    than bits.
+    Guarantees ``capacity_bits(version, ec) // 8``.
 
-    Raises ValueError, naming the offending value, when `version` is not an integer in
-    1..40 or `ec` is not one of `EC_LEVELS`.
+    Raises:
+    ValueError: `version` is outside 1..40, or `ec` is not one of `EC_LEVELS`.
     """
     _require_version(version)
     _require_ec(ec)
@@ -211,14 +202,13 @@ def data_codewords(version: int, ec: str) -> int:
 def max_payload_bytes(version: int, ec: str, mode: str) -> int:
     """Return the largest payload a symbol at `version` and `ec` holds in `mode`.
 
-    The unit follows the mode: for "numeric" and "alphanumeric" the result is a count
-    of **characters**, and for "byte" it is a count of **bytes**. In every mode the
-    4-bit mode indicator and the mode's character-count indicator are subtracted from
-    the data capacity before the per-character bit cost is applied (ISO/IEC 18004
-    §7.4), so the result is the largest length that still fits at that version.
+    The unit follows the mode: **characters** for "numeric" and "alphanumeric", **bytes** for
+    "byte". The 4-bit mode indicator and the mode's character-count indicator are subtracted from
+    the data capacity before the per-character bit cost is applied (ISO/IEC 18004 §7.4).
 
-    Raises ValueError, naming the offending value, when `version` is not an integer in
-    1..40, `ec` is not one of `EC_LEVELS`, or `mode` is not one of `MODES`.
+    Raises:
+    ValueError: `version` is outside 1..40, `ec` is not one of `EC_LEVELS`, or `mode` is not one of
+    `MODES`; the message names the offending value.
     """
     _require_version(version)
     _require_ec(ec)
@@ -233,16 +223,14 @@ def max_payload_bytes(version: int, ec: str, mode: str) -> int:
 def minimal_version(length: int, ec: str, mode: str) -> int | None:
     """Return the smallest Version 1-40 that holds `length` characters or bytes.
 
-    `length` is a character count in "numeric" and "alphanumeric" mode and a byte count
-    in "byte" mode, consistent with `max_payload_bytes`. The scan runs ascending over
-    ``range(1, 41)``, so the answer is the lowest version that fits, never a larger one.
+    `length` is a character count in "numeric" and "alphanumeric" mode and a byte count in "byte"
+    mode, and the scan runs ascending over ``range(1, 41)``.
 
-    Returns None when the payload exceeds even Version 40 at `ec` in `mode`. None is
-    returned rather than a clamped 40 so a caller can tell "does not fit at all" from
-    "does not fit at this version"; a payload of length 0 fits Version 1.
+    Returns: ``None`` when the payload exceeds even Version 40, rather than a clamped 40, so a
+    caller can tell "does not fit at all" from "does not fit at this version".
 
-    Raises ValueError, naming the offending value, when `length` is not a non-negative
-    integer, `ec` is not one of `EC_LEVELS`, or `mode` is not one of `MODES`.
+    Raises:
+    ValueError: `length` is not a non-negative integer, `ec` or `mode` is outside its set.
     """
     _require_ec(ec)
     _require_mode(mode)
@@ -257,35 +245,17 @@ def minimal_version(length: int, ec: str, mode: str) -> int | None:
 def truncation_keeps_version(length: int, window: int, ec: str) -> bool:
     """Return whether cutting a `length`-byte payload back to `window` bytes keeps its version.
 
-    This function is the single home of the ``truncated_payload`` predicate, so the target
-    that shortens a payload and the corpus check that proves the shortening is observable
-    are one rule rather than two that can drift apart.
+    The single home of the ``truncated_payload`` predicate, so the shortening target and the corpus
+    check that proves it observable are one rule. Both lengths are measured in "byte" mode, the most
+    expensive way to carry a character, so the measurement can only be conservative. The level is an
+    argument because the injection is specified at the *requested* level while cascade containment
+    holds only at the level the symbol is encoded at.
 
-    Both lengths are measured in "byte" mode, because the window and the payload are byte
-    counts and byte mode is the most expensive way to carry a character: a length that fits
-    at a version in byte mode fits at that version in every mode, so a truncation measured
-    this way can only be conservative about keeping the version, never optimistic.
+    Returns: ``True`` when both lengths select the same byte-mode Version at `ec`, ``False`` when
+    either overflows even Version 40; a `window` of 0 is legal.
 
-    The level is an argument rather than a constant because the two callers answer the
-    question at different levels. The truncation defect is specified as applying to a
-    payload "whose full length still selects the same version at the requested
-    error-correction level", while the same specification's cascade-containment requirement
-    -- the shortened payload must still occupy the version the whole one occupies, so that
-    a version assertion keeps a single cause -- can only hold at the level the symbol is
-    actually encoded at. This predicate answers at whichever level its caller passes, and
-    each caller passes the level it measures at.
-
-    Returns True when ``minimal_version(window, ec, "byte")`` equals
-    ``minimal_version(length, ec, "byte")``: both lengths select the same Model 2 version at
-    `ec`. Returns False when either length overflows even Version 40, where
-    ``minimal_version`` answers None -- two overflows are never treated as a match. A
-    `window` of 0 is legal and answers "the empty payload keeps its version" for every
-    `length` that fits Version 1.
-
-    Raises ValueError, naming the offending value, when `length` or `window` is not a
-    non-negative integer or `ec` is not one of `EC_LEVELS`: the validation is
-    :func:`minimal_version`'s own, so this function cannot disagree with it about what a
-    length or a level is.
+    Raises:
+    ValueError: `length` or `window` is not a non-negative integer, or `ec` is not a level.
     """
     window_version = minimal_version(window, ec, "byte")
     payload_version = minimal_version(length, ec, "byte")

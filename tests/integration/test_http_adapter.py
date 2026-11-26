@@ -1,29 +1,18 @@
 """The ``http`` adapter over its real transport: a loopback generator, driven by configuration.
 
 AAP §0.3.3 gives the ``http`` target one contract: the vendor shape lives entirely in
-configuration -- ``url``, ``method``, ``request_template`` with its eight placeholders,
-``image_field`` as a dotted path or the ``_body`` sentinel, ``image_encoding`` as ``base64`` or
-``raw``, and ``metadata_map`` -- and the adapter itself knows none of it. The mechanical half of
-that MUST NOT is the AST scan in ``tests/unit/test_targets_transport.py``; this module holds the
-positive half over a socket rather than a mock. ``examples/http_target_server.py`` is a
-load-bearing example (AAP §0.9.2): it runs here as a real process on an ephemeral loopback
-port, is configured into a ``[targets.<name>]`` table, and every assertion is measured from the
-artefact it answered with.
+configuration -- ``url``, ``method``, ``request_template``, ``image_field``,
+``image_encoding`` and ``metadata_map`` -- and the adapter knows none of it,
+``tests/unit/test_targets_transport.py`` holding the mechanical half as an AST scan. This
+module holds the positive half over a real socket, driving ``examples/http_target_server.py``
+as a real process and measuring every assertion from the artefact it answered with.
 
-Two contract details are stated rather than assumed: a non-2xx status is
-:class:`TargetContractError` and not ``TargetRejected``, because an HTTP target has no
-declared-rejection channel (AAP §0.14.1), the response's own bytes travelling on
-``body_prefix`` and its text staying in the message; and a configured ``metadata_map`` path the
-response does not carry is also :class:`TargetContractError` -- AAP §0.3.4's trigger is
-"missing field named in config" -- while a field that is *not configured* yields ``None``,
-because the adapter invents no claim. Every URL is the fixture's own
-``http://127.0.0.1:<port>``, so the offline guarantee of AAP §0.12 is the transport's own;
-every measurement is a pixel value or a decoded field, never a duration, a dict's order or a
-clock; artefacts land under ``tmp_path``, image bytes are read through :class:`io.BytesIO`, and
-adapters are closed through :func:`_open_adapter` so no connection outlives its test. Nothing is
-skipped, marked, retried or mocked (AAP §0.4.3, §0.5.6): a server that does not announce its
-port fails the fixture, not a skip here.
-"""
+A non-2xx status is :class:`TargetContractError`, not ``TargetRejected``, because an HTTP
+target has no declared-rejection channel (AAP §0.14.1), and so is a configured
+``metadata_map`` path the response does not carry -- while a field that is not configured
+yields ``None``. Every URL is the fixture's own loopback base, every measurement is a pixel
+value or a decoded field, and nothing is skipped, marked, retried or mocked (AAP §0.4.3,
+§0.5.6)."""
 
 from __future__ import annotations
 
@@ -52,9 +41,7 @@ from qrcheck.targets.base import (
     build_request,
 )
 
-# The example server's routes. These two paths are the *example's* shape, configured into a
-# target table through ``url``, and they are asserted only as configuration -- never as a fact
-# about ``qrcheck/targets/http.py``, which knows no endpoint at all.
+# The example server's routes: the example's own shape, configured into a table, not the adapter's.
 
 _GENERATE_ROUTE: Final[str] = "/generate"
 _RAW_ROUTE: Final[str] = "/raw"
@@ -62,41 +49,30 @@ _RAW_ROUTE: Final[str] = "/raw"
 #: The eight-byte signature every PNG begins with: an artefact-format assertion with no library.
 _PNG_SIGNATURE: Final[bytes] = b"\x89PNG\r\n\x1a\n"
 
-# ---------------------------------------------------------------------------
-# The fixed inputs
-#
-# Each is chosen so that a transport which dropped the corresponding value could not
-# accidentally produce the same artefact.
-# ---------------------------------------------------------------------------
+# The fixed inputs: each chosen so a transport that dropped the value could not match the artefact.
 
-#: The payload every case requests: it carries a non-ASCII character, so the UTF-8 channel has
-#: an encoding to perform and a lossy conversion would be visible.
+#: The payload every case requests; it carries a non-ASCII character, so lossy UTF-8 shows.
 _PAYLOAD_TEXT: Final[str] = "qrcheck http adapter integration payload \u2713"
 _PAYLOAD: Final[bytes] = _PAYLOAD_TEXT.encode("utf-8")
 
-#: A payload that is not valid UTF-8: only the base64 channel can carry it, which makes the two
-#: payload placeholders distinguishable rather than interchangeable.
+#: A payload that is not valid UTF-8: only the base64 channel can carry it, so the two differ.
 _BINARY_PAYLOAD: Final[bytes] = bytes(range(0x80, 0x88))
 
-#: The dark-module colour: no channel is 0 or 255, so a target that ignored ``{fg}`` and drew
-#: black could not match it.
+#: The dark-module colour: no channel is 0 or 255, so a target drawing black could not match it.
 _FOREGROUND: Final[tuple[int, int, int]] = (0x12, 0x34, 0x56)
 
 #: The light-module colour, likewise off-white rather than white.
 _BACKGROUND: Final[tuple[int, int, int]] = (0xDD, 0xEE, 0xFF)
 
-#: Module edge and quiet zone for the geometry cases: unequal, and neither the example's
-#: default, so a request that dropped ``{size}`` or ``{margin}`` would be measurable.
+#: Module edge and quiet zone for the geometry cases: unequal, and neither the example's default.
 _MODULE_PX: Final[int] = 6
 _QUIET_ZONE_MODULES: Final[int] = 2
 
-#: The requested levels: the one the run fixtures use, plus a second, so ``{ec_level}`` is
-#: proved transmitted rather than assumed right.
+#: The requested levels: the fixtures' one plus a second, so ``{ec_level}`` is proved transmitted.
 _EC_LEVEL: Final[str] = "M"
 _OTHER_EC_LEVEL: Final[str] = "Q"
 
-#: The capability names the example's routes honour: ``png`` always, plus the operations the
-#: placeholder set conveys, so a request that pins one is not refused before it is sent.
+#: The capability names the example's routes honour: ``png`` plus what the placeholders convey.
 _TEMPLATE_CAPABILITIES: Final[tuple[str, ...]] = (
     "png",
     "ec_level",
@@ -109,9 +85,7 @@ _TEMPLATE_CAPABILITIES: Final[tuple[str, ...]] = (
     "metadata_mode",
 )
 
-#: The envelope route's request body, one placeholder per value, exactly the table
-#: ``examples/http_target_server.py``'s docstring quotes; ``{format}`` is carried even though
-#: the example serves PNG only, because the value's transmission is what the proof needs.
+#: The envelope route's request body, the table the example's own docstring quotes.
 _REQUEST_TEMPLATE: Final[Mapping[str, str]] = {
     "payload_b64": "{payload_b64}",
     "ec_level": "{ec_level}",
@@ -129,17 +103,14 @@ _TEXT_REQUEST_TEMPLATE: Final[Mapping[str, str]] = {
     "format": "{format}",
 }
 
-#: The bounded run's request body: what a corpus case needs and nothing more, because
-#: ``RT-ROUNDTRIP`` pins no geometry, colour, version or mask.
+#: The bounded run's request body: ``RT-ROUNDTRIP`` pins no geometry, colour, version or mask.
 _BOUNDED_TEMPLATE: Final[Mapping[str, str]] = {
     "payload_b64": "{payload_b64}",
     "ec_level": "{ec_level}",
     "format": "{format}",
 }
 
-#: Framework field name -> dotted path into the response. The four names on the left are the
-#: product's own, never the vendor's, which is what makes them configurable rather than
-#: hard-coded.
+#: Framework field -> dotted path into the response; the left-hand names are the product's own.
 _METADATA_MAP: Final[Mapping[str, str]] = {
     "version": "metadata.version",
     "ec": "metadata.ec_level",
@@ -151,12 +122,10 @@ _METADATA_MAP: Final[Mapping[str, str]] = {
 _BOUNDED_CLASS: Final[str] = "otp"
 _BOUNDED_CLASS_RECORDS: Final[int] = 12
 
-#: The one check the bounded run selects: it needs nothing but ``png``, so it exercises the
-#: transport without asking for a capability the example cannot convey.
+#: The one check the bounded run selects: it needs nothing but ``png``.
 _BOUNDED_CHECK: Final[str] = "RT-ROUNDTRIP"
 
-#: What a target that declares no metadata must report, stated once so test 6's four
-#: assertions stay one rule.
+#: What a target that declares no metadata must report, stated once so test 6 stays one rule.
 _NO_DECLARED_METADATA: Final[Mapping[str, None]] = {
     "declared_version": None,
     "declared_ec": None,
@@ -164,18 +133,16 @@ _NO_DECLARED_METADATA: Final[Mapping[str, None]] = {
     "declared_mode": None,
 }
 
-#: The two requests the example server refuses, each paired with the wire field it varies. Both
-#: are built outside ``build_request`` on purpose: the point is a request the framework considers
-#: illegal reaching a target that rejects it.
+#: The two requests the example refuses, each with the wire field it varies; both are built outside
+#: ``build_request``, since the point is an illegal request reaching a target.
 _REJECTED_REQUESTS: Final[tuple[Any, ...]] = (
     pytest.param({"ec_level": "X"}, {"ec_level": "X"}, id="ec-level-outside-the-enum"),
     pytest.param({"module_size_px": 0}, {"module_size": 0}, id="module-size-zero"),
 )
 
 
-# The two fixture contracts this module borrows, declared as protocols rather than imported from
-# ``tests/integration/conftest.py``: a conftest is not an importable module of the package under
-# test, and stating the members used here keeps the coupling visible.
+# The two fixture contracts this module borrows, declared as protocols because a conftest is not an
+# importable module of the package under test; stating the members keeps the coupling visible.
 
 
 class _ServerCarrier(Protocol):
@@ -201,9 +168,7 @@ class _CliOutcome(Protocol):
     stderr: str
 
 
-# ---------------------------------------------------------------------------
 # Configuration and adapter lifecycle
-# ---------------------------------------------------------------------------
 
 
 def _http_target(
@@ -216,13 +181,7 @@ def _http_target(
     image_encoding: str = "base64",
     metadata_map: Mapping[str, str] | None = None,
 ) -> dict[str, object]:
-    """Return one ``[targets.<name>]`` table for the running example server.
-
-    Every value a vendor would choose is an argument here, which is the point: the adapter is
-    handed an endpoint, a body shape, a response path and a metadata mapping, and none of them is
-    written down in ``qrcheck/targets/http.py``. ``image_field`` is a dotted path, or ``_body``
-    for a response whose body is the image, and ``metadata_map`` is supplied only for an envelope.
-    """
+    """Return one ``[targets.<name>]`` table for the running example server."""
     table: dict[str, object] = {
         "type": "http",
         "url": f"{server.base_url}{route}",
@@ -244,13 +203,7 @@ def _write_config(
     *,
     default_adapter: str | None = None,
 ) -> Path:
-    """Write a schema-valid document under ``tmp_path`` and return its path.
-
-    ``report_dir`` and ``corpus_path`` are left to the fixture, which writes them as absolute
-    paths under ``tmp_path`` and names the committed corpus; nothing here restates a
-    configuration default (AAP §0.12). ``default_adapter`` falls back to the first target in name
-    order, so the document is valid whichever table the caller supplied.
-    """
+    """Write a schema-valid document under ``tmp_path`` and return its path."""
     return write(
         tmp_path / "qrcheck.toml",
         default_adapter=default_adapter or sorted(targets)[0],
@@ -261,13 +214,7 @@ def _write_config(
 
 @contextmanager
 def _open_adapter(config_path: Path, name: str) -> Iterator[Adapter]:
-    """Load ``config_path``, build the target called ``name``, and close it afterwards.
-
-    The adapter is resolved exactly as the product resolves it --
-    ``ADAPTER_TYPES[target.type](target, name=target_name)`` -- rather than constructed directly,
-    so this module exercises the extension point too. Closing in ``finally`` keeps a failing
-    assertion from leaking an HTTP connection into the next test.
-    """
+    """Load ``config_path``, build the target called ``name``, and close it afterwards."""
     config = load_config(config_path)
     target = config.targets[name]
     adapter = ADAPTER_TYPES[target.type](target, name=name)
@@ -277,17 +224,13 @@ def _open_adapter(config_path: Path, name: str) -> Iterator[Adapter]:
         adapter.close()
 
 
-# Measuring the artefact. The placeholder proofs measure pixels rather than echo the request: an
-# endpoint that repeated the request back would prove only that the framework can serialise a
-# dict, while a quiet zone, a module colour and a pixel dimension are properties of the symbol
-# actually produced.
+# Measuring the artefact: the proofs measure pixels rather than echo the request, because a quiet
+# repeating it back would prove only that the framework can serialise a dict, while a quiet zone, a
+# module colour and a pixel dimension are properties of the symbol actually produced.
 
 
 def _png_image(symbol: GeneratedSymbol) -> Image.Image:
-    """Return the symbol's artefact as an RGB image, refusing anything that is not a PNG.
-
-    RGB, so a pixel comparison is channel-for-channel against the colours that were requested.
-    """
+    """Return the symbol's artefact as an RGB image, refusing anything that is not a PNG."""
     payload = symbol.image_bytes
     assert payload.startswith(_PNG_SIGNATURE), (
         f"the target answered {payload[:8]!r}, which does not begin with the PNG "
@@ -301,13 +244,7 @@ def _border_pixels(
     image: Image.Image,
     background: tuple[int, int, int],
 ) -> tuple[int, int, int, int]:
-    """Return the all-background border on each side, as ``(left, top, right, bottom)`` in pixels.
-
-    The quiet zone is measured rather than read from a header, so ``{margin}`` is proved by the
-    artefact. The bounding box of every pixel that is not the background colour is the symbol's
-    own extent: the outermost dark module of the left finder pattern fixes the left edge exactly,
-    which is why the left border is that box's first column.
-    """
+    """Return the all-background border on each side, as ``(left, top, right, bottom)`` pixels."""
     flat = Image.new("RGB", image.size, background)
     difference = ImageChops.difference(image, flat).convert("L")
     mask = difference.point(lambda value: 255 if value else 0)
@@ -327,27 +264,16 @@ def _module_centre(index: int, *, margin: int, module_px: int) -> int:
 
 
 def _module_count(version: int) -> int:
-    """Return the side length in modules of a Model 2 symbol of ``version``: ``N = 4V + 17``.
-
-    The version comes from the decoded grid rather than from the target's own metadata, so the
-    dimension assertion is measured against the symbol that was actually produced (AAP §0.8.1).
-    """
+    """Return the side length in modules of a Model 2 symbol of ``version``: ``N = 4V + 17``."""
     return 4 * version + 17
 
 
 def _out_of_contract(**overrides: Any) -> GenerateRequest:
-    """Build a request the contract forbids, unvalidated by construction.
-
-    :class:`GenerateRequest` validates nothing (AAP §0.8.2) -- the gate is ``build_request`` --
-    so a deliberately illegal request has to be constructed directly; this helper exists so the
-    test says which field it is varying and nothing else.
-    """
+    """Build a request the contract forbids, unvalidated by construction."""
     return GenerateRequest(payload=_PAYLOAD, **overrides)
 
 
-# ---------------------------------------------------------------------------
 # 1 and 2: the two ways an artefact can arrive
-# ---------------------------------------------------------------------------
 
 
 def test_base64_image_field_decodes_to_the_requested_payload(
@@ -355,12 +281,7 @@ def test_base64_image_field_decodes_to_the_requested_payload(
     write_config: Callable[..., Path],
     tmp_path: Path,
 ) -> None:
-    """A base64 value at a configured dotted path decodes to exactly the requested payload.
-
-    Catches a broken ``image_field`` lookup, a broken ``image_encoding = "base64"`` branch and a
-    ``metadata_map`` that never reaches :class:`~qrcheck.targets.base.GeneratedSymbol`: with any
-    of them missing the artefact or the declared metadata is absent rather than merely different.
-    """
+    """A base64 value at a configured dotted path decodes to exactly the requested payload."""
     config = _write_config(
         write_config,
         tmp_path,
@@ -385,8 +306,7 @@ def test_base64_image_field_decodes_to_the_requested_payload(
     )
     assert symbol.output_format == "png"
 
-    # The metadata, through the configured map: ``declared_version`` is compared with the
-    # oracle's minimal version, so the claim is checked against something independent.
+    # The metadata through the configured map: ``declared_version`` vs the oracle's version.
     assert symbol.declared_version == minimal_version(len(_PAYLOAD), _EC_LEVEL, "byte"), (
         f"declared version {symbol.declared_version!r} is not the minimal version for "
         f"{len(_PAYLOAD)} bytes at EC {_EC_LEVEL}"
@@ -411,14 +331,7 @@ def test_raw_body_image_field_decodes_to_the_requested_payload(
     write_config: Callable[..., Path],
     tmp_path: Path,
 ) -> None:
-    """``image_field = "_body"`` with ``image_encoding = "raw"`` decodes the same symbol.
-
-    Catches the ``_body`` branch of the dotted-path rule (AAP §0.8.1): the response body *is* the
-    PNG, so a transport that looked for a JSON envelope would find no image at all. It is the only
-    case in the integration layer that reaches the raw branch, and it also pins that such a target
-    declares no metadata -- there is no envelope to read a claim from, so ``declared_*`` stays
-    ``None`` instead of echoing the request.
-    """
+    """``image_field = "_body"`` with ``image_encoding = "raw"`` decodes the same symbol."""
     config = _write_config(
         write_config,
         tmp_path,
@@ -426,8 +339,7 @@ def test_raw_body_image_field_decodes_to_the_requested_payload(
             "raw_body": _http_target(
                 http_target_server,
                 route=_RAW_ROUTE,
-                # The raw route answers with the body itself, so the template carries only
-                # what the example needs to encode: the payload and the format.
+                # The raw route answers with the body itself, so payload and format suffice.
                 template={"payload_b64": "{payload_b64}", "format": "{format}"},
                 capabilities=("png",),
                 image_field="_body",
@@ -457,9 +369,7 @@ def test_raw_body_image_field_decodes_to_the_requested_payload(
     )
 
 
-# ---------------------------------------------------------------------------
 # 3: all eight placeholders, each proved by its effect on the artefact
-# ---------------------------------------------------------------------------
 
 
 def test_every_template_placeholder_takes_effect(
@@ -467,12 +377,7 @@ def test_every_template_placeholder_takes_effect(
     write_config: Callable[..., Path],
     tmp_path: Path,
 ) -> None:
-    """Every one of the eight placeholders changes the symbol the server returns.
-
-    Catches a template channel that is configured but ignored. Nothing here reads the request back
-    off the wire -- the example has no echo -- so each placeholder is proved by the measurement
-    its value governs, in the block that follows it.
-    """
+    """Every one of the eight placeholders changes the symbol the server returns."""
     config = _write_config(
         write_config,
         tmp_path,
@@ -481,8 +386,7 @@ def test_every_template_placeholder_takes_effect(
                 http_target_server,
                 route=_GENERATE_ROUTE,
                 template=_REQUEST_TEMPLATE,
-                # ``svg`` is declared so an ``svg`` request is transmitted rather than refused
-                # before any I/O; the example's own rejection of that format proves it travels.
+                # ``svg`` is declared so an ``svg`` request travels rather than being refused first.
                 capabilities=(*_TEMPLATE_CAPABILITIES, "svg"),
                 metadata_map=_METADATA_MAP,
             ),
@@ -511,8 +415,7 @@ def test_every_template_placeholder_takes_effect(
         text_symbol = text.generate(text_request)
         assert decode_symbol(text_symbol.image_bytes, text_request).payload_bytes == _PAYLOAD
         with pytest.raises(TargetUnsupported):
-            # A payload that is not valid UTF-8 has no faithful text form, so the adapter
-            # refuses it before opening a connection rather than sending no payload.
+            # A payload that is not valid UTF-8 has no faithful text form, so it is refused.
             text.generate(build_request(_BINARY_PAYLOAD, _EC_LEVEL))
 
         # -- {ec_level}: the target's claim and both independent readings ---------------
@@ -586,8 +489,7 @@ def test_every_template_placeholder_takes_effect(
                 f"{border!r} (left, top, right, bottom) rather than {expected_border!r}"
             )
             measured[margin] = border
-        # Two modules more on every side at the same module size is exactly two modules of
-        # pixels: the value travelled, rather than the target's own default in both cases.
+        # Two modules more per side at the same size is two modules of pixels: the value travelled.
         narrow = measured[_QUIET_ZONE_MODULES]
         wide = measured[_QUIET_ZONE_MODULES + 2]
         growth = [later - earlier for earlier, later in zip(narrow, wide)]
@@ -610,8 +512,7 @@ def test_every_template_placeholder_takes_effect(
             )
         )
         pixels = sample_image.load()
-        # Module (2, 2) is the centre of the top-left finder pattern's 3x3 dark square, so
-        # it is a dark module whatever the payload or the mask is.
+        # Module (2, 2) is the centre of the top-left finder pattern's dark square, so it is dark.
         centre = _module_centre(2, margin=_QUIET_ZONE_MODULES, module_px=_MODULE_PX)
         assert pixels[centre, centre] == _FOREGROUND, (
             f"the dark module at ({centre}, {centre}) is {pixels[centre, centre]!r}, not "
@@ -623,9 +524,7 @@ def test_every_template_placeholder_takes_effect(
         )
 
 
-# ---------------------------------------------------------------------------
 # 4: a rejected request keeps the target's own words
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(("overrides", "wire_fields"), _REJECTED_REQUESTS)
@@ -636,18 +535,7 @@ def test_an_error_response_becomes_a_contract_error_with_the_text_preserved(
     write_config: Callable[..., Path],
     tmp_path: Path,
 ) -> None:
-    """A rejected request's error text reaches both the diagnostic and the evidence.
-
-    Catches a transport that replaces the target's words with a generic message: the text a
-    target refused with is what makes a failure readable without re-running it (AAP §0.3.4), so
-    its wording must reach ``str(exc)`` -- quoted there as a ``repr`` of the body, which is why the
-    quote characters inside it are compared after undoing that one escape -- and its verbatim bytes
-    must be carried on ``body_prefix``, from which the evidence field ``hex_prefix`` is built. The
-    type is :class:`TargetContractError`, not ``TargetRejected``, because an HTTP target has no
-    declared-rejection channel (AAP §0.14.1); this module's docstring records that decision. The
-    expected text is captured from the server by issuing the same call once with ``httpx``, so the
-    comparison is against what the server actually said rather than a string typed here.
-    """
+    """A rejected request's error text reaches both the diagnostic and the evidence."""
     config = _write_config(
         write_config,
         tmp_path,
@@ -686,9 +574,7 @@ def test_an_error_response_becomes_a_contract_error_with_the_text_preserved(
         with pytest.raises(TargetContractError) as raised:
             adapter.generate(request)
 
-    # The diagnostic quotes the response body as a ``repr``, so a quote character inside the
-    # target's own text arrives backslash-escaped there; undoing exactly that escape is what lets
-    # the comparison be against the server's wording rather than a re-encoding of it.
+    # The diagnostic quotes the body as a ``repr``, so a quote arrives escaped; undo exactly that.
     diagnostic = str(raised.value).replace("\\'", "'")
     assert declared in diagnostic, (
         f"the target's own error text {declared!r} is missing from the diagnostic "
@@ -700,9 +586,7 @@ def test_an_error_response_becomes_a_contract_error_with_the_text_preserved(
     )
 
 
-# ---------------------------------------------------------------------------
 # 5: a transport that cannot connect is reported, not retried
-# ---------------------------------------------------------------------------
 
 
 def test_a_stopped_server_is_unavailable(
@@ -710,14 +594,7 @@ def test_a_stopped_server_is_unavailable(
     write_config: Callable[..., Path],
     tmp_path: Path,
 ) -> None:
-    """A refused connection is ``TargetUnavailable``, and the stop is what makes it so.
-
-    Catches a transport that swallows the refusal, retries, or maps it onto a contract error
-    blaming the target for an answer it never gave. The identical call is made against the running
-    server first and asserted to succeed, so the assertion after ``stop()`` is sensitive to the
-    stop rather than to a target that was never reachable; nothing asserts elapsed time, because a
-    duration would measure the machine.
-    """
+    """A refused connection is ``TargetUnavailable``, and the stop is what makes it so."""
     config = _write_config(
         write_config,
         tmp_path,
@@ -747,9 +624,7 @@ def test_a_stopped_server_is_unavailable(
             adapter.generate(request)
 
 
-# ---------------------------------------------------------------------------
 # 6: metadata that is absent, and metadata that was never configured
-# ---------------------------------------------------------------------------
 
 
 def test_an_absent_configured_metadata_path_is_a_contract_error(
@@ -757,16 +632,7 @@ def test_an_absent_configured_metadata_path_is_a_contract_error(
     write_config: Callable[..., Path],
     tmp_path: Path,
 ) -> None:
-    """Configured metadata the response lacks is a contract error; unconfigured metadata is None.
-
-    Both halves matter, and they are different rules (AAP §0.3.4): a ``metadata_map`` entry naming
-    a path the response does not carry is the "missing field named in config" failure, so it
-    reports :class:`TargetContractError` naming the framework field and the path rather than
-    silently inventing a claim. A framework field that is simply not configured asks the target
-    nothing, so its ``declared_*`` value stays ``None`` even though the response carries the value
-    under its own key, which is what catches an adapter that reports a default, or the request, as
-    if the target had said it.
-    """
+    """Configured metadata the response lacks is a contract error; unconfigured metadata is None."""
     config = _write_config(
         write_config,
         tmp_path,
@@ -783,8 +649,7 @@ def test_an_absent_configured_metadata_path_is_a_contract_error(
                 route=_GENERATE_ROUTE,
                 template=_REQUEST_TEMPLATE,
                 capabilities=_TEMPLATE_CAPABILITIES,
-                # Only two of the four fields are configured, though the response carries
-                # all four: the unconfigured pair must arrive as None rather than be read.
+                # Only two of the four fields are configured: the other two must arrive as None.
                 metadata_map={"mask": "metadata.mask", "mode": "metadata.mode"},
             ),
         },
@@ -821,9 +686,7 @@ def test_an_absent_configured_metadata_path_is_a_contract_error(
     )
 
 
-# ---------------------------------------------------------------------------
 # 7: the whole product over the same transport
-# ---------------------------------------------------------------------------
 
 
 def test_a_bounded_run_through_the_http_adapter_passes(
@@ -832,14 +695,7 @@ def test_a_bounded_run_through_the_http_adapter_passes(
     run_cli: Callable[..., _CliOutcome],
     tmp_path: Path,
 ) -> None:
-    """``run --checks RT-ROUNDTRIP --class otp`` drives the loopback target and exits 0.
-
-    Catches a run that cannot use a configured HTTP target at all, a ``skipped`` result counted as
-    a pass, and an exit code that disagrees with the counts: the twelve ``otp`` records AAP §0.8.2
-    declares must each be ``passed``, with ``failed``, ``error`` and ``skipped`` all zero, and the
-    documented status 0 (AAP §0.3.4). The run crosses the real process boundary and the real
-    socket, so the passes are the proof that the server received the traffic.
-    """
+    """``run --checks RT-ROUNDTRIP --class otp`` drives the loopback target and exits 0."""
     report_dir = tmp_path / "reports"
     config = _write_config(
         write_config,

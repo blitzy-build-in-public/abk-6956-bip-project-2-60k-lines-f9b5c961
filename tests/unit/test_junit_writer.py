@@ -1,32 +1,23 @@
 """The JUnit writer's ``xunit2`` shape, its one-child-per-status rule and its hygiene.
 
-AAP §0.6.1 gate 6 names this module as the gate holding ``junit.xml``, the artefact CI stores
-as evidence and gates a merge on. Every document is written by
+AAP §0.6.1 gate 6 names this module as the gate that holds ``junit.xml``, the one artefact CI
+stores as evidence and gates a merge on. Every document is written by
 :func:`qrcheck.report.junit.write_junit` from a :class:`~qrcheck.report.model.RunResult` built
-by the shared factories, and the one comparison that needs the neighbouring artefact is made
-against a ``summary.json`` written from that same run, so no ordering rule is re-implemented
-(AAP §0.3.4, §0.5.3, §0.5.4). Pinned: one ``testsuites`` root holding exactly one ``testsuite
-name="qrcheck"``, with ``tests``, ``failures``, ``errors`` and ``skipped`` equal to the run's
-four integers so a skipped case can never be counted as a pass in the artefact CI reads, and a
-run with no result still producing a well-formed document; one ``testcase`` per result in
-``summary.json`` order, so neither writer may re-sort independently; ``name`` as
-``<CHECK-ID>[<case-id>]``, ``classname`` as ``qrcheck.<family>`` with the family read from
-:mod:`qrcheck.registry.check` rather than guessed from the identifier's prefix, and ``time``
-with exactly three decimals, because a raw float renders as ``1.25`` or ``1e-05`` and breaks the
-parsers that assume seconds with millisecond precision; exactly one child element per skipped,
-failed or errored status, carrying the machine-readable reason and, for a failure, the
-decoded-versus-expected detail; the deliberate absences -- no ``hostname``, no ``timestamp``, no
-``file``/``line``, nothing outside a small allow-list, asserted by walking every element and
-attribute name -- because a wall-clock reading makes two identical runs differ (AAP §0.5.5);
-and byte-identical documents for two runs that differ only in durations and timestamps once the
-``time`` attributes are masked.
+by the shared factories (AAP §0.3.4, §0.5.3, §0.5.4).
 
-XML 1.0 safety is held here too: the corpus carries embedded NULs and a target is untrusted, and
-``ElementTree`` escapes markup but emits a control character raw, so only the writer's own
-filter keeps a hostile case identifier, payload or traceback parseable. Every file is written
-under the ``report_dir`` fixture; nothing here reads a clock, the network, the environment or a
-directory this module did not create.
-"""
+Pinned: one ``testsuites`` root holding exactly one ``testsuite name="qrcheck"``; ``tests``,
+``failures``, ``errors`` and ``skipped`` equal to the run's four integers, so a skipped case can
+never count as a pass in the artefact CI reads; one ``testcase`` per result in ``summary.json``
+order; ``name`` as ``<CHECK-ID>[<case-id>]``, ``classname`` as ``qrcheck.<family>`` read from
+:mod:`qrcheck.registry.check` rather than guessed from the identifier (an unregistered one
+degrades to ``qrcheck.unknown``) and ``time`` with exactly three decimals, because a raw float
+renders as ``1.25`` or ``1e-05``; exactly one child element per skipped, failed or errored
+status; the deliberate absences -- no ``hostname``, no ``timestamp``, no ``file``/``line`` --
+because a wall-clock reading makes two identical runs differ (AAP §0.5.5); and byte-identical
+documents once ``time`` is masked.
+
+XML 1.0 safety is held here too: ``ElementTree`` escapes markup but emits a control character
+raw, so only the writer's own filter keeps a hostile identifier, payload or traceback parseable."""
 
 import json
 import re
@@ -182,12 +173,8 @@ def _mask_time_attributes(data: bytes) -> bytes:
 
 
 def _family_of(check_id: str) -> str:
-    """Return the family :mod:`qrcheck.registry.check` declares for ``check_id``. The registry
-    module owns check identity, so its two declarations are the only sources consulted: the
-    contract under ``check_id`` when the check family modules have imported, and otherwise the
-    constant prefix table - which resolves the same family whether or not they have, and is
-    what the writer itself falls back to.
-    """
+    """Return the family :mod:`qrcheck.registry.check` declares for ``check_id``: the contract when
+    the families have imported, otherwise the constant prefix table the writer falls back to."""
     contract = REGISTRY.get(check_id)
     if contract is not None:
         return contract.family
@@ -198,11 +185,8 @@ def _mixed_status_run(
     make_case_result: Callable[..., CaseResult],
     make_run_result: Callable[..., RunResult],
 ) -> RunResult:
-    """Return a run whose five cases reach all four statuses. Two passes, one failure, one skip
-    and one error give every tally a distinct non-zero value, so a document that confused two
-    of them - a skip counted as a pass, say - cannot match the expected attributes, and the
-    per-status child elements are all present in one document.
-    """
+    """Return a run whose five cases reach all four statuses: two passes, one failure, one skip and
+    one error give every tally a distinct value, so a confused document cannot match."""
     results = (
         make_case_result(
             check_id="RT-ROUNDTRIP",
@@ -253,11 +237,8 @@ def _durations_run(
     started_at: str | None = None,
     finished_at: str | None = None,
 ) -> RunResult:
-    """Return a run whose only volatile content is its durations and its timestamps. Both cases
-    keep their identity, status and evidence across calls, so two runs built with different
-    durations describe the same outcome and differ only in what AAP §0.5.4 declares volatile -
-    which is the comparison the reproducibility case makes.
-    """
+    """Return a run whose only volatile content is its durations and timestamps: both cases keep
+    their identity, status and evidence, so two durations describe the same outcome."""
     results = (
         make_case_result(
             check_id="RT-ROUNDTRIP",
@@ -280,9 +261,7 @@ def _durations_run(
 
 
 
-# ---------------------------------------------------------------------------
 # The skeleton and the tallies
-# ---------------------------------------------------------------------------
 
 
 def test_document_parses_into_one_suite_named_qrcheck(
@@ -307,11 +286,8 @@ def test_suite_tallies_equal_the_run_counts(
     make_run_result: Callable[..., RunResult],
     report_dir: Path,
 ) -> None:
-    """``tests``/``failures``/``errors``/``skipped`` are the run's four tally integers. The
-    expectation is recomputed from the case results with
-    :meth:`~qrcheck.report.model.Counts.from_results` rather than read back from the run, so
-    the document is compared against the tallies the results imply.
-    """
+    """``tests``/``failures``/``errors``/``skipped`` are the run's four tally integers, recomputed
+    from the case results with ``Counts.from_results`` rather than read back from the run."""
     run = _mixed_status_run(make_case_result, make_run_result)
     expected = Counts.from_results(run.results)
     assert expected == run.counts
@@ -369,9 +345,7 @@ def test_zero_result_run_writes_a_well_formed_document_with_no_case(
     assert _testcases(path) == []
 
 
-# ---------------------------------------------------------------------------
 # One testcase per result, in the summary's order, with the documented attributes
-# ---------------------------------------------------------------------------
 
 
 def test_testcase_order_equals_the_summary_order(
@@ -414,11 +388,8 @@ def test_testcase_attributes_name_the_check_and_its_family(
     make_run_result: Callable[..., RunResult],
     report_dir: Path,
 ) -> None:
-    """``name`` is ``<CHECK-ID>[<case-id>]``, ``classname`` is ``qrcheck.<family>``, ``time``. The
-    family comes from :mod:`qrcheck.registry.check`, never from the identifier's own spelling,
-    and the duration is rendered with exactly three decimals: 1250 ms is ``1.250`` seconds, not
-    ``1.25``.
-    """
+    """``name`` is ``<CHECK-ID>[<case-id>]``, ``classname`` is ``qrcheck.<family>``, ``time`` the
+    duration: the family comes from the registry, and 1250 ms renders as ``1.250``, not ``1.25``."""
     case = make_case_result(
         check_id=check_id,
         case_id="corpus:url-001",
@@ -446,12 +417,8 @@ def test_registered_contract_supplies_the_classname_family(
     make_run_result: Callable[..., RunResult],
     report_dir: Path,
 ) -> None:
-    """A registered contract's own ``family`` is what the classname names. Registration rejects a
-    contract whose family does not own its identifier's prefix, so a legal contract can only
-    agree with the prefix table; what this pins is that the answer is *read* from the contract
-    rather than spelled out of the identifier, which is what keeps the classname tied to
-    ``CheckContract.family`` instead of to a naming convention.
-    """
+    """A registered contract's own ``family`` is what the classname names: registration rejects a
+    contract whose family does not own its prefix, so the answer is *read* rather than spelled."""
     contract = CheckContract(
         id="RT-ROUNDTRIP",
         title="Payload round-trip",
@@ -499,12 +466,8 @@ def test_non_string_check_id_degrades_its_classname_to_unknown(
     make_run_result: Callable[..., RunResult],
     report_dir: Path,
 ) -> None:
-    """A non-``str`` identifier has no prefix segment, so it degrades as a stranger does. The
-    result record does not restrict ``check_id`` to ``str``; the run therefore carries this one
-    case alone, because the model's ``(check_id, case_id)`` sort has no sensible ordering
-    between an ``int`` and a ``str`` - and refusing that pair is the model's job, not this
-    writer's.
-    """
+    """A non-``str`` identifier has no prefix segment, so it degrades as a stranger does: the
+    run carries one case alone, its sort having no order."""
     case = make_case_result(check_id=12345, case_id="synthetic:integer", status=Status.PASSED)
     run = make_run_result((case,))
 
@@ -515,9 +478,7 @@ def test_non_string_check_id_degrades_its_classname_to_unknown(
     assert testcases[0].get("name") == "12345[synthetic:integer]"
 
 
-# ---------------------------------------------------------------------------
 # The one child element each status emits
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -556,11 +517,8 @@ def test_status_decides_the_single_child_element(
     make_run_result: Callable[..., RunResult],
     report_dir: Path,
 ) -> None:
-    """A pass carries no child; a skip, a failure and an error carry exactly one. The ``message``
-    attribute is the machine-readable reason token - never a sentence - so a consumer can act
-    on it, and only a failure and an error carry a body: the decoded-versus-expected detail and
-    the traceback respectively.
-    """
+    """A pass carries no child; a skip, a failure and an error carry exactly one, whose ``message``
+    is the machine-readable reason token, never a sentence."""
     case = make_case_result(
         check_id="RT-ROUNDTRIP",
         case_id="corpus:url-001",
@@ -619,12 +577,8 @@ def test_error_without_a_traceback_renders_its_decoded_mapping(
     make_run_result: Callable[..., RunResult],
     report_dir: Path,
 ) -> None:
-    """An error whose ``decoded`` carries no traceback still gets a body, never an empty one. Only
-    an internal fault reaches the writer with a traceback under
-    :data:`~qrcheck.report.model.TRACEBACK_KEY`; an error result raised another way has to stay
-    inspectable, so the whole decoded mapping is rendered through the canonical JSON formatter
-    and a reader can still see what the case held.
-    """
+    """An error whose ``decoded`` carries no traceback still gets a body, never an empty one: the
+    whole mapping is rendered through the canonical JSON formatter, so it stays inspectable."""
     decoded = {"stage": "assertion", "detail": "no traceback was recorded"}
     case = make_case_result(
         check_id="PF-DECODE",
@@ -642,9 +596,7 @@ def test_error_without_a_traceback_renders_its_decoded_mapping(
     assert json.loads(children[0].text or "") == decoded
 
 
-# ---------------------------------------------------------------------------
 # The deliberate absences: nothing volatile, nothing invented
-# ---------------------------------------------------------------------------
 
 
 def test_only_documented_elements_and_attributes_are_emitted(
@@ -679,11 +631,8 @@ def test_two_runs_that_differ_only_in_durations_agree_once_time_is_masked(
     make_run_result: Callable[..., RunResult],
     report_dir: Path,
 ) -> None:
-    """Duration and timestamps are the whole volatile inventory, and only ``time`` escapes. Their
-    documents differ before masking - proving the durations really do reach the file - and are
-    equal after it, which is the semantic equality AAP §0.5.4 promises for ``junit.xml`` and
-    the reason no hostname or timestamp may ever be written into it.
-    """
+    """Duration and timestamps are the whole volatile inventory, and only ``time`` escapes: the
+    documents differ before masking and are equal after it (AAP §0.5.4)."""
     first = _durations_run(make_case_result, make_run_result, first_ms=1.5, second_ms=900.0)
     second = _durations_run(
         make_case_result,
@@ -727,9 +676,7 @@ def test_document_uses_lf_line_endings_and_one_trailing_newline(
     assert raw.decode("utf-8").startswith("<?xml")
 
 
-# ---------------------------------------------------------------------------
 # Hostile text: escaped where XML can escape it, stripped where only stripping helps
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("injection", ("case_id", "failure_body", "traceback"))
@@ -739,11 +686,8 @@ def test_hostile_text_stays_escaped_and_the_document_still_parses(
     make_run_result: Callable[..., RunResult],
     report_dir: Path,
 ) -> None:
-    """Target-supplied text reaches the document as text, and the document still parses. Three
-    sinks are exercised, because they take different paths: a case identifier lands in an
-    attribute, a decoded payload lands in a failure body through the canonical JSON formatter
-    and then the XML writer, and a traceback lands in an error body as raw text.
-    """
+    """Target-supplied text reaches the document as text and the document still parses: the
+    identifier lands in an attribute, the payload and traceback in bodies."""
     if injection == "case_id":
         case = make_case_result(
             check_id="RT-ROUNDTRIP",

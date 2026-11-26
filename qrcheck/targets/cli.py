@@ -1,58 +1,23 @@
-"""The ``cli`` adapter: an out-of-process generator driven as an argv-only subprocess.
+"""The ``cli`` adapter: an out-of-process QR generator driven as an argv-only subprocess.
 
-A ``type = "cli"`` target is a program run once per request.  This module owns the command
-line, where the artefact is expected, how a non-zero exit is interpreted and how the target's
-metadata is read; ``examples/cli_target.py``, executed by
-``tests/integration/test_cli_adapter.py``, is the working counterpart of the contract
-``docs/targets.md`` quotes.
+A ``type = "cli"`` target is a program run once per request, and this module owns the exchange: the
+command line, where the artefact appears, how a non-zero exit is read and how metadata is read. No
+shell is interposed: the argument vector is a list handed to ``subprocess.run(argv, shell=False,
+timeout=...)``, so a payload carrying ``;`` or ``$(...)`` stays one literal argv word, and the
+timeout kills the child.
 
-``command`` is untrusted configuration and the payload untrusted corpus data, so the line is
-built as a list of strings and handed to ``subprocess.run(argv, shell=False,
-timeout=timeout_s)``: no shell is ever interposed, so ``;``, ``$(...)`` or a quote in a
-payload or an argument is one literal argv word, and the timeout kills the child instead of
-leaving it running.
+``payload_arg`` is either a placeholder template (``{}`` as strict UTF-8 text, ``{payload_b64}``,
+``{payload_utf8}``, ``{ec_level}``, ``{format}``, ``{size}``, ``{margin}``, ``{fg}``, ``{bg}``) or a
+bare ``-``-prefixed flag passed as one argv word with the raw payload on the child's stdin. No
+placeholder carries a version pin, a mask pin or a logo overlay, so such a request is refused with
+``TargetUnsupported`` before any I/O. A placeholder-bearing ``output_arg`` receives a
+``symbol.png``/``symbol.svg`` path inside a ``tempfile.mkdtemp(prefix="qrcheck-")`` directory whose
+prefix is a product-wide contract, and the directory is removed in a ``finally`` block.
 
-``payload_arg`` takes one of two shapes.  A placeholder template substitutes ``{}`` (the
-payload as UTF-8, a ``TargetContractError`` when it is not strictly decodable),
-``{payload_b64}``, ``{payload_utf8}``, ``{ec_level}``, ``{format}``, ``{size}``, ``{margin}``,
-``{fg}`` and ``{bg}`` -- the HTTP adapter's ``request_template`` vocabulary, so one mental
-model covers both transports -- and an unknown placeholder is refused with ``ValueError``
-naming ``targets.<name>.payload_arg``.  A template starting with ``-`` and carrying no
-placeholder is passed as one argv word with the raw payload bytes on the child's stdin
-(``--payload-b64=-``, or a valueless flag such as ``--payload-stdin``); the two-word
-spelling is a shell convention this adapter cannot produce.  Neither template can carry a
-version pin, a mask pin or an overlay, so such a request is refused with
-``TargetUnsupported`` before any I/O and the affected check reports a skip.  Anything else is
-a configuration fault refused with ``ValueError`` naming the key.
-
-A placeholder-bearing ``output_arg`` receives the path of a file the framework creates in a
-directory made by ``tempfile.mkdtemp(prefix="qrcheck-")``; the ``symbol.png``/``symbol.svg``
-extension states the requested format, and the prefix is a product-wide contract because
-``CL-ARTIFACTS`` compares ``tempfile.gettempdir()`` before and after a run for names carrying
-it.  The directory is removed in a ``finally`` block, so it survives neither a timeout nor a
-non-zero exit nor a contract error.  An empty ``output_arg`` passes no path and expects the
-artefact on stdout, which only a stdout-based ``returns`` can read.
-
-``returns`` is ``file_path``, ``bytes_path``, ``raw_bytes`` or ``base64``, decoded through
-:func:`~qrcheck.targets.base.decode_returned_image` and
-:func:`~qrcheck.targets.base.ensure_image_bytes` -- the port's shared helpers, so this
-adapter and the ``library`` adapter accept and refuse exactly the same bodies.  A
-``metadata_map`` beside a stdout-based ``returns`` is refused at construction, since stdout is
-already consumed.
-
-A non-zero exit is a declared rejection only when the target says so, because the ``IV-*``
-checks pass on a declared rejection and a fabricated one would make them vacuous.  The last
-non-empty line of stderr is tried first, then of stdout, in two spellings: a JSON object with
-a string ``error`` member, whose value becomes the rejection text verbatim, or a line
-beginning with ``rejected:``, whose remainder is the text -- so ``str(TargetRejected(...))``
-is exactly what the target said.
-
-``metadata_map`` projects the target's claims onto ``version``, ``ec``, ``mask`` and ``mode``
-as ``GeneratedSymbol.declared_*``, evidence that no check asserts.
-
-Layering: the standard library, :mod:`qrcheck.config.models` and :mod:`qrcheck.targets.base`
-only -- no decoder, image library, check, report or registry -- the property
-``tests/unit/test_layering.py`` holds for the whole ``targets`` package.
+``returns`` is ``file_path``, ``bytes_path``, ``raw_bytes`` or ``base64``. A non-zero exit is a
+declared rejection only for a JSON object with a string ``error`` member or a line beginning
+``rejected:``, else it is a ``TargetContractError``, because the ``IV-*`` checks pass on a declared
+rejection and a fabricated one would make them vacuous.
 """
 
 from __future__ import annotations
@@ -89,24 +54,28 @@ from qrcheck.targets.base import (
 
 __all__ = ["CliAdapter"]
 
-# The prefix of every temporary directory this adapter creates.  CL-ARTIFACTS
+# The prefix of every temporary directory this adapter creates. CL-ARTIFACTS
 # scans tempfile.gettempdir() for this prefix before and after a run, so it is a
 # contract shared with qrcheck/checks/cleanup.py rather than a private habit.
 TEMP_DIR_PREFIX: Final[str] = "qrcheck-"
 
-# The artefact's name inside that directory.  The extension carries the requested
+# The artefact's name inside that directory. The extension carries the requested
 # format, so a target which infers its writer from the path is not misled.
 _TEMP_ARTEFACT_STEM: Final[str] = "symbol"
 
 # A placeholder is a brace-delimited name: "{payload_b64}", or "{}" for the bare
-# payload.  One pattern serves both argument templates, so a template carrying an
+# payload. One pattern serves both argument templates, so a template carrying an
 # unknown placeholder is refused rather than passed through literally.
 _TOKEN_PATTERN: Final[re.Pattern[str]] = re.compile(r"\{([A-Za-z0-9_]*)\}")
 
-# The vocabulary that pattern accepts, in the order the diagnostics list it: the
+# The vocabulary that pattern accepts, in diagnostic order: the bare "{}" followed by the eight
+# named placeholders of the HTTP adapter's ``request_template``, which both transports share. One
+# list has two readers -- the ``ValueError`` for an unknown placeholder and the
+# ``TargetUnsupported``
+# for a request no template can carry -- so the two cannot drift apart.
 # bare "{}" -- the payload, or the artefact path in ``output_arg`` -- followed by
 # the eight named placeholders of the HTTP adapter's ``request_template``, which
-# the two transports share so one mental model covers both.  One list has two
+# the two transports share so one mental model covers both. One list has two
 # readers, the ``ValueError`` for an unknown placeholder and the
 # ``TargetUnsupported`` for a request no template can carry, so the two can never
 # drift apart.
@@ -122,8 +91,9 @@ _TEMPLATE_TOKENS: Final[tuple[str, ...]] = (
     "{bg}",
 )
 
-# Request fields no placeholder in either argument template can convey, paired
-# with the capability that governs each.  The words of ``command`` are spliced
+# Request fields no placeholder can convey, with the capability governing each:
+# ``command`` words are spliced literally, so a request pinning one is refused before any I/O.
+# with the capability that governs each. The words of ``command`` are spliced
 # literally and the vocabulary above has no version, mask or logo token, so a
 # request that pins one is refused before any I/O rather than run without it --
 # the decision ``qrcheck/targets/http.py`` already makes for its request template.
@@ -146,7 +116,7 @@ DIAGNOSTIC_TAIL_CHARS: Final[int] = 2000
 # cannot also read the target's metadata from it.
 _STDOUT_RETURNS: Final[frozenset[str]] = frozenset({"base64", "raw_bytes"})
 
-# The colour pair a request carries when it asks for nothing in particular.  Only
+# The colour pair a request carries when it asks for nothing in particular. Only
 # a request which changes one of them needs the `color` capability, so a target
 # declaring no colour support still serves every ordinary request.
 _DEFAULT_FOREGROUND: Final[tuple[int, int, int]] = (0, 0, 0)
@@ -157,10 +127,9 @@ _DEFAULT_BACKGROUND: Final[tuple[int, int, int]] = (255, 255, 255)
 class _Invocation:
     """What one ``generate`` call runs, and where its artefact will appear.
 
-    Built before any subprocess exists so a configuration or payload fault is
-    raised without spawning anything.  ``temp_dir`` is the directory created for
-    this call alone -- ``None`` when no path was passed to the target -- and it is
-    what ``generate`` removes on every path, including the failing ones.
+    Built before any subprocess exists, so a configuration or payload fault is raised without
+    spawning anything. ``temp_dir`` is the directory created for this call alone, and it is what
+    ``generate`` removes on every path.
     """
 
     argv: tuple[str, ...]
@@ -172,30 +141,17 @@ class _Invocation:
 class CliAdapter:
     """Drive a configured ``command`` as one argv-only subprocess per request.
 
-    The adapter holds no process and no temporary directory between calls: each
-    :meth:`generate` spawns the target, reads its artefact and removes the
-    directory it made before returning or raising.  It raises only the five
-    :class:`~qrcheck.targets.base.TargetError` subclasses, because every library
-    exception a subprocess can produce is converted at the point it is caught.
+    The adapter holds no process and no temporary directory between calls, and raises only the five
+    :class:`~qrcheck.targets.base.TargetError` subclasses, because every library exception a
+    subprocess can produce is converted where it is caught.
     """
 
     def __init__(self, config: CLITarget, *, name: str | None = None) -> None:
         """Prepare the adapter for `config` without spawning anything.
 
-        Args:
-            config: The resolved ``[targets.<name>]`` record of a ``cli`` target.
-            name: The target's configured name, which every diagnostic quotes.
-                Defaults to ``config.type``.
-
         Raises:
-            ValueError: The configuration cannot describe a subprocess invocation
-                it would be safe to run -- an empty ``command``, a NUL in a
-                configured string (no argv word may carry one), a ``returns``
-                value outside its set, or a ``metadata_map`` beside a
-                stdout-based ``returns``, which would consume the same stream
-                twice.  The message names the offending dotted key.  These are
-                faults ``qrcheck.config.schema`` rejects or cannot see, and none
-                of them is a target defect.
+        ValueError: An empty ``command``, a NUL in a configured string, a ``returns`` outside its
+        set, or a ``metadata_map`` beside a stdout-based ``returns``.
         """
         self.name: str = name if name is not None else config.type
         self.capabilities: frozenset[Capability] = declared_capabilities(config)
@@ -224,27 +180,13 @@ class CliAdapter:
     def generate(self, request: GenerateRequest) -> GeneratedSymbol:
         """Run the target once for `request` and return the symbol it produced.
 
-        Args:
-            request: The request to hand the target.
-
-        Returns:
-            The artefact byte for byte as the target produced it, with the
-            metadata the target declared and the measured target-side duration.
-
         Raises:
-            TargetUnsupported: The request asks for something the target did not
-                declare, or pins a version or a mask or asks for a logo overlay,
-                none of which any placeholder in either argument template can
-                carry.  Raised before any I/O, so no directory is created and the
-                target is never started.
-            TargetUnavailable: The program could not be spawned.
-            TargetTimeout: The target outlived ``timeout_s`` and was killed.
-            TargetRejected: The target declared a client-side rejection.
-            TargetContractError: The target exited zero without a usable artefact,
-                or exited non-zero without declaring a rejection.
-            ValueError: A template carries an unknown placeholder, or the payload
-                cannot be interpolated into the shape the template asks for.  The
-                message names the configured key.
+        TargetUnsupported: An undeclared capability, or a pin or overlay no template carries.
+        TargetUnavailable: The program could not be spawned.
+        TargetTimeout: The target outlived ``timeout_s`` and was killed.
+        TargetRejected: The target declared a client-side rejection.
+        TargetContractError: It exited without a usable artefact or a declared rejection.
+        ValueError: An unknown placeholder, or a payload the template cannot take.
         """
         require_capabilities(self, _required_capabilities(request))
         self._reject_inexpressible(request)
@@ -298,20 +240,11 @@ class CliAdapter:
     def _reject_inexpressible(self, request: GenerateRequest) -> None:
         """Refuse a request neither configured argument template can convey.
 
-        ``version``, ``mask`` and ``logo_overlay_path`` have no placeholder in
-        :data:`_TEMPLATE_TOKENS`, and the words of ``command`` are spliced
-        literally, so nothing this adapter runs can carry them to the target.
-        Running the request anyway would let the target encode whatever it
-        prefers and report that choice as a conformance failure, so the request is
-        refused here instead and the affected check reports a skip.  A field the
-        target did not declare is refused by :func:`require_capabilities` first,
-        with the same error type, so an undeclared capability keeps its own
-        diagnostic.
+        ``version``, ``mask`` and ``logo_overlay_path`` have no placeholder and the words of
+        ``command`` are spliced literally, so nothing this adapter runs can carry them.
 
         Raises:
-            TargetUnsupported: The request pins a version or a mask, or asks for a
-                logo overlay.  Raised before any I/O: no temporary directory is
-                created and no process is spawned.
+        TargetUnsupported: A version or mask pin, or a logo overlay. Raised before any I/O.
         """
         for field_name, capability in _INEXPRESSIBLE_FIELDS:
             if getattr(request, field_name) is None:
@@ -325,14 +258,13 @@ class CliAdapter:
     def _build_invocation(self, request: GenerateRequest) -> _Invocation:
         """Assemble the command line and the artefact path for `request`.
 
-        Nothing is spawned here.  The only I/O is the temporary directory a
-        path-bearing ``output_arg`` needs, and a rendering fault after it is
-        created removes that directory before the failure propagates.
+        Nothing is spawned here; the only I/O is the temporary directory a path-bearing
+        ``output_arg`` needs.
 
         Raises:
-            ValueError: ``payload_arg`` is neither a placeholder template nor a
-                flag, or ``output_arg`` names no artefact path.
-            TargetContractError: The payload cannot be interpolated as UTF-8 text.
+        ValueError: ``payload_arg`` is neither a template nor a flag, or ``output_arg`` names no
+        path.
+        TargetContractError: The payload cannot be interpolated as UTF-8 text.
         """
         words, stdin_payload = self._payload_argument(request)
         argv = [*self._command, *words]
@@ -359,11 +291,8 @@ class CliAdapter:
         """Return the payload's argv words and, for the stdin form, the bytes to pipe.
 
         Raises:
-            ValueError: ``payload_arg`` is neither a placeholder template nor a flag.
-                The configuration schema accepts only those two shapes, so this is a
-                framework-visible configuration fault rather than a target defect.
-            TargetContractError: A text placeholder was given a payload that is not
-                UTF-8-decodable.
+        ValueError: ``payload_arg`` is neither a placeholder template nor a flag.
+        TargetContractError: A text placeholder was given a payload that is not UTF-8-decodable.
         """
         template = self._payload_arg
         if _TOKEN_PATTERN.search(template):
@@ -387,15 +316,14 @@ class CliAdapter:
         """Substitute every placeholder in `template` from `request`.
 
         Args:
-            template: The configured argument template.
-            request: The request being rendered.
-            key: ``payload_arg`` or ``output_arg``, for the diagnostic.
-            path: The artefact path that ``{}`` stands for in ``output_arg``.
+        template: The configured argument template.
+        request: The request being rendered.
+        key: ``payload_arg`` or ``output_arg``, for the diagnostic.
+        path: The artefact path that ``{}`` stands for.
 
         Raises:
-            ValueError: A placeholder is outside the token vocabulary.
-            TargetContractError: A text placeholder needs a UTF-8 payload and the
-                payload is not one.
+        ValueError: A placeholder is outside the token vocabulary.
+        TargetContractError: A text placeholder needs a UTF-8 payload and has none.
         """
 
         def substitute(match: re.Match[str]) -> str:
@@ -413,8 +341,8 @@ class CliAdapter:
         """Return the text one placeholder stands for.
 
         Raises:
-            ValueError: `token` is outside the vocabulary.
-            TargetContractError: A text placeholder needs a UTF-8 payload.
+        ValueError: `token` is outside the vocabulary.
+        TargetContractError: A text placeholder needs a UTF-8 payload.
         """
         if not token:
             if path is not None:
@@ -446,15 +374,12 @@ class CliAdapter:
     def _raise_for_failure(self, completed: subprocess.CompletedProcess[bytes]) -> None:
         """Raise what a non-zero exit means: a declared rejection, else a contract error.
 
-        A rejection is raised only for output matching one of the two declared
-        spellings, because a fabricated one would make the ``IV-*`` checks vacuous.
-        The child's stdout is the response that arrived, so the contract error
-        carries those bytes on its ``body_prefix``, which the evidence field
-        ``hex_prefix`` records.
+        A rejection is raised only for one of the two declared spellings, because a fabricated one
+        would make the ``IV-*`` checks vacuous.
 
         Raises:
-            TargetRejected: The target declared a rejection, in its own words.
-            TargetContractError: It exited non-zero without declaring one.
+        TargetRejected: The target declared a rejection, in its own words.
+        TargetContractError: It exited non-zero without declaring one.
         """
         stdout_text = _decoded(completed.stdout)
         stderr_text = _decoded(completed.stderr)
@@ -477,9 +402,8 @@ class CliAdapter:
         """Return the artefact a zero exit delivered, under the configured `returns`.
 
         Raises:
-            TargetContractError: The response carries no artefact where ``returns``
-                says to read it, or the bytes are not the format the request asked
-                for.
+        TargetContractError: No artefact sits where ``returns`` says to read it, or the bytes are
+        not the format the request asked for.
         """
         if self._returns in _STDOUT_RETURNS:
             data = decode_returned_image(completed.stdout, self._returns)
@@ -508,8 +432,8 @@ class CliAdapter:
         """Return the metadata the target declared, projected through `metadata_map`.
 
         Raises:
-            TargetContractError: stdout is not the one JSON object a configured
-                ``metadata_map`` reads, or a configured field is absent from it.
+        TargetContractError: stdout is not the one JSON object a configured ``metadata_map`` reads,
+        or a configured field is absent from it.
         """
         if not self._metadata_map:
             return {}
@@ -519,12 +443,9 @@ class CliAdapter:
     def close(self) -> None:
         """Release the adapter, which holds nothing between calls.
 
-        Each :meth:`generate` owns its subprocess -- ``subprocess.run`` waits for
-        it -- and removes its temporary directory before returning or raising, so
-        there is no child, pipe or file left to close here and a second call is
-        the same no-op as the first.  The method exists because the port requires
-        it: the runner closes every adapter once the run ends, including after a
-        failure.
+        Each :meth:`generate` owns its subprocess and removes its temporary directory before
+        returning or raising, so a second call is the same no-op as the first. The method exists
+        because the runner closes every adapter once the run ends.
         """
         return None
 
@@ -539,28 +460,11 @@ class CliAdapter:
 def _required_capabilities(request: GenerateRequest) -> frozenset[Capability]:
     """Return the capabilities `request` needs the adapter to have declared.
 
-    Only what the request *asks for* is gated: its output format always, and each
-    optional field the caller actually set.  A default request therefore needs one
-    capability -- the format -- so a target declaring only ``png`` serves every
-    ordinary case.
-
-    ``ec_level`` is deliberately not gated: every request carries a level, so
-    requiring the capability would refuse every request to a target that supports
-    the format but not level selection.  A check that asserts error-level
-    conformance declares ``ec_level`` itself and is resolved to a skip by
-    ``qrcheck/registry/resolve.py`` before it ever builds a request.
-
-    The three fields no template can carry are not gated here either.  No
-    placeholder in ``payload_arg`` or ``output_arg`` conveys a version pin, a mask
-    pin or a logo overlay, so :meth:`CliAdapter._reject_inexpressible` owns that
-    decision and refuses such a request whether or not the target declared the
-    matching capability -- the one decision in one place, which is the split
-    ``qrcheck/targets/http.py`` makes for the same three fields.
+    Only what the request asks for is gated, and ``ec_level`` deliberately is not: a check asserting
+    level conformance declares the capability itself and is skipped first.
 
     Raises:
-        ValueError: The request asks for an output format that is not one of
-            :data:`~qrcheck.targets.base.OUTPUT_FORMATS`.  ``build_request``
-            refuses that upstream, so it is a framework defect here.
+    ValueError: The request asks for a format outside ``OUTPUT_FORMATS`` -- a framework defect.
     """
     try:
         needed = {Capability(request.output_format)}
@@ -585,9 +489,8 @@ def _checked_returns(returns: str, name: str) -> ReturnsKind:
     """Return `returns` when it is one of the four delivery modes.
 
     Raises:
-        ValueError: `returns` is outside :data:`qrcheck.config.models.RETURNS_KINDS`.
-            The configuration schema rejects that value at load time, so reaching
-            this means a record was built by hand.
+    ValueError: It is outside :data:`qrcheck.config.models.RETURNS_KINDS`, which means a
+    configuration record was built by hand.
     """
     if isinstance(returns, str) and returns in RETURNS_KINDS:
         return cast(ReturnsKind, returns)
@@ -599,12 +502,11 @@ def _checked_returns(returns: str, name: str) -> ReturnsKind:
 def _check_no_nul(value: str, name: str, key: str) -> None:
     """Refuse a configured string carrying a NUL, which no argv word can hold.
 
-    ``execve`` cannot transport a NUL inside an argument, and ``subprocess`` raises
-    a bare ``ValueError`` for one; catching it at construction keeps that from
-    surfacing as an unexplained framework fault mid-run.
+    ``execve`` cannot transport one and ``subprocess`` raises a bare ``ValueError`` for it, so
+    catching it at construction keeps it from surfacing mid-run as an unexplained framework fault.
 
     Raises:
-        ValueError: `value` contains a NUL character.
+    ValueError: `value` contains a NUL character.
     """
     if "\x00" in value:
         raise ValueError(
@@ -623,10 +525,8 @@ def _payload_text(payload: bytes, name: str, key: str) -> str:
     """Return `payload` as UTF-8 text for a text placeholder.
 
     Raises:
-        TargetContractError: The payload is not strictly UTF-8-decodable, or it
-            carries a NUL that no argv word can transport.  Both are refused rather
-            than passed on mangled, and the message names the binary-safe
-            placeholder that would have worked.
+    TargetContractError: The payload is not strictly UTF-8-decodable, or carries a NUL no argv word
+    can transport; the message names the binary-safe placeholder that would work.
     """
     try:
         text = payload.decode("utf-8")
@@ -648,9 +548,8 @@ def _payload_text(payload: bytes, name: str, key: str) -> str:
 def _decoded(stream: bytes | None) -> str:
     """Return captured output as text for diagnostics and rejection detection.
 
-    A target's output is untrusted and need not be UTF-8, so undecodable bytes are
-    replaced rather than allowed to raise: the classification of the exit status
-    must not depend on the encoding of a diagnostic.
+    A target's output is untrusted and need not be UTF-8, so undecodable bytes are replaced rather
+    than raised: classifying the exit status must not depend on the encoding of a diagnostic.
     """
     if not stream:
         return ""
@@ -668,8 +567,8 @@ def _last_nonempty_line(text: str) -> str | None:
 def _json_error_member(line: str) -> str | None:
     """Return the string member ``error`` of a JSON-object line, or ``None``.
 
-    A line that is not a JSON object, or whose ``error`` member is not a string, is
-    not a declared rejection, so the caller falls through to the next spelling.
+    A line that is not a JSON object, or whose ``error`` member is not a string, is not a declared
+    rejection, so the caller falls through to the next spelling.
     """
     if not line.lstrip().startswith("{"):
         return None
@@ -686,11 +585,8 @@ def _json_error_member(line: str) -> str | None:
 def _declared_rejection(stderr_text: str, stdout_text: str) -> str | None:
     """Return the rejection a target declared, or ``None`` when it declared none.
 
-    Both streams are inspected, stderr before stdout, because a target reasonably
-    writes a refusal to either: ``examples/cli_target.py`` writes its JSON line to
-    stdout, while a POSIX-minded program writes to stderr.  The JSON spelling is
-    tried on both streams before the ``rejected:`` spelling, so a target that
-    writes one to each is classified by the more explicit form.
+    Both streams are inspected, stderr before stdout; the JSON spelling is tried on both before the
+    ``rejected:`` spelling, so a target writing one to each is classified by the more explicit form.
     """
     candidates = [
         line
@@ -718,14 +614,11 @@ def _tail(text: str) -> str:
 def _json_object(stdout: bytes, name: str, keys: list[str]) -> dict[str, object]:
     """Parse the target's stdout as the one JSON object its ``metadata_map`` reads.
 
-    The stdout bytes are the response that arrived, so each refusal of bytes that
-    arrived carries them on its ``body_prefix``, which the evidence field
-    ``hex_prefix`` records; an empty stdout has no body to keep.
+    The stdout bytes are the response that arrived, so each refusal carries them on ``body_prefix``.
 
     Raises:
-        TargetContractError: stdout is empty, is not UTF-8, is not JSON, or is a
-            JSON value that is not an object -- naming the configured fields that
-            were to be read from it.
+    TargetContractError: stdout is empty, is not UTF-8, is not JSON, or is not a JSON object --
+    naming the configured fields read from it.
     """
     configured = ", ".join(repr(key) for key in keys)
     if not stdout.strip():
@@ -757,10 +650,10 @@ def _json_object(stdout: bytes, name: str, keys: list[str]) -> dict[str, object]
 
 
 def _declared_int(value: object) -> int | None:
-    """Return `value` as the integer a target declared, or ``None`` when it is absent."""
+    """Return `value` as the integer a target declared, or ``None`` when absent."""
     return value if isinstance(value, int) and not isinstance(value, bool) else None
 
 
 def _declared_text(value: object) -> str | None:
-    """Return `value` as the text a target declared, or ``None`` when it is absent."""
+    """Return `value` as the text a target declared, or ``None`` when absent."""
     return value if isinstance(value, str) else None

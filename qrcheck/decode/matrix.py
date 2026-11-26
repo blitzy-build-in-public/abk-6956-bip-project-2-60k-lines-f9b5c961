@@ -1,61 +1,22 @@
 """Module-grid sampling: the module count, the grid and the version, from pixels.
 
-No decoder in this product reports a version: the pinned ``zxing-cpp`` 2.2.0 exposes ``ec_level``
-but neither version nor mask, and the secondary decoder exposes no metadata at all -- yet
-``SY-VERSION-MIN``, ``SY-EC-MATCH``, ``SY-MASK``, ``SY-MATRIX-EQUIV`` and the measured quiet zone
-all need the module grid.  So the grid is recovered here, from the symbol itself, and the version
-is read off the grid's dimension: ISO/IEC 18004 §7.1 fixes a Model 2 symbol at **``4V + 17``**
-modules per side for Version 1-40, and :func:`version_from_dimension` inverts that rule and is the
-product's **only** version source -- nothing else may derive a version from a decoder, a target's
-metadata or a capacity table.
+No pinned decoder reports a version, yet ``SY-VERSION-MIN``, ``SY-EC-MATCH``, ``SY-MASK``,
+``SY-MATRIX-EQUIV`` and the measured quiet zone all need the module grid, so the grid is recovered
+from the symbol itself. ISO/IEC 18004 §7.1 fixes a Model 2 dimension at ``4V + 17`` modules per
+side and :func:`version_from_dimension` inverts that rule; it is the product's only version source.
 
-Three acceptance paths, and nothing else.  **Primary**: the authoritative decoder's corner
-quadrangle in source-image pixels is projected onto an ``N x N`` grid by a planar homography
-(:func:`_square_to_quad`), the module pitch is measured from the symbol's top-left finder pattern,
-the count is snapped to a legal ``4V + 17`` and the snap is confirmed against the timing patterns.
-**Fallback**: when that fails and the secondary decoder supplied its rectified
-``straight_qrcode``, the same pitch/snap/confirm procedure runs on that image, which needs no
-homography because the decoder has already rectified it, and the result is labelled
-``source="straight_qrcode"``.  **Failure**: when both fail,
-:class:`~qrcheck.decode.base.SampledMatrix` carries ``matrix=None`` and
-``reason="sampling_failed"``, which lets a check report that reason instead of a wrong verdict.
+Three acceptance paths and nothing else: the authoritative decoder's corner quadrangle projected by
+a planar homography, pitched from the finder pattern, snapped to a legal ``4V + 17`` and confirmed
+against the timing patterns; the same procedure on the secondary decoder's rectified
+``straight_qrcode``, labelled ``source="straight_qrcode"``; or ``matrix=None`` with
+``reason="sampling_failed"``, which a check reports instead of a wrong verdict. Neither guard may be
+relaxed: the snapped count's implied pitch must lie within 20% of the measured pitch, and the timing
+patterns must show exactly ``N - 16`` alternations on both axes.
 
-Neither guard may be relaxed.  A shifted grid produces a *wrong verdict* in ``SY-MASK``,
-``SY-EC-MATCH``, ``SY-MATRIX-EQUIV``, ``SY-VERSION-MIN`` and the measured quiet zone, so a pitch
-that is off is rejected twice over: the implied pitch of the snapped count must lie within 20% of
-the measured pitch, and the sampled timing patterns must show exactly ``N - 16`` alternating
-transitions on both axes.  A quad that overshoots the symbol is therefore *refused* rather than
-re-anchored from the rectified image's dark extent, because silently recovering it would turn a
-wrong measurement into a confident one.
-
-**Only the standard library and numpy** are imported.  The secondary decoder's absence is a
-supported degradation (a run proceeds in single-decoder mode), so grid sampling must not depend on
-``cv2``: the homography is solved as the 8x8 direct-linear-transform system with
-:func:`numpy.linalg.solve` and sampled by inverse mapping.  ``Pillow`` is absent too -- the
-consensus layer hands over arrays -- so this module never opens an image file, reads
-configuration, writes an artefact, logs or prints.  It is deterministic: no randomness, no clock,
-no ``hash()``, no dictionary or filesystem ordering, so identical input arrays yield a
-byte-identical grid and therefore an identical :func:`~qrcheck.decode.base.matrix_sha256` digest.
-And a failure is a value, never an exception, on target-derived data: every refusal is reported
-through ``accepted=False`` on :class:`~qrcheck.decode.base.ModuleCountEstimate` with one of
-``position_unusable``, ``low_contrast``, ``finder_unreadable``, ``pitch_mismatch``,
-``timing_mismatch`` or ``fallback_unusable``, and through ``reason="sampling_failed"`` on
-:class:`~qrcheck.decode.base.SampledMatrix`.  Only an array that violates this module's own input
-contract -- not ``numpy.uint8``, not ``H x W`` or ``H x W x 3`` -- raises ``ValueError``, because
-that is a producer defect rather than evidence about a target.
-
-The sampled region is the symbol's own area, *excluding* the 4-module quiet zone (ISO/IEC 18004
-§7.3.6): a corner quadrangle bounds the symbol, not its quiet zone, so quiet-zone measurement is
-the owning check's business, done from the returned grid's dark bounding box.  A check that needs
-the measured quiet zone therefore fails with ``sampling_failed`` rather than with a wrong
-measurement when no grid can be recovered.
-
-The estimate's numbers exist for diagnosis.  The evidence artefact set of the plan is closed, so
-the rectified luminance can never become a file of its own: the square is measured on every path
-but attached to :attr:`~qrcheck.decode.base.SampledMatrix.rectified_luma` only when the caller asks
-for it with ``sample_matrix(..., keep_rectified=True)``, because it is a full-size ``float64``
-array costing 8 bytes per pixel -- about 1.3 MB for a 400 px symbol -- and lives as long as the
-result does.
+Standard library and numpy only -- no ``cv2`` -- and deterministic. A failure on target-derived data
+is a value, never an exception: one of ``position_unusable``, ``low_contrast``,
+``finder_unreadable``, ``pitch_mismatch``, ``timing_mismatch`` or ``fallback_unusable`` on the
+estimate.
 """
 
 from __future__ import annotations
@@ -130,19 +91,12 @@ _FINDER_PROBE_LINES: Final = 3
 
 
 def module_count_for_version(version: int) -> int:
-    """Return the module count ``N = 4V + 17`` of a Model 2 symbol (ISO/IEC 18004 §7.1).
-
-    Args:
-        version: Symbol version, 1-40.
-
-    Returns:
-        The symbol's dimension in modules: ``21`` for Version 1, ``177`` for
-        Version 40.
+    """Return the module count ``N = 4V + 17`` of a Model 2 symbol (ISO/IEC 18004 §7.1):
+    ``21`` for Version 1, ``177`` for Version 40.
 
     Raises:
-        ValueError: ``version`` is not an integer, or lies outside 1-40. The
-            version vocabulary is closed at Model 2, so a Micro QR version has no
-            module count here.
+        ValueError: ``version`` is not an integer in 1-40, so a Micro QR version has no module
+            count here.
     """
     if isinstance(version, bool) or not isinstance(version, int):
         raise ValueError(f"version must be an integer; got {version!r}")
@@ -154,19 +108,10 @@ def module_count_for_version(version: int) -> int:
 def version_from_dimension(module_count: int) -> int | None:
     """Return the version implied by a sampled dimension, or ``None`` if none is.
 
-    This is the product's only version source: a version is read off the module
-    grid's dimension through ISO/IEC 18004 §7.1's ``N = 4V + 17``, never taken
-    from a decoder (the pinned ``zxing-cpp`` 2.2.0 reports none) and never taken
-    from a target's own metadata, which is evidence only.
-
-    Args:
-        module_count: Number of modules per side of a sampled grid.
-
-    Returns:
-        The version in 1-40, or ``None`` when ``module_count - 17`` is not a
-        multiple of four or the implied version falls outside 1-40 -- including
-        the negative offsets a Micro QR (M1-M4) dimension would produce, since
-        those versions have no ``4V + 17`` dimension at all.
+    The product's only version source: ISO/IEC 18004 §7.1's ``N = 4V + 17`` inverted, never a
+    decoder -- the pinned ``zxing-cpp`` 2.2.0 reports none -- and never a target's metadata.
+    ``None`` covers a ``module_count - 17`` that is not a multiple of four, a version outside 1-40,
+    and the negative offsets a Micro QR dimension would produce.
     """
     if isinstance(module_count, bool) or not isinstance(module_count, int):
         return None
@@ -194,23 +139,10 @@ def _rejected(reason: str) -> ModuleCountEstimate:
 def _as_luma(image: numpy.ndarray) -> numpy.ndarray:
     """Return ``image`` as a two-dimensional ``float64`` luminance array.
 
-    A colour array (``H x W x 3``) is reduced with the ITU-R BT.601 luma weights
-    ``0.299 R + 0.587 G + 0.114 B``, the classic choice for thresholding and
-    finder-pattern measurement. This is deliberately *not* the WCAG relative
-    luminance the contrast check uses: that one is a perceptual ratio taken from
-    linearised channels, and substituting either for the other would change what
-    the caller measures. A grayscale array is used as it stands.
-
-    Args:
-        image: ``numpy.uint8`` array of shape ``(H, W)`` or ``(H, W, 3)``.
-
-    Returns:
-        A ``float64`` array of shape ``(H, W)``.
-
-    Raises:
-        ValueError: ``image`` is not ``numpy.uint8``, or its shape is neither
-            ``H x W`` nor ``H x W x 3``. That is a defect in the producer, not a
-            property of a target's output, so it is not a sampling failure.
+    A colour array is reduced with the ITU-R BT.601 weights ``0.299 R + 0.587 G + 0.114 B`` --
+    thresholding weights, deliberately not the WCAG relative luminance the contrast check uses.
+    ``ValueError`` when ``image`` is not ``numpy.uint8`` or is neither ``H x W`` nor ``H x W x 3``:
+    a producer defect, not a sampling failure.
     """
     array = numpy.asarray(image)
     if array.dtype != numpy.uint8:
@@ -232,23 +164,12 @@ def _quad_area(quad: numpy.ndarray) -> float:
 
 
 def _canonical_quad(position: Sequence[tuple[float, float]] | None) -> numpy.ndarray | None:
-    """Return the four corner points in clockwise order from the top-left, or ``None``.
+    """Return the four corners clockwise from the top-left, or ``None``.
 
-    A decoder may report its quadrangle starting at any corner and in either
-    direction. Ordering the points canonically -- top-left has the smallest
-    ``x + y``, bottom-right the largest, top-right the smallest ``y - x`` and
-    bottom-left the largest -- is what makes the rectified grid's orientation
-    stable, so the same symbol always samples to the same matrix and therefore
-    to the same digest regardless of which corner the decoder named first.
-
-    Args:
-        position: Corner points in source-image pixel coordinates, or ``None``.
-
-    Returns:
-        A ``(4, 2)`` ``float64`` array ordered top-left, top-right,
-        bottom-right, bottom-left; ``None`` when ``position`` is absent, has
-        fewer than four points, holds a non-finite coordinate, names the same
-        point twice or encloses less than one square pixel.
+    A decoder may report its quadrangle from any corner in either direction; ordering it canonically
+    -- top-left smallest ``x + y``, bottom-right largest, top-right smallest ``y - x``, bottom-left
+    largest -- keeps the rectified orientation stable, so the same symbol always samples to the same
+    digest.
     """
     if position is None:
         return None
@@ -278,22 +199,12 @@ def _canonical_quad(position: Sequence[tuple[float, float]] | None) -> numpy.nda
 
 
 def _square_to_quad(quad: numpy.ndarray, side: float) -> numpy.ndarray | None:
-    """Solve the homography that maps a ``side x side`` square onto ``quad``.
+    """Solve the homography mapping a ``side x side`` square onto ``quad``.
 
-    The 8x8 direct-linear-transform system is solved directly with
-    :func:`numpy.linalg.solve` rather than taking a projective transform from an
-    image library, because the secondary decoder -- and with it ``cv2`` -- is
-    optional and a run must still sample grids in single-decoder mode.
-
-    Args:
-        quad: ``(4, 2)`` corner array ordered top-left, top-right, bottom-right,
-            bottom-left.
-        side: Side length of the source square, in pixels.
-
-    Returns:
-        The ``(3, 3)`` homography mapping square coordinates ``(u, v)`` to
-        source-image coordinates, or ``None`` when the system is singular or
-        non-finite -- a degenerate quadrangle rather than a target defect.
+    The 8x8 direct-linear-transform system is solved with :func:`numpy.linalg.solve` rather than an
+    image library's transform, because ``cv2`` is optional and a run must still sample grids in
+    single-decoder mode. ``None`` for a singular or non-finite system: a degenerate quadrangle, not
+    a target defect.
     """
     square = numpy.array(
         [(0.0, 0.0), (side, 0.0), (side, side), (0.0, side)], dtype=numpy.float64
@@ -318,12 +229,9 @@ def _square_to_quad(quad: numpy.ndarray, side: float) -> numpy.ndarray | None:
 def _bilinear(luma: numpy.ndarray, x: numpy.ndarray, y: numpy.ndarray) -> numpy.ndarray:
     """Sample ``luma`` at the continuous coordinates ``(x, y)`` by bilinear interpolation.
 
-    Continuous source coordinates address pixel *centres* at ``index + 0.5``, so
-    each coordinate is shifted by half a pixel before it is split into its four
-    taps; that convention is what keeps a symbol sampled at module centres
-    pixel-exact instead of half a pixel off. Coordinates outside the image are
-    clipped to the nearest edge pixel rather than wrapped, so a quadrangle that
-    reaches just past the image cannot invent dark modules from the far side.
+    Pixel centres sit at ``index + 0.5``, so each coordinate is shifted by half a pixel before its
+    four taps are taken; coordinates outside the image clip to the nearest edge pixel rather than
+    wrapping.
     """
     height, width = luma.shape
     max_x = float(max(width - 1, 0))
@@ -344,15 +252,10 @@ def _bilinear(luma: numpy.ndarray, x: numpy.ndarray, y: numpy.ndarray) -> numpy.
 def _rectify(luma: numpy.ndarray, quad: numpy.ndarray) -> tuple[numpy.ndarray, int] | None:
     """Project the symbol bounded by ``quad`` onto a square luminance image.
 
-    The square's side is the mean of the quadrangle's four edge lengths, clipped
-    to at least :data:`MIN_MODULE_COUNT` so a sliver of a quadrangle still yields
-    a samplable image. The quadrangle bounds the symbol itself, not the 4-module
-    quiet zone of ISO/IEC 18004 §7.3.6, so the rectified square contains the
-    symbol area only.
-
-    Returns:
-        ``(rectified_luma, side)``, or ``None`` when the homography is singular,
-        the inputs are empty, or a projected coordinate is not finite.
+    The side is the mean of the quadrangle's four edge lengths, clipped to at least
+    :data:`MIN_MODULE_COUNT`. The quadrangle bounds the symbol, not the 4-module quiet zone of
+    ISO/IEC 18004 §7.3.6, so the square holds the symbol area only. ``None`` when the homography is
+    singular, the inputs are empty, or a projected coordinate is not finite.
     """
     if luma.size == 0:
         return None
@@ -376,14 +279,9 @@ def _rectify(luma: numpy.ndarray, quad: numpy.ndarray) -> tuple[numpy.ndarray, i
 def _dark_threshold(luma: numpy.ndarray) -> float | None:
     """Return the luminance threshold separating dark modules from light ones.
 
-    The midpoint of the 10th and 90th luminance percentiles is used rather than
-    the midrange, so a stray specular pixel cannot drag the threshold. A spread
-    narrower than :data:`_MIN_CONTRAST_SPREAD` grey levels leaves the two classes
-    overlapping, which no sampling can repair.
-
-    Returns:
-        The threshold, or ``None`` when the image is empty or too flat to
-        separate dark from light modules.
+    The midpoint of the 10th and 90th luminance percentiles, so a stray specular pixel cannot drag
+    it. ``None`` when the image is empty or its spread is narrower than :data:`_MIN_CONTRAST_SPREAD`
+    grey levels, which no sampling can repair.
     """
     if luma.size == 0:
         return None
@@ -406,24 +304,11 @@ def _leading_dark_run(pixels: numpy.ndarray) -> int:
 def _finder_run_px(dark: numpy.ndarray) -> int:
     """Measure the top-left finder pattern's dark run, in pixels.
 
-    The rectified square starts at the symbol's top-left corner, which is the
-    finder's dark outer corner, so the run of dark pixels from ``(0, 0)`` along
-    row 0 and along column 0 spans the finder's first module row and column --
-    seven modules wide, in ISO/IEC 18004 §7.3.3's 7x7 finder. The 1-module light
-    separator at index 7 of both axes guarantees each run terminates, so the
-    measurement cannot leak into the data region.
-
-    The run is read from the first :data:`_FINDER_PROBE_LINES` parallel lines of
-    each axis and the longest reading is taken, because the outermost line of a
-    rectified square lies exactly on the symbol's edge: a rotated, resampled or
-    antialiased symbol blends that line with the surrounding quiet zone, and a
-    single blended row would otherwise report a zero run and refuse a symbol that
-    is perfectly samplable one pixel further in.
-
-    Returns:
-        The mean of the row and column readings, rounded to whole pixels; ``0``
-        when either axis starts light on every probed line, which means the
-        quadrangle does not begin at the symbol's corner.
+    The rectified square starts at the symbol's top-left corner, so the dark run from ``(0, 0)``
+    along row 0 and column 0 spans ISO/IEC 18004 §7.3.3's 7x7 finder's first module row and column,
+    the 1-module light separator at index 7 terminating it. The first :data:`_FINDER_PROBE_LINES`
+    lines of each axis are read and the longest taken, because the outermost line lies on the
+    symbol's edge and a blended row would refuse a samplable symbol.
     """
     rows = min(_FINDER_PROBE_LINES, int(dark.shape[0]))
     columns = min(_FINDER_PROBE_LINES, int(dark.shape[1]))
@@ -437,15 +322,9 @@ def _finder_run_px(dark: numpy.ndarray) -> int:
 def _snap_module_count(n_est: int, pitch: float, side: int) -> int | None:
     """Snap an estimated module count to a legal ``4V + 17``, or refuse to.
 
-    The nearest legal count is accepted only when the pitch it implies for this
-    square, ``side / N``, lies within :data:`_PITCH_TOLERANCE` of the pitch
-    measured from the finder pattern. Without that guard a count that is off by
-    a module would round to a plausible neighbour and yield a confidently shifted
-    grid.
-
-    Returns:
-        The snapped module count, or ``None`` when no legal count fits the
-        measured pitch.
+    The nearest legal count is accepted only when the pitch it implies, ``side / N``, lies within
+    :data:`_PITCH_TOLERANCE` of the pitch measured from the finder pattern; without that guard a
+    count off by a module would round to a plausible neighbour and yield a confidently shifted grid.
     """
     # Every legal count is a candidate, so an estimate far outside 1..40 (a
     # broken pitch) still snaps to the closest legal dimension and is then
@@ -471,19 +350,10 @@ def _sample_grid(
 ) -> Matrix:
     """Sample one luminance value per module centre and threshold it into a grid.
 
-    Module ``(r, c)`` is read at ``((c + 0.5) * S / N, (r + 0.5) * S / N)`` in the
-    rectified square -- its centre, so the sample sits as far from a module edge
-    as the geometry allows. Each sample is the mean of a 3x3 neighbourhood, which
-    absorbs a pixel of jitter in the quadrangle; the neighbourhood shrinks to the
-    centre pixel once the module pitch falls below
-    :data:`_MIN_AVERAGING_PITCH`, because a 3x3 mean would then reach into the
-    neighbouring module and blur the grid.
-
-    Returns:
-        A C-order ``numpy.bool_`` array of shape ``(N, N)``, ``True`` for a dark
-        module -- the layout
-        :func:`~qrcheck.decode.base.matrix_sha256` and ``format_info`` consume
-        directly.
+    Module ``(r, c)`` is read at its centre, each sample the mean of a 3x3 neighbourhood that
+    absorbs a pixel of quadrangle jitter, shrinking to the centre pixel below
+    :data:`_MIN_AVERAGING_PITCH` where that mean would reach into the neighbouring module. Returns a
+    C-order ``numpy.bool_`` array of shape ``(N, N)``, ``True`` for a dark module.
     """
     pitch = side / module_count
     centres = numpy.floor((numpy.arange(module_count, dtype=numpy.float64) + 0.5) * pitch)
@@ -508,12 +378,10 @@ def _count_changes(values: numpy.ndarray) -> int:
 def _timing_transitions(grid: Matrix) -> tuple[int, int]:
     """Count the horizontal and vertical timing-pattern alternations of ``grid``.
 
-    ISO/IEC 18004 §7.3.5 makes the timing pattern alternate once per module
-    between the finder patterns. Over columns ``7 .. N-9`` that is ``N - 15``
-    samples and therefore ``N - 16`` adjacent pairs, each of which must
-    alternate, and the same holds down column 6 over rows ``7 .. N-9``. A
-    correctly snapped count yields exactly ``N - 16`` changes on both axes; any
-    other reading means the grid is shifted and the count must be refused.
+    ISO/IEC 18004 §7.3.5 alternates once per module between the finder patterns: over columns ``7
+    .. N-9`` that is ``N - 15`` samples and ``N - 16`` adjacent pairs, each of which must alternate,
+    and the same holds down column 6 over rows ``7 .. N-9``. Any other reading means a shifted grid
+    and a refused count.
     """
     module_count = int(grid.shape[0])
     stop = module_count - 8
@@ -525,15 +393,9 @@ def _timing_transitions(grid: Matrix) -> tuple[int, int]:
 def _analyse(rectified: numpy.ndarray, side: int) -> tuple[ModuleCountEstimate, Matrix | None]:
     """Measure, snap and confirm a module count for an already-rectified square.
 
-    Args:
-        rectified: Square luminance image whose top-left pixel is the symbol's
-            top-left module.
-        side: Side length of ``rectified``, in pixels.
-
-    Returns:
-        ``(estimate, grid)``. ``grid`` is the sampled matrix only when the
-        estimate was accepted; otherwise it is ``None`` and the estimate's
-        ``reason`` says what refused it.
+    ``rectified``'s top-left pixel is the symbol's top-left module and ``side`` its length in
+    pixels. Returns ``(estimate, grid)``, where ``grid`` is the sampled matrix only when the
+    estimate was accepted, the estimate's ``reason`` naming what refused it otherwise.
     """
     threshold = _dark_threshold(rectified)
     if threshold is None:
@@ -576,9 +438,8 @@ def _analyse(rectified: numpy.ndarray, side: int) -> tuple[ModuleCountEstimate, 
 def _try_luma(array: numpy.ndarray | None) -> numpy.ndarray | None:
     """Return ``array`` as luminance, or ``None`` when it is not a usable image.
 
-    The secondary decoder's rectified image is treated like target-derived data:
-    an unexpected shape or dtype makes that path unusable rather than aborting
-    the sample, so a decoder's odd output can never raise out of grid sampling.
+    The secondary decoder's rectified image is target-derived data, so an unexpected shape or dtype
+    makes that path unusable rather than aborting the sample.
     """
     if array is None:
         return None
@@ -594,29 +455,15 @@ def estimate_module_count(
 ) -> ModuleCountEstimate:
     """Estimate the module count of the symbol bounded by ``position``.
 
-    This is the measurement half of :func:`sample_matrix`:
-
-    #. the quadrangle is ordered canonically and projected onto a square
-       (:func:`_canonical_quad`, :func:`_rectify`);
-    #. the square is thresholded between its 10th and 90th luminance percentiles;
-    #. the top-left finder pattern's dark run gives the pitch, ``run / 7``;
-    #. ``round(side / pitch)`` is snapped to a legal ``4V + 17`` and accepted only
-       within :data:`_PITCH_TOLERANCE` of the measured pitch;
-    #. the sampled timing patterns must show exactly ``N - 16`` alternations on
-       both axes.
-
-    Args:
-        image: ``numpy.uint8`` array of shape ``(H, W)`` or ``(H, W, 3)``.
-        position: The four corner points of the symbol in source-image pixels, as
-            the authoritative decoder reported them, in any order.
-
-    Returns:
-        The measurements, with ``accepted`` true only when the timing patterns
-        confirmed the snap. A refusal is returned, never raised.
+    The measurement half of :func:`sample_matrix`: the quadrangle is ordered canonically and
+    rectified, thresholded between its 10th and 90th luminance percentiles, pitched from the
+    top-left finder's dark run (``run / 7``), ``round(side / pitch)`` snapped to a legal ``4V + 17``
+    within :data:`_PITCH_TOLERANCE`, and the snap confirmed by ``N - 16`` timing alternations on
+    both axes.
 
     Raises:
-        ValueError: ``image`` violates this module's input contract (dtype or
-            shape) -- a producer defect rather than evidence about a target.
+        ValueError: ``image`` violates this module's input contract -- a producer defect, not
+            evidence about a target.
     """
     luma = _as_luma(image)
     quad = _canonical_quad(position)
@@ -638,55 +485,15 @@ def sample_matrix(
 ) -> SampledMatrix:
     """Sample the module grid of the symbol in ``image``, or report why not.
 
-    The three acceptance paths, in order:
-
-    1. **Primary** -- rectify the quadrangle ``position`` bounds and run the
-       measurement, snap and confirmation of :func:`estimate_module_count` on it.
-       On success the grid is sampled from the rectified square and the result's
-       ``source`` is ``"primary"``.
-    2. **Fallback** -- when the primary path refuses and ``straight_qrcode`` (the
-       secondary decoder's rectified image) is present, the same procedure runs
-       on that image, which needs no homography. On success ``source`` is
-       ``"straight_qrcode"``.
-    3. **Failure** -- ``matrix``, ``module_count`` and ``version`` are ``None`` and
-       ``reason`` is ``"sampling_failed"``. ``estimate`` carries the last path's
-       measurements and ``source`` names the path that was attempted last, so a
-       check can report the reason rather than a wrong verdict.
-
-    The rectified square is measured on every path, but it reaches the result only
-    when ``keep_rectified`` is true. It is the full-size ``float64`` luminance of
-    that square -- 8 bytes per pixel, about 1.3 MB for a 400 px symbol -- it is
-    never serialised because the evidence artefact set is closed, and it lives as
-    long as the returned result does. So a consumer that renders the rectified
-    image asks for it and pays for it, and every other caller leaves the field
-    ``None`` and releases the square with the case.
-
-    Args:
-        image: ``numpy.uint8`` array of shape ``(H, W)`` or ``(H, W, 3)`` -- the
-            symbol as the target produced it, decoded to pixels by the caller.
-        position: The four corner points of the symbol in ``image`` pixel
-            coordinates, in any order, or ``None`` when the decoder reported no
-            geometry.
-        straight_qrcode: The secondary decoder's rectified square image, or
-            ``None`` in single-decoder mode and whenever that decoder reported
-            none.
-        keep_rectified: Attach the rectified square's full-size ``float64``
-            luminance to ``rectified_luma`` on the returned result. Defaults to
-            ``False``, which leaves the field ``None``: the array is never
-            written to evidence, so it is kept only for a caller that renders it,
-            and it costs 8 bytes per pixel for as long as the result lives.
-
-    Returns:
-        The sampled grid with the version implied by its dimension, or the
-        ``sampling_failed`` result described above. The grid is a C-order
-        ``numpy.bool_`` array of shape ``(N, N)`` with ``True`` for a dark module,
-        so :func:`~qrcheck.decode.base.matrix_sha256` and ``format_info`` consume
-        it directly.
+    The primary path first -- rectify the quadrangle ``position`` bounds and measure, snap and
+    confirm as :func:`estimate_module_count` does, labelling ``source`` ``"primary"`` -- then the
+    fallback on the secondary decoder's rectified ``straight_qrcode``, labelled
+    ``"straight_qrcode"``. Otherwise ``matrix``, ``module_count`` and ``version`` are ``None`` and
+    ``reason`` is ``"sampling_failed"``.
 
     Raises:
-        ValueError: ``image`` violates this module's input contract (dtype or
-            shape). ``straight_qrcode`` never raises, because it is decoder output
-            derived from target data.
+        ValueError: ``image`` violates this module's input contract; ``straight_qrcode`` never
+            raises, being decoder output derived from target data.
     """
     luma = _as_luma(image)
     rectified_luma: numpy.ndarray | None = None

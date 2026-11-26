@@ -1,75 +1,38 @@
 """The two performance checks: encode latency with throughput, and decode latency.
 
-AAP §0.8.1's component-to-check-family table and its case-matrix rows -- 1 synthetic case, **105
-encodes** and 0 decodes for ``PF-ENCODE``; 1 synthetic case, 0 encodes and **205 decodes** of one
-fixed 500 x 500 PNG for ``PF-DECODE`` -- and the numeric budgets of §0.6.2 with the environment
-they are defined against in §0.6.3 (CPython 3.11, Linux x86_64, 2 vCPU, the pinned lock).
+Plan item served: AAP §0.8.1's row ``checks/performance.py`` -> ``PF-ENCODE``, ``PF-DECODE``, with
+the case matrix it fixes -- 1 synthetic case, **105 encodes** and 0 decodes for ``PF-ENCODE``; 1
+synthetic case, **0 encodes** and **205 decodes** of one fixed 500 x 500 PNG for ``PF-DECODE`` --
+and the budgets of AAP §0.6.2 with their environment in §0.6.3 (CPython 3.11, Linux x86_64, 2
+vCPU, the pinned lock).
 
-``PF-ENCODE`` and ``PF-DECODE`` are the **only** two checks in the product permitted to assert on
-a duration (AAP §0.12).  Every other case's ``duration_ms`` is recorded and never compared,
-because timing is environment-bound and a duration that reached any other assertion would make
-the suite flaky by construction (AAP §0.5.5); that monopoly is why this module reads a monotonic
-clock at all, and why it never reads a wall clock -- a ``perf_counter()`` difference can only
-produce a duration, never a date.
+These are the **only** two checks permitted to assert on a duration (AAP §0.12). Every other case's
+``duration_ms`` is recorded and never compared, because timing is environment-bound (AAP §0.5.5);
+that monopoly is why this module reads a monotonic clock and never a wall clock.
 
-This file carries no threshold, sample size or warm-up count as a literal.  All seven numbers --
-``encode_p95_ms``, ``decode_p95_ms``, ``min_symbols_per_minute``, ``encode_samples``,
-``decode_samples``, ``warmup`` and ``decode_image_px`` -- are read from
-:attr:`qrcheck.config.models.Config.performance`, the ``[checks.performance]`` table of the
-committed ``qrcheck.toml`` (AAP §0.6.2, §0.12), and each threshold is copied into the result's
-``expected`` so the report proves which budget the case was measured against.  Changing a floor
-means changing one declared default and the acceptance criterion that reads it, never editing a
-check.
+Every threshold comes from the configuration: all seven numbers -- ``encode_p95_ms``,
+``decode_p95_ms``, ``min_symbols_per_minute``, ``encode_samples``, ``decode_samples``, ``warmup``
+and ``decode_image_px`` -- are read from :attr:`qrcheck.config.models.Config.performance`, the
+``[checks.performance]`` table of the committed ``qrcheck.toml`` (AAP §0.6.2, §0.12).
 
-``PF-ENCODE`` asks the target for one symbol of a declared fixed payload ``warmup`` times without
-measuring, then ``encode_samples`` times measuring each call with :func:`time.perf_counter`.  It
-asserts the 95th-percentile encode duration against ``encode_p95_ms`` and the measured throughput
-against ``min_symbols_per_minute``, so the invocation count is exactly
-``warmup + encode_samples`` (5 + 100 = 105 under the committed configuration), which
-:data:`EXPECTED_ENCODES` declares: a retry would register as one more invocation and fail the
-counting-stub test rather than improve a figure (AAP §0.4.3, §0.5.6).
+What each check measures: ``PF-ENCODE`` asks the target for one symbol of a declared fixed payload
+``warmup`` times unmeasured and then ``encode_samples`` times measured, asserting the nearest-rank
+95th percentile against ``encode_p95_ms`` and the throughput against ``min_symbols_per_minute``; its
+invocation count is exactly ``warmup + encode_samples`` (5 + 100 = 105). ``PF-DECODE`` draws its
+probe image **inside the framework** with no adapter call -- a declared payload encoded by segno at
+the run's level, the grid scaled by nearest neighbour to exactly ``decode_image_px`` pixels square,
+the PNG encoded through :mod:`qrcheck.evidence.mux` -- so it declares no capability and runs against
+a target that cannot encode or cannot be reached; it makes ``warmup + decode_samples`` (5 + 200 =
+205) primary decodes, the first of which must return the payload before any sample is timed. The
+percentile rule is nearest-rank: samples sorted ascending, the value at index ``ceil(0.95 * n) -
+1``.
 
-``PF-DECODE`` draws its probe image **inside the framework**, with no adapter call at all: it
-encodes a declared fixed payload with segno at the run's error level, scales the module grid by
-nearest neighbour to exactly ``decode_image_px`` pixels square, and encodes the PNG through
-:mod:`qrcheck.evidence.mux`.  That is why the check declares no capability -- it must run against
-a target that cannot encode anything at all, an unreachable one included -- and why its declared
-count is zero encodes and ``warmup + decode_samples`` (5 + 200 = 205) primary decodes of that one
-PNG, which :data:`EXPECTED_DECODES` declares.  The first decode happens before any sample is
-timed and must return the payload the probe was drawn from: a probe that cannot decode would make
-the measurement meaningless, so that condition fails the case instead of timing an unreadable
-image.
-
-``encode_p95_ms`` and ``decode_p95_ms`` are the **nearest-rank** percentile of the sample
-durations -- the samples sorted ascending, the reported value at index ``ceil(0.95 * n) - 1``.
-The rule is stated here because an undocumented percentile is not reproducible (linear
-interpolation, inverted CDFs and nearest-rank agree on no two data sets) and because it must not
-change silently between two runs whose figures a reader compares.  A slow outlier becomes a
-reported p95; it is never re-run, and no sample is discarded.
-
-Nothing here reads ``random``, ``hash()``, ``id()``, the environment or a CPU model: the payloads
-and the probe grid are declared constants, so two runs draw the same image and compare the same
-budgets.  A **passing** case writes no evidence at all, the persistence policy of
-:mod:`qrcheck.report.evidence`, so the byte-identity promise for ``request.json`` and
-``decoded.json`` is untouched for every other case; a *failing* PF case necessarily files the
-measured figures in its ``decoded.json``, because the measurement is the finding and a failure
-whose evidence omitted the numbers would be unreadable.
-
-Reasons emitted: :attr:`qrcheck.report.model.Reason.VALUE_MISMATCH` when a floor is breached or
-the probe image does not decode, with the measured value and the configured threshold named in
-``decoded["message"]``.  Adapter failures travel through
-:func:`qrcheck.checks.support.case_status_for_error`, which reports a declared rejection as
-``target_rejected`` and an unusable response as ``contract_error``;
-:class:`~qrcheck.targets.base.TargetUnavailable` and
-:class:`~qrcheck.targets.base.TargetTimeout` are deliberately **not** caught here, because the
-runner owns the one-error-result-per-check policy on target loss (AAP §0.6.6 row 6).
-
-Imports: the standard library, :mod:`qrcheck.checks.support`, the registry's case and context
-types, the result vocabulary, the configuration record and the port's capability type, all at
-module scope because a check family is expected to be held by the registry.  ``segno``, ``numpy``
-and :mod:`qrcheck.evidence.mux` -- the product's only Pillow importer -- are imported inside
-:func:`_probe_png` at the point of use, so ``qrcheck list`` does not pay for an encoder and an
-image library to print two titles.  Nothing here imports a concrete adapter or a decoder family.
+Reasons emitted: ``Reason.VALUE_MISMATCH`` when a floor is breached or the probe does not decode,
+with the measured value and the configured threshold in ``decoded["message"]``, plus
+``target_rejected`` and ``contract_error`` through
+:func:`qrcheck.checks.support.case_status_for_error`; ``TargetUnavailable`` and ``TargetTimeout``
+are deliberately **not** caught (AAP §0.6.6 row 6), and ``segno``, ``numpy`` and the image mux load
+inside :func:`_probe_png`, so ``qrcheck list`` pays for none of them.
 """
 
 from __future__ import annotations
@@ -107,10 +70,8 @@ __all__ = [
     "pf_encode_cases",
 ]
 
-# The two identifiers, spelled once each: the registry validates them against its own
-# closed tuple, the case identifiers below are built from the same literals, and
-# EXPECTED_* is keyed on them, so a typo cannot register a check under a name the
-# accounting table does not describe.
+# The two identifiers, spelled once each: the registry validates them against its closed tuple, the
+# case identifiers are built from the same literals, and EXPECTED_* is keyed on them.
 _ENCODE_CHECK_ID: Final[str] = "PF-ENCODE"
 _DECODE_CHECK_ID: Final[str] = "PF-DECODE"
 
@@ -119,13 +80,11 @@ _DECODE_CHECK_ID: Final[str] = "PF-DECODE"
 _ENCODE_CASE_ID: Final[str] = "synthetic:pf-encode"
 _DECODE_CASE_ID: Final[str] = "synthetic:pf-decode"
 
-# The adapter-invocation counts each check declares, derived from the configuration
-# defaults rather than typed in: ``PF-ENCODE`` asks the target for one symbol
-# ``warmup + encode_samples`` times, and ``PF-DECODE`` asks it for nothing at all because
-# it draws its own probe image.  tests/unit/test_checks_negative.py counts the calls a
-# case makes against these numbers with a stub adapter, so a retry inside either check
-# registers as one more invocation and fails that test instead of quietly improving a
-# figure (AAP §0.4.3, §0.5.6).
+# The adapter-invocation counts each check declares, derived from the configuration defaults:
+# ``PF-ENCODE`` asks the target for one symbol ``warmup + encode_samples`` times, while
+# ``PF-DECODE`` asks it for nothing because it draws its own probe image.
+# tests/unit/test_checks_negative.py counts the calls a case makes, so a retry registers as
+# one more invocation and fails it (AAP §0.4.3).
 _EXPECTED_DEFAULTS: Final[PerformanceLimits] = PerformanceLimits()
 EXPECTED_ENCODES: Final[dict[str, int]] = {
     _ENCODE_CHECK_ID: _EXPECTED_DEFAULTS.warmup + _EXPECTED_DEFAULTS.encode_samples,
@@ -140,17 +99,15 @@ EXPECTED_DECODES: Final[dict[str, int]] = {
     _DECODE_CHECK_ID: _EXPECTED_DEFAULTS.warmup + _EXPECTED_DEFAULTS.decode_samples,
 }
 
-# The declared payload of each probe.  Fixed ASCII text, short enough to sit comfortably
-# inside the capacity of the smallest symbol at every error level, so neither check ever
-# measures a capacity boundary instead of the encode or decode path.  They are distinct so
-# a reader of an evidence file can tell which probe produced it.
+# The declared payload of each probe: fixed ASCII text, short enough to sit inside the capacity of
+# the smallest symbol at every error level, so neither check measures a capacity boundary instead of
+# the encode or decode path.  They are distinct so an evidence file says which probe produced it.
 _ENCODE_PAYLOAD: Final[bytes] = b"qrcheck performance probe: encode path"
 _DECODE_PAYLOAD: Final[bytes] = b"qrcheck performance probe: decode path"
 
-# The quiet zone of the framework-drawn decode probe, in modules.  Four modules is the
-# width the standard specifies around a QR symbol, and a decoder needs one to find the
-# symbol at all; it is a property of the probe image rather than a threshold, which is why
-# it lives here and not in qrcheck.toml.
+# The quiet zone of the framework-drawn decode probe, in modules: four is the width the standard
+# specifies around a QR symbol, and a decoder needs one to find it at all.  A property of the probe
+# image rather than a threshold, which is why it lives here and not in qrcheck.toml.
 _PROBE_QUIET_ZONE_MODULES: Final[int] = 4
 
 # The two pixel values of the probe image: dark modules and light modules.  A grayscale
@@ -185,13 +142,9 @@ _TRANSLATED_ERRORS: Final[tuple[type[BaseException], ...]] = (
 def pf_encode_cases(ctx: RunContext) -> Iterator[Case]:
     """Yield ``PF-ENCODE``'s single constructed case.
 
-    The case needs nothing from `ctx` at enumeration time -- every value it uses is on
-    the context it is handed when the runner executes it, which is what keeps a case a
-    pure function of the run rather than of the moment it was listed.  The generator
-    takes the context because :data:`qrcheck.registry.check.CasesFn` requires it.
-
-    Args:
-        ctx: The run's context; unread here, passed on by the runner.
+    Every value the case uses is on the context the runner hands it at execution, which keeps a case
+    a pure function of the run rather than of the moment it was listed. The generator takes the
+    context because :data:`qrcheck.registry.check.CasesFn` requires it.
 
     Yields:
         Exactly one case, ``synthetic:pf-encode``.
@@ -202,27 +155,17 @@ def pf_encode_cases(ctx: RunContext) -> Iterator[Case]:
 def _run_encode(ctx: RunContext) -> CaseResult:
     """Time ``warmup + encode_samples`` encodes and assert the two configured floors.
 
-    The warm-up invocations are deliberately unmeasured: a reported p95 has to describe a
-    warmed process rather than interpreter start-up, which is why the measured window
-    starts after them (AAP §0.6.3).  The window's own elapsed time is what the throughput
-    is computed from, so the figure is the rate the samples were actually produced at
-    rather than an extrapolation from the mean.
-
-    Args:
-        ctx: The run's context: its adapter, configuration, error level and seed.
-
-    Returns:
-        A passed result carrying the measured metrics, or a failed result carrying them
-        beside the breached threshold.  A failure records evidence -- the last artefact
-        the target returned, the request that produced it and the measured figures --
-        because the measurement is the finding.
+    The warm-up invocations are deliberately unmeasured: a reported p95 has to describe a warmed
+    process rather than interpreter start-up (AAP §0.6.3), and the window's own elapsed time is
+    what the throughput is computed from. Returns a passed result carrying the metrics, or a failed
+    result carrying them beside the breached threshold -- a failure records the last artefact, the
+    request and the figures, because the measurement is the finding.
 
     Raises:
-        TargetUnavailable: The target could not be reached; propagated unchanged so the
-            runner can report one error result for the check instead of one per sample.
+        TargetUnavailable: The target could not be reached; propagated unchanged so the runner can
+            report one error result for the check instead of one per sample.
         TargetTimeout: No response within the configured timeout; propagated unchanged.
-        ValueError: The request or the measurement is unusable, which is a framework
-            defect the runner reports as an errored case with its traceback.
+        ValueError: The request or the measurement is unusable, which is a framework defect.
     """
     limits = ctx.config.performance
     request = support.build(_ENCODE_PAYLOAD, ctx.ec_level)
@@ -287,25 +230,14 @@ def _time_encodes(
 ) -> tuple[list[float], float, GeneratedSymbol | None]:
     """Run the warm-up and measured encode loops, returning the samples and the window.
 
-    Exactly ``limits.warmup`` untimed invocations followed by exactly
-    ``limits.encode_samples`` timed ones, and no other call to the target: the counts in
-    :data:`EXPECTED_ENCODES` are a promise the counting-stub test checks, so a retry of a
-    slow sample would be an extra invocation rather than a better figure.
-
-    Args:
-        ctx: The run's context; only its adapter is read, through ``support.generate``.
-        request: The single request every invocation repeats.
-        limits: The resolved performance table, read for the two counts.
-
-    Returns:
-        The measured durations in milliseconds in call order, the elapsed seconds of the
-        measured window, and the last artefact the target returned (``None`` only for a
-        configuration that measures no samples, which ``qrcheck.config.schema`` refuses
-        at load time).
+    Exactly ``limits.warmup`` untimed invocations followed by exactly ``limits.encode_samples``
+    timed ones, and no other call to the target: a retried slow sample would be an extra invocation.
+    Returns the durations in milliseconds in call order, the elapsed seconds of the measured window,
+    and the last artefact the target returned.
 
     Raises:
-        TargetUnsupported, TargetRejected, TargetContractError: As ``support.generate``
-            raises them; the caller translates them into a status.
+        TargetUnsupported, TargetRejected, TargetContractError: As ``support.generate`` raises them;
+            the caller translates them into a status.
         TargetUnavailable, TargetTimeout: Propagated by the caller unchanged.
     """
     for _ in range(limits.warmup):
@@ -326,18 +258,10 @@ def _encode_breaches(
 ) -> tuple[str, ...]:
     """Return one message per configured floor `metrics` breaches, in a fixed order.
 
-    Every breached floor is reported, not only the first: a run that is both too slow and
-    too slow per symbol should say so once, in one result, rather than force a second run
-    to discover the second breach.  The messages name the measured value and the
-    configured threshold, which is what makes the failure actionable from the report
-    alone.
-
-    Args:
-        metrics: The measured figures, as recorded in the result.
-        limits: The resolved floors.
-
-    Returns:
-        The breach messages, empty when every floor holds.
+    Every breached floor is reported, not only the first, so a run that is both too slow and too
+    slow per symbol says so once rather than forcing a second run to discover the second breach.
+    Each message names the measured value and the configured threshold, which makes the failure
+    actionable from the report alone. Empty when every floor holds.
     """
     breaches: list[str] = []
     encode_p95 = metrics["encode_p95_ms"]
@@ -358,18 +282,10 @@ def _encode_breaches(
 def _encode_probe_parameters(limits: PerformanceLimits) -> dict[str, Any]:
     """Return the resolved measurement parameters to record beside the request.
 
-    ``expected`` travels in ``summary.json`` but not in the evidence directory, so the
-    probe's own resolved parameters are written into ``request.json`` as well: a reader
-    holding only the evidence of a failed encode case can then see which budget was
-    applied and over how many samples, without the summary that sat beside it.  Every
-    value is configuration-derived, so the artefact stays byte-identical for the same
-    configuration.
-
-    Args:
-        limits: The resolved performance table.
-
-    Returns:
-        The parameters as a JSON-ready mapping.
+    ``expected`` travels in ``summary.json`` but not in the evidence directory, so the probe's own
+    resolved parameters are written into ``request.json`` as well: a reader holding only a failed
+    encode case's evidence can see which budget was applied and over how many samples. Every value
+    is configuration-derived, so the artefact stays byte-identical for the same configuration.
     """
     return {
         "encode_p95_ms": limits.encode_p95_ms,
@@ -390,14 +306,10 @@ def _encode_probe_parameters(limits: PerformanceLimits) -> dict[str, Any]:
 def pf_decode_cases(ctx: RunContext) -> Iterator[Case]:
     """Yield ``PF-DECODE``'s single constructed case.
 
-    No capability is declared, and that is a contract rather than an omission: the check
-    draws its own probe image and never asks the target for anything, so it must stay
-    runnable against a target that cannot encode, cannot render or cannot be reached.  A
-    requirement here would turn a target-independent measurement into a ``skipped``
-    result for a target that simply lacks a capability.
-
-    Args:
-        ctx: The run's context; unread here, passed on by the runner.
+    No capability is declared, and that is a contract rather than an omission: the check draws its
+    own probe image and never asks the target for anything, so it must stay runnable against a
+    target that cannot encode, cannot render or cannot be reached. A requirement here would turn a
+    target-independent measurement into a ``skipped`` result.
 
     Yields:
         Exactly one case, ``synthetic:pf-decode``.
@@ -408,25 +320,15 @@ def pf_decode_cases(ctx: RunContext) -> Iterator[Case]:
 def _run_decode(ctx: RunContext) -> CaseResult:
     """Time ``warmup + decode_samples`` decodes of one framework-drawn PNG.
 
-    The image is drawn by :func:`_probe_png`, so the measurement needs nothing from the
-    target and the same bytes are decoded every time.  The first decode is asserted to
-    return the payload the image was drawn from *before* any sample is timed: timing an
-    image the pipeline cannot read would report a meaningless p95, and the condition is
-    therefore a failed case rather than a surprising number.
-
-    Args:
-        ctx: The run's context: its configuration, error level and seed.  The adapter is
-            never touched, which is why no adapter error can arise here.
-
-    Returns:
-        A passed result carrying the measured metrics and the probe's own facts, or a
-        failed result naming the breached floor or the unreadable probe.  Both failures
-        record evidence: the probe PNG, the request and the numbers.
+    The image is drawn by :func:`_probe_png`, so the measurement needs nothing from the target and
+    the same bytes are decoded every time. The first decode must return the payload the image was
+    drawn from
+    *before* any sample is timed: timing an unreadable image would report a meaningless p95, so that
+    condition is a failed case. Both failures record the probe PNG, the request and the numbers.
 
     Raises:
-        ValueError: The request is unusable or a measured window is degenerate -- both
-            framework-side defects the runner reports as an errored case with its
-            traceback.
+        ValueError: The request is unusable or a measured window is degenerate -- both framework-
+        side defects the runner reports as an errored case with its traceback.
     """
     limits = ctx.config.performance
     request = support.build(_DECODE_PAYLOAD, ctx.ec_level)
@@ -440,10 +342,8 @@ def _run_decode(ctx: RunContext) -> CaseResult:
             probe = decoded
     samples: list[float] = []
     if probe is None:
-        # A zero warm-up is a legal configuration, and the probe still has to be proven
-        # readable before anything is measured.  That decode becomes the first measured
-        # sample rather than an extra invocation, so the declared decode count stays
-        # exactly ``warmup + decode_samples`` for every configuration.
+        # A zero warm-up is legal, and the probe still has to be proven readable before anything is
+        # measured: that decode becomes the first measured sample rather than an extra invocation.
         sample_started = time.perf_counter()
         probe = support.decode(ctx, probe_bytes, request)
         samples.append(_elapsed_ms(sample_started))
@@ -506,33 +406,21 @@ def _run_decode(ctx: RunContext) -> CaseResult:
 def _probe_png(image_px: int, ec_level: str) -> bytes:
     """Return a PNG of the decode probe payload, exactly `image_px` pixels square.
 
-    The image is the framework's own: the payload is encoded by segno at the run's error
-    level with ``boost_error=False``, so the symbol occupies the smallest version that
-    holds it at that level and the oracle's two expectation-corrupting defaults are both
-    off (AAP §0.3.5).  ``segno.make_qr`` is Model 2 by construction and has no ``micro``
-    parameter in the pinned 1.6.6 release -- passing one would be a ``TypeError`` -- so
-    Micro QR cannot be drawn here and needs no argument to exclude.
+    The image is the framework's own: the payload is encoded by segno at the run's error level with
+    ``boost_error=False``, so it occupies the smallest version that holds it (AAP §0.3.5).
+    ``segno.make_qr`` is Model 2 by construction and has no ``micro`` parameter in the pinned 1.6.6
+    release, so Micro QR cannot be drawn here.
 
-    The module grid is padded with the quiet zone a decoder needs, then sampled to the
-    requested size by nearest neighbour: output pixel ``i`` takes source pixel
-    ``i * side // image_px``, which preserves module edges exactly and involves no
-    interpolation, resampling filter or colour conversion.  The pixels are drawn as
-    grayscale dark/light values and encoded through :mod:`qrcheck.evidence.mux`, which
-    writes no ancillary chunk, so equal grids produce equal bytes on every run.
-
-    Args:
-        image_px: The side length of the image in pixels, from ``decode_image_px``.
-        ec_level: The run's error-correction level, so the probe exercises the same
-            symbol shape the run's other cases do.
-
-    Returns:
-        The PNG bytes, non-empty and exactly `image_px` pixels on each side.
+    The grid is padded with the quiet zone a decoder needs, then sampled by nearest neighbour --
+    output pixel ``i`` takes source pixel ``i * side // image_px`` -- which preserves module edges
+    without interpolation or colour conversion. The pixels are grayscale dark/light values encoded
+    through :mod:`qrcheck.evidence.mux`, which writes no ancillary chunk, so equal grids give equal
+    bytes.
 
     Raises:
-        ValueError: `image_px` is not a positive integer -- a configuration the schema
-            already refuses, so reaching it here is a framework defect.
-        TypeError: segno rejects the level or the payload; a framework defect, since the
-            level comes from a validated run and the payload is a declared constant.
+        ValueError: `image_px` is not a positive integer -- a configuration the schema already
+        refuses. TypeError: segno rejects the level or the payload; a framework defect, since the
+        level comes from a validated run and the payload is a declared constant.
     """
     # Imported here rather than at module scope: this is the only function that needs an
     # encoder or an image library, so importing the module to register the check must not
@@ -553,27 +441,18 @@ def _probe_png(image_px: int, ec_level: str) -> bytes:
     index = (numpy.arange(image_px) * side) // image_px
     scaled = padded[numpy.ix_(index, index)]
     pixels = numpy.where(scaled, _PROBE_DARK_PIXEL, _PROBE_LIGHT_PIXEL).astype(numpy.uint8)
-    # Pillow is reached only through the image boundary, as the layering rule requires:
-    # ``mux`` is the one module that imports it, and its ``Image`` supplies the single
-    # conversion that boundary has no function for -- a module grid to pixels.  This
-    # module therefore imports no image library of its own.
+    # Pillow is reached only through the image boundary: ``mux`` is the one module that imports it,
+    # and its ``Image`` supplies the single conversion that boundary has no function for.
     return mux.encode_png(mux.Image.fromarray(pixels))
 
 
 def _probe_facts(probe: DecodeResult) -> dict[str, Any]:
     """Return the probe decode's own facts, for the result and for evidence.
 
-    Recorded on a passing case as well as a failing one, so the figure a report shows can
-    be read together with what was decoded to produce it: the version the grid dimension
-    implies, the EC level from both independent sources, the mask, the grid digest and the
-    payload length.  Every value is a function of the declared probe payload and the run's
-    error level, so a passing case's record stays stable from run to run.
-
-    Args:
-        probe: The first decode of the probe image.
-
-    Returns:
-        The facts as a JSON-ready mapping.
+    Recorded on a passing case as well as a failing one, so a reported figure can be read together
+    with what was decoded to produce it: the version the grid dimension implies, the EC level from
+    both sources, the mask, the grid digest and the payload length. Every value is a function of the
+    declared probe payload and the run's error level.
     """
     return {
         "agreement": probe.agreement,
@@ -596,23 +475,9 @@ def _probe_failure(
 ) -> CaseResult:
     """Return the failed result for a probe image the pipeline could not read.
 
-    The condition is stated as a failure rather than measured around: a p95 computed from
-    an image that does not decode describes nothing, and the run would otherwise report a
-    comfortable number for a pipeline that had stopped working.  The whole decode result
-    is persisted with the failure, so the per-decoder outcomes, the polarity and the
-    format-information reading show why the pipeline could not read the framework's own
-    image.
-
-    Args:
-        ctx: The run's context.
-        probe: The decode result the pipeline produced for the probe image.
-        request: The request the probe payload was built for.
-        probe_symbol: The probe artefact, recorded as this case's symbol.
-        limits: The resolved performance table, for the parameters written to evidence.
-        started_at: When the case began, so the failed result carries its own duration.
-
-    Returns:
-        The failed result, carrying its evidence directory.
+    The condition is a failure rather than measured around: a p95 computed from an image that does
+    not decode describes nothing. The whole decode result is persisted, so the per-decoder outcomes,
+    the polarity and the format-information reading show why the probe could not be read.
     """
     decoded: dict[str, Any] = dict(probe.as_dict())
     decoded["message"] = (
@@ -646,17 +511,10 @@ def _probe_failure(
 def _decode_probe_parameters(limits: PerformanceLimits) -> dict[str, Any]:
     """Return the resolved decode measurement parameters to record beside the request.
 
-    The counterpart of :func:`_encode_probe_parameters`: the floor, the sample plan and
-    the image size all reach ``request.json`` so a failed decode case is readable from its
-    own evidence directory.  ``probe`` and ``probe_image`` state that the artefact in the
-    directory is the framework's drawing rather than a target's output, which a reader of
-    ``symbol.png`` would otherwise have no way to know.
-
-    Args:
-        limits: The resolved performance table.
-
-    Returns:
-        The parameters as a JSON-ready mapping.
+    The counterpart of :func:`_encode_probe_parameters`: the floor, the sample plan and the image
+    size all reach ``request.json`` so a failed decode case is readable from its own evidence
+    directory. ``probe`` and ``probe_image`` state that the artefact there is the framework's
+    drawing rather than a target's output.
     """
     return {
         "decode_image_px": limits.decode_image_px,
@@ -671,21 +529,12 @@ def _decode_probe_parameters(limits: PerformanceLimits) -> dict[str, Any]:
 def _nearest_rank_percentile(samples: Sequence[float], quantile: float) -> float:
     """Return the nearest-rank `quantile` of `samples`, in the samples' own unit.
 
-    The rule the module docstring states: sort ascending, take index
-    ``ceil(quantile * n) - 1``, clamped into range.  No interpolation, so the reported
-    figure is always one of the durations actually measured and two readers of the same
-    samples always agree on it.
-
-    Args:
-        samples: The measured durations, in any order.
-        quantile: The quantile to take, in ``(0, 1]``.
-
-    Returns:
-        The sample at the nearest rank.
+    Sort ascending and take index ``ceil(quantile * n) - 1``, clamped into range. No interpolation,
+    so the figure is always one of the durations measured and two readers agree on it.
 
     Raises:
-        ValueError: `samples` is empty or `quantile` is outside ``(0, 1]``.  The schema
-            guarantees at least ten samples, so an empty sequence is a caller defect.
+        ValueError: `samples` is empty or `quantile` is outside ``(0, 1]``. The schema guarantees at
+            least ten samples, so an empty sequence is a caller defect.
     """
     if not samples:
         raise ValueError("a percentile needs at least one sample")
@@ -699,18 +548,10 @@ def _nearest_rank_percentile(samples: Sequence[float], quantile: float) -> float
 def _symbols_per_minute(count: int, window_seconds: float) -> float:
     """Return the throughput of `count` encodes produced in `window_seconds`.
 
-    Args:
-        count: How many symbols the measured window produced.
-        window_seconds: How long that window took, measured with the same clock the
-            samples were.
-
-    Returns:
-        The rate in symbols per minute.
-
     Raises:
-        ValueError: `window_seconds` is not positive, which would make the rate infinite.
-            A monotonic clock difference over a hundred sampled calls cannot be zero, so
-            this is a framework defect rather than a measurement to report.
+        ValueError: `window_seconds` is not positive, which would make the rate infinite. A
+        monotonic clock difference over a hundred sampled calls cannot be zero, so this is a
+        framework defect rather than a measurement to report.
     """
     if not math.isfinite(window_seconds) or window_seconds <= 0.0:
         raise ValueError(
@@ -722,15 +563,8 @@ def _symbols_per_minute(count: int, window_seconds: float) -> float:
 def _elapsed_ms(started_at: float) -> float:
     """Return the milliseconds elapsed since `started_at` on the monotonic clock.
 
-    The one place this module computes a duration from a clock reading, so every
-    ``duration_ms`` and every sample is produced the same way.  A wall clock is never
-    read: a monotonic difference can only be a duration, which is the only thing a report
-    records (AAP §0.5.5).
-
-    Args:
-        started_at: A prior :func:`time.perf_counter` reading.
-
-    Returns:
-        The elapsed milliseconds, never negative.
+    The one place this module computes a duration from a clock reading, so every ``duration_ms`` and
+    every sample is produced the same way. A wall clock is never read: a monotonic difference can
+    only be a duration, which is the only thing a report records (AAP §0.5.5).
     """
     return max(time.perf_counter() - started_at, 0.0) * _MS_PER_SECOND

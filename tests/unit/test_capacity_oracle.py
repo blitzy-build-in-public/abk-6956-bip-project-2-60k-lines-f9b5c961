@@ -1,22 +1,11 @@
 """Contract test: the corpus capacity tables are provably segno's own tables.
 
-``qrcheck/corpus/capacity.py`` derives every boundary payload length in the corpus, so one
-transcription slip there would silently mis-size every boundary record and every capacity
-assertion built on it (IM-6). This module compares the embedded tables with ``segno.consts`` row
-for row and ties the arithmetic to segno's real acceptance boundary by encoding the largest
-legal payload of each mode at sampled versions, asserting segno accepts it and rejects one
-character more. :func:`_encode` is the single call site that neutralises the two segno defaults
-which would make the comparison meaningless: ``boost_error=False``, because the default spends
-spare capacity on a higher error level without changing the version, so an oracle built with it
-reports a different level than the one requested; and ``segno.make_qr`` rather than bare
-``segno.make``, because a short payload becomes a **Micro QR** symbol with no ``4V+17`` module
-count and a different format-information layout, ``make_qr`` being Model 2 by construction and
-taking no ``micro`` argument at all, which ``test_the_model2_entry_point_avoids_micro_symbols``
-asserts instead of trusting.
-
-Every expectation is read from ``segno.consts`` at test time; the only literals are ISO/IEC
-18004 facts, named once below with the clause they come from. Nothing here reads a product
-threshold, and no case is skipped, marked or retried.
+``qrcheck/corpus/capacity.py`` derives every boundary payload length, so a transcription slip
+there would mis-size every boundary record and the capacity assertions built on it. The tables
+are compared with ``segno.consts`` row for row, and each mode's largest legal payload must encode
+at a sampled version while one character more must overflow. :func:`_encode` is the single segno
+call site: it passes ``boost_error=False`` and uses ``make_qr``, the two defaults that would
+otherwise void the comparison, and every expectation is read from ``segno.consts`` at test time.
 """
 
 from __future__ import annotations
@@ -29,15 +18,12 @@ from segno import consts as segno_consts
 
 from qrcheck.corpus import builder, capacity
 
-# ISO/IEC 18004 §7.5: Model 2 QR symbols carry Versions 1-40. Micro QR (M1-M4) and
-# Structured Append are out of scope for the product, so 1 and 40 are the only ends of the
-# range any assertion refers to.
+# ISO/IEC 18004 §7.5: Model 2 QR carries Versions 1-40; Micro QR and Structured Append are
+# excluded.
 FIRST_MODEL2_VERSION: int = 1
 LAST_MODEL2_VERSION: int = 40
 
-# segno keys SYMBOL_CAPACITY and ECC by integer error level, not by "L"/"M"/"Q"/"H": keying
-# them with a string raises KeyError, which reads like a capacity disagreement rather than a
-# lookup mistake, so every lookup goes through this one mapping.
+# segno keys SYMBOL_CAPACITY and ECC by int level; a string key raises KeyError, not a mismatch.
 SEGNO_ERROR_LEVELS: dict[str, int] = {
     "L": segno_consts.ERROR_LEVEL_L,
     "M": segno_consts.ERROR_LEVEL_M,
@@ -45,13 +31,10 @@ SEGNO_ERROR_LEVELS: dict[str, int] = {
     "H": segno_consts.ERROR_LEVEL_H,
 }
 
-# The Micro QR version names segno reports on a QRCode: a Micro symbol answers "M1"-"M4"
-# where a Model 2 symbol answers an integer version. Used to assert that a Micro symbol is
-# recognisably different from the Model 2 symbol :func:`_encode` returns.
+# The Micro QR version names segno reports ("M1"-"M4"), where Model 2 answers an integer version.
 MICRO_VERSION_NAMES: tuple[str, ...] = ("M1", "M2", "M3", "M4")
 
-# The whole of every table: 40 versions x 4 error-correction levels, sorted by version then
-# level, as the parametrization each row-for-row comparison runs over.
+# The whole of every table: 40 versions x 4 error-correction levels, sorted by version then level.
 VERSIONS: tuple[int, ...] = tuple(range(FIRST_MODEL2_VERSION, LAST_MODEL2_VERSION + 1))
 VERSION_EC_PAIRS: tuple[tuple[int, str], ...] = tuple(
     sorted(itertools.product(VERSIONS, capacity.EC_LEVELS))
@@ -62,10 +45,9 @@ EC_MODE_PAIRS: tuple[tuple[str, str], ...] = tuple(
 )
 EC_MODE_IDS: list[str] = [f"{ec}-{mode}" for ec, mode in EC_MODE_PAIRS]
 
-# Versions at which the payload-length arithmetic is checked against segno's own encoder:
-# both ends of the range, Version 7 (the first that carries version-information blocks), and
-# the ISO/IEC 18004 §7.4 version-group boundaries 9|10 and 26|27 with a neighbour either
-# side, because the character-count indicator changes width across each boundary.
+# Versions where the payload arithmetic is checked against segno's encoder: both ends, Version 7
+# (the first with version-information blocks) and the §7.4 group boundaries 9|10 and 26|27 with a
+# neighbour either side, because the character-count indicator changes width across each.
 SAMPLE_VERSIONS: tuple[int, ...] = (1, 2, 7, 10, 26, 27, 40)
 SAMPLE_POINTS: tuple[tuple[int, str, str], ...] = tuple(
     sorted(itertools.product(SAMPLE_VERSIONS, capacity.EC_LEVELS, capacity.MODES))
@@ -74,9 +56,7 @@ SAMPLE_POINT_IDS: list[str] = [
     f"v{version}-{ec}-{mode}" for version, ec, mode in SAMPLE_POINTS
 ]
 
-# Payload lengths whose minimal version is cross-checked against segno's own version search:
-# an empty payload, the smallest lengths of each mode, and lengths that land in different
-# version groups for different levels, so a character-count-indicator slip cannot hide.
+# Lengths whose minimal version meets segno's own search: 0, per-mode minimums, mixed groups.
 MINIMAL_VERSION_LENGTHS: tuple[int, ...] = (0, 1, 7, 17, 53, 100, 200, 500)
 MINIMAL_VERSION_POINTS: tuple[tuple[int, str, str], ...] = tuple(
     sorted(itertools.product(MINIMAL_VERSION_LENGTHS, capacity.EC_LEVELS, capacity.MODES))
@@ -85,20 +65,15 @@ MINIMAL_VERSION_IDS: list[str] = [
     f"len{length}-{ec}-{mode}" for length, ec, mode in MINIMAL_VERSION_POINTS
 ]
 
-# The seed the committed corpus is built from (``qrcheck.toml`` ``seed``). Boundary lengths
-# are arithmetic rather than seeded, so any seed yields the same lengths; seeding fixes only
-# the fillers, and using the committed seed keeps this test aligned with the shipped corpus.
+# The committed corpus seed (``qrcheck.toml``); boundary lengths are arithmetic, not seeded.
 CORPUS_SEED: int = 20240101
 
-# The three levels a boundary record's note records: EC L is the boundary itself — the
-# payload is exactly that version's L capacity — and M and H are the levels at which the same
-# payload needs a larger version, which is the step the wrong-EC-level defect is caught on.
+# The three levels a boundary note records: L is the boundary, M and H need a larger version.
 BOUNDARY_ECS: tuple[str, ...] = ("L", "M", "H")
 
-# One filler per mode, chosen so segno's mode selection agrees with the mode under test: the
-# numeric filler is digits only; the alphanumeric filler draws on ISO/IEC 18004 §7.3.4's
-# 45-character set and begins with a letter, so no prefix of it is digits-only; the byte
-# filler is lowercase, which is outside both smaller charsets and so forces byte mode.
+# One filler per mode so segno's mode selection agrees with the mode under test: digits for numeric,
+# the §7.3.4 alphanumeric set starting with a letter so no prefix is digits-only, and lowercase for
+# byte, which is outside both smaller charsets.
 MODE_FILLERS: dict[str, str] = {
     "numeric": "0123456789",
     "alphanumeric": "A1B2C3D4E5F6G7H8I9J0KLMNOPQRSTUVWXYZ $%*+-./:",
@@ -118,12 +93,7 @@ def _encode(
     error: str | None = None,
     version: int | None = None,
 ) -> segno.QRCode:
-    """Encode `content` with segno as a Model 2 symbol, never boosting the error level. The only
-    segno call site in this module, so ``boost_error=False`` cannot be forgotten, and Model 2
-    is guaranteed structurally: ``segno.make_qr`` takes no ``micro`` argument, which is exactly
-    what makes it the Model 2 entry point, while bare ``segno.make`` would return a Micro
-    symbol for a short payload.
-    """
+    """Encode as Model 2 with ``boost_error=False``, the only segno call site in this module."""
     return segno.make_qr(content, error=error, version=version, boost_error=False)
 
 
@@ -150,9 +120,8 @@ def test_ecc_blocks_equals_segno_ecc(version: int, ec: str) -> None:
     groups = segno_consts.ECC[version][SEGNO_ERROR_LEVELS[ec]]
     blocks, ecc_per_block = capacity.ECC_BLOCKS[version][ec]
 
-    # Table 9 splits some levels into groups that differ in block count and in codewords per
-    # block but not in error-correction codewords per block, which is what makes the
-    # aggregated pair lossless; asserting that this set has exactly one member is the check.
+    # Table 9 splits a level into groups that differ in block count and data codewords but not in
+    # error-correction codewords per block, which makes the single aggregated pair lossless.
     assert {group.num_total - group.num_data for group in groups} == {ecc_per_block}
     assert blocks == sum(group.num_blocks for group in groups)
     assert capacity.TOTAL_CODEWORDS[version] == sum(
@@ -173,10 +142,8 @@ def test_capacity_tables_hold_model2_versions_only() -> None:
         for key in table:
             assert isinstance(key, int) and not isinstance(key, bool), key
 
-    # segno's own tables do carry the Micro rows — integer sentinels at and below 0 — and
-    # string-keyed rectangular Micro layouts inside ECC. "No Micro row here" is therefore a
-    # real exclusion: the sentinels exist in the oracle and are asserted absent from the
-    # product's tables, rather than being absent from both.
+    # segno's tables do carry the Micro rows (integer sentinels at and below 0) and string-keyed
+    # Micro ECC layouts, so "no Micro row here" is a real exclusion asserted against the oracle.
     micro_sentinels = {
         segno_consts.VERSION_M1,
         segno_consts.VERSION_M2,
@@ -219,11 +186,8 @@ def test_no_capacity_answer_ever_names_a_micro_version(ec: str, mode: str) -> No
 def test_max_payload_bytes_matches_segno_acceptance(
     version: int, ec: str, mode: str
 ) -> None:
-    """segno accepts exactly `max_payload_bytes` characters in `mode` and rejects one more. This
-    is the assertion that ties the arithmetic to the real encoder rather than to a second
-    transcription: the payload is built from the mode's own charset, and segno is asked to
-    encode it at a pinned version, so a length that is one character too long is precisely a
-    `DataOverflowError`.
+    """segno accepts exactly `max_payload_bytes` and rejects one more, tying the arithmetic to the
+    encoder.
     """
     length = capacity.max_payload_bytes(version, ec, mode)
     symbol = _encode(_payload(mode, length), error=ec, version=version)
@@ -270,12 +234,7 @@ def test_the_model2_entry_point_avoids_micro_symbols() -> None:
 
 
 def test_boundary_corpus_payloads_sit_on_capacity_boundaries() -> None:
-    """Every boundary record's length is a table capacity, and its note recomputes. The corpus
-    builder must derive boundary lengths from these tables rather than transcribe them, and
-    each boundary payload must be exactly the EC-L capacity of its version so the same payload
-    needs the next version at EC M — the one-step difference the wrong-EC-level defect is
-    observed through.
-    """
+    """Each boundary payload is its version's EC-L capacity and needs the next version at EC M."""
     records = [
         record
         for record in builder.build_corpus(CORPUS_SEED)
@@ -314,12 +273,10 @@ def test_boundary_corpus_payloads_sit_on_capacity_boundaries() -> None:
         assert symbol_l.mode == mode, record.id
         assert _encode(content, error="M").version == versions["M"], record.id
 
-    # Every mode the corpus declares has a boundary witness, so the arithmetic above is
-    # exercised across all three charsets rather than in one of them.
+    # Every declared mode has a boundary witness, so the arithmetic runs across all three charsets.
     assert {mode for mode, _ in verified} == set(capacity.MODES)
 
-    # Boundary lengths are arithmetic, not seeded: a different seed refills the payloads and
-    # must leave every boundary length exactly where the tables put it.
+    # Boundary lengths are arithmetic, not seeded: another seed refills payloads, not lengths.
     other_seed = [
         (record.expected_mode, _payload_length(record))
         for record in builder.build_corpus(CORPUS_SEED + 1)

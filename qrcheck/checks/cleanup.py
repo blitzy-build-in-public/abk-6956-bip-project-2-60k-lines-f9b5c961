@@ -1,61 +1,29 @@
 """``CL-ARTIFACTS``: the run leaves no temporary file and no open handle behind.
 
-AAP §0.8.1's ``checks/cleanup.py`` -> ``CL-ARTIFACTS`` line and the "``CL-ARTIFACTS``'s
-observation" paragraph: one synthetic case, ``synthetic:cleanup``, that observes the framework's
-own footprint instead of anything a target produced.  The observation has two halves.  The
-**temporary-file half** snapshots :func:`tempfile.gettempdir` while this check's cases are
-enumerated and compares it as a set of *names* against a second snapshot taken when the case
-executes: every framework-owned temporary path is created under the product prefix
-:data:`TEMP_PREFIX` -- the subprocess adapter's scratch directory
-(``tempfile.mkdtemp(prefix="qrcheck-")`` in :mod:`qrcheck.targets.cli`) and the logo overlay
-bitmap -- and each is removed in a ``finally``, so an entry that survives its case is exactly what
-AAP §0.8.1 calls "no user-visible temporary files remain".  The **handle half** resolves every
-entry of :func:`fd_directory` (``/proc/self/fd`` on Linux, ``/dev/fd`` on macOS) and compares it
-against ``report_dir``: an entry that resolves under the report root is a file handle the framework
-opened and did not close, and the images :func:`qrcheck.evidence.mux.open_image` registers for the
-life of its context are asserted empty through the accessor that module exposes
-(:func:`mux.open_images`), so an unclosed image is reported here rather than merely documented as
-unobservable.
+One synthetic case, ``synthetic:cleanup``, observing the framework's own footprint rather than
+anything a target produced (AAP §0.8.1), in two halves:
 
-Zero adapter invocations: :data:`EXPECTED_ENCODES` declares ``0``, and the check never calls the
-target, declares no capability requirement and no dependency token.  Together with ``DM-SEEDED``
-and ``PF-DECODE`` it is one of the three checks that invoke no adapter, which is what lets a run
-whose target is unreachable still report it as passing while every target-dependent check reports
-its single error (AAP §0.6.6 row 6, ``tests/unit/test_runner_target_loss.py``).  A dependency token
-is deliberately absent: a token can only turn a check into one ``missing_dependency`` skip for the
-whole run, whereas this check reports its handle half per case as ``unsupported_platform`` while
-its temporary-file half still asserts (AAP §0.8.1).
+* **temporary-file half** -- a snapshot of :func:`tempfile.gettempdir` taken at case enumeration,
+  compared as a set of names against one taken at execution. Every framework-owned temporary path is
+  created under the prefix :data:`TEMP_PREFIX` -- the subprocess adapter's scratch directory and the
+  logo overlay bitmap -- and each is removed in a ``finally``.
+* **handle half** -- every entry of :func:`fd_directory` (``/proc/self/fd`` on Linux, ``/dev/fd`` on
+  macOS) resolved and compared against ``report_dir``, plus the images
+  :func:`qrcheck.evidence.mux.open_image` registers, read through :func:`mux.open_images`.
 
-The ordering limitation, stated rather than papered over: AAP §0.8.1 describes the snapshot as
-"before and after the run", but a check cannot see the end of a run from inside its own case, since
-checks execute in ascending check-ID order (AAP §0.5.3) and ``CL-ARTIFACTS`` sorts first of the
-twenty-one, so its case runs *before* every other check.  What it therefore observes is the window
-from its own enumeration to its own execution, plus whatever handles happen to be open at that
-moment.  Two consequences are accepted: the temporary-file half proves that start-up
-(configuration load, target resolution, corpus load) and the window up to its own execution left
-nothing behind and can say nothing about checks that have not run yet; and the handle half sees the
-handles open at execution time, which is the moment the framework is holding its configuration,
-corpus and target -- a live handle under ``report_dir`` then is still a defect, because nothing has
-written there yet.  There is no end-of-run hook and no second observation point in another module,
-since a faked one would put a result in the report that no case produced; the run-level end-state
-assertion belongs to the end-to-end test module that drives a whole run and then inspects
-``report_dir``, which is where the "after the run" half of AAP §0.8.1 lives.
+Zero adapter invocations: :data:`EXPECTED_ENCODES` declares ``0``, and the one dependency token is
+the primary decoder, as AAP §0.3.4's row records, so a run whose target is unreachable still
+reports this check as passing. That token can never turn the check into a ``missing_dependency``
+skip: a run without the primary decoder exits 2 before resolution (AAP §0.6.6 row 3).
 
-Reasons emitted: ``value_mismatch`` for the single ``failed`` verdict, carrying the leaked names,
-the fd paths that resolved under ``report_dir`` and the open images in ``decoded``; and
-``unsupported_platform`` for the single ``skipped`` verdict, emitted only when
-:func:`fd_directory` finds neither platform directory (or cannot list the one it found) *and*
-nothing leaked, so the temporary-file half still asserted.  ``counts.skipped`` is its own integer
-and a skip never counts as a pass.
+The ordering limitation, stated rather than papered over: checks execute in ascending check-ID order
+(AAP §0.5.3) and ``CL-ARTIFACTS`` sorts first, so the case observes the window from its own
+enumeration to its own execution. There is no end-of-run hook, and the run-level end-state assertion
+belongs to the end-to-end test.
 
-It observes; it never cleans.  No file or directory is created, deleted or modified, no entry is
-opened or stat'd, and no temporary path is joined onto anything: the temporary half is one
-``os.listdir`` and set membership over the names it returned.  No clock is read, so
-``duration_ms`` stays at the factory's zero instead of recording a wall-clock value no assertion
-may use (AAP §0.5.5).  Nothing here calls ``hash()``, ``id()`` or ``random``, and every list it
-records is sorted.  There is no bare or broad ``except``, no retry and no threshold literal: an fd
-entry that cannot be resolved is skipped, and an fd directory that cannot be listed downgrades the
-handle half to unsupported rather than failing the run on the host's behaviour.
+Reasons emitted: ``value_mismatch``, the single ``failed`` verdict, carrying the leaked names, the
+fd paths under ``report_dir`` and the open images; and ``unsupported_platform``, the single
+``skipped`` verdict, only when :func:`fd_directory` finds no usable directory *and* nothing leaked.
 """
 
 from __future__ import annotations
@@ -69,7 +37,7 @@ from typing import Any, Final
 
 from qrcheck.checks import support
 from qrcheck.evidence import mux
-from qrcheck.registry.check import Case, RunContext, check
+from qrcheck.registry.check import DEPENDENCY_PRIMARY_DECODER, Case, RunContext, check
 from qrcheck.report.model import CaseResult, Reason
 
 __all__ = [
@@ -88,10 +56,9 @@ __all__ = [
 CHECK_ID: Final[str] = "CL-ARTIFACTS"
 CASE_ID: Final[str] = "synthetic:cleanup"
 
-# The product-wide prefix every framework-owned temporary path carries.  It is restated here
-# rather than imported: ``qrcheck/checks/`` may import no adapter module, and
-# ``qrcheck.targets.cli.TEMP_DIR_PREFIX`` holds the same value.  The two must stay equal by
-# hand; a divergence widens the scan's blind spot by exactly the entries that stopped matching.
+# The product-wide prefix every framework-owned temporary path carries.  Restated rather than
+# imported because ``qrcheck/checks/`` may import no adapter module, and
+# ``qrcheck.targets.cli.TEMP_DIR_PREFIX`` holds the same value: the two must stay equal by hand.
 TEMP_PREFIX: Final[str] = "qrcheck-"
 
 # The adapter-invocation count this check's contract fixes, declared where the negative tests
@@ -99,10 +66,9 @@ TEMP_PREFIX: Final[str] = "qrcheck-"
 # stray generate would register as a count above zero and fail that test.
 EXPECTED_ENCODES: Final[Mapping[str, int]] = MappingProxyType({CHECK_ID: 0})
 
-# The platform file-descriptor directories, in discovery order.  Linux exposes the process's
-# own handles under /proc/self/fd; macOS exposes them under /dev/fd.  Neither existing means the
-# handle half is unsupported on this host, which is reported per case rather than as a skip of
-# the whole check.
+# The platform file-descriptor directories, in discovery order: ``/proc/self/fd`` on Linux,
+# ``/dev/fd`` on macOS.  Neither existing makes the handle half unsupported on this host, reported
+# per case rather than as a skip of the whole check.
 _FD_DIRECTORIES: Final[tuple[Path, ...]] = (Path("/proc/self/fd"), Path("/dev/fd"))
 
 # The kernel's marker for an entry whose file was unlinked while the handle stayed open.  It is
@@ -120,21 +86,13 @@ def temp_entries(prefix: str = TEMP_PREFIX) -> frozenset[str]:
     """Return the names in the system temporary directory that start with `prefix`.
 
     The whole of the temporary-file half's observation: one directory listing, filtered by name
-    prefix.  No entry is stat'd, opened, joined onto a path or walked into, so the snapshot cannot
-    itself create, touch or delay anything the next snapshot would then see.
-
-    Args:
-        prefix: The name prefix that marks an entry as framework-owned.  It defaults to
-            :data:`TEMP_PREFIX`; a caller passes another only to observe a different product.
-
-    Returns:
-        The matching entry names, as an unordered set for set arithmetic against a later
-        snapshot.  Empty when the temporary directory holds no matching entry or no longer
-        exists at all.
+    prefix. No entry is stat'd, opened, joined onto a path or walked into, so the snapshot cannot
+    itself create, touch or delay anything the next snapshot would see. The names come back as an
+    unordered set for set arithmetic, empty when nothing matches or the directory no longer exists.
 
     Raises:
-        ValueError: `prefix` is not a non-empty string.  An empty prefix would match every entry
-            and make the comparison meaningless.
+        ValueError: `prefix` is not a non-empty string. An empty prefix would match every entry and
+        make the comparison meaningless.
     """
     if not isinstance(prefix, str) or not prefix:
         raise ValueError(f"temp_entries: prefix must be a non-empty str, got {prefix!r}")
@@ -151,16 +109,9 @@ def temp_entries(prefix: str = TEMP_PREFIX) -> frozenset[str]:
 def leaked_temp_entries(baseline: frozenset[str]) -> tuple[str, ...]:
     """Return the framework-prefixed names present now that were absent from `baseline`.
 
-    Set difference over names, not a modification-time comparison: no clock is read, so the
-    verdict is identical on every host and every run for the same sequence of events.
-
-    Args:
-        baseline: The snapshot :func:`temp_entries` returned when the check's cases were
-            enumerated.
-
-    Returns:
-        The leaked entry names in ascending order, empty when the framework cleaned up after
-        itself.
+    Set difference over names, not a modification-time comparison: no clock is read, so the verdict
+    is identical on every host and every run for the same sequence of events. The leaked names come
+    back in ascending order, empty when the framework cleaned up after itself.
     """
     return tuple(sorted(temp_entries() - baseline))
 
@@ -170,10 +121,8 @@ def fd_directory() -> Path | None:
 
     The single platform probe for this concern: Linux answers ``/proc/self/fd``, macOS answers
     ``/dev/fd``, and a host that exposes neither gets ``None``, which makes the handle half
-    unsupported rather than silently clean.
-
-    Returns:
-        The first existing directory of :data:`_FD_DIRECTORIES`, else ``None``.
+    unsupported rather than silently clean. Returns the first existing directory of
+    :data:`_FD_DIRECTORIES`.
     """
     for candidate in _FD_DIRECTORIES:
         if candidate.is_dir():
@@ -184,25 +133,16 @@ def fd_directory() -> Path | None:
 def open_paths_under(directory: Path, root: Path) -> tuple[str, ...]:
     """Return the resolved paths in `directory` that lie at or under `root`.
 
-    Every entry of `directory` is resolved to the path it actually names and compared against
-    `root`, so a handle the framework left open on a file under the report directory is reported
-    by name.  Entries that name no resolvable path -- a pipe, a socket, an anonymous inode, an
-    entry that vanished between listing and resolution -- are skipped: they are not leaks this
-    check can assert, and treating them as errors would fail a run on the host's behaviour.
-
-    Args:
-        directory: The file-descriptor directory, as :func:`fd_directory` returned it.
-        root: The directory no open handle may lie under, normally the resolved configuration's
-            ``report_dir``.
-
-    Returns:
-        The offending absolute paths in ascending order, empty when nothing is open under
-        ``root``.
+    Every entry is resolved to the path it actually names and compared against `root`, so a handle
+    left open on a file under the report directory is reported by name. Entries that name no
+    resolvable path
+    -- a pipe, a socket, an anonymous inode, one that vanished between listing and resolution -- are
+    skipped: they are not leaks this check can assert.
 
     Raises:
-        OSError: `directory` cannot be listed -- it was removed, or the process may not read it.
-            The caller decides what an unreadable descriptor directory means for its verdict;
-            this helper never guesses by returning an empty result that would look clean.
+            OSError: `directory` cannot be listed -- it was removed, or the process may not read it.
+            The caller decides what that means for its verdict; this helper never guesses by
+            returning an empty result that would look clean.
     """
     target_root = Path(os.path.realpath(root))
     found: set[str] = set()
@@ -216,19 +156,11 @@ def open_paths_under(directory: Path, root: Path) -> tuple[str, ...]:
 def _fd_target(entry: Path) -> Path | None:
     """Return the path a descriptor-directory `entry` names, or ``None`` for a non-path entry.
 
-    The link is read with ``os.readlink`` rather than resolved through the filesystem: a
-    descriptor directory is a directory of symbolic links to the objects they describe, and the
-    link target is the only statement about the object that does not have to be re-derived.  A
-    link target that is not absolute names something other than a file -- ``pipe:[1234]``,
-    ``socket:[5678]``, ``anon_inode:[eventfd]`` -- and resolving it would fabricate a path
-    relative to the working directory, so it is skipped instead.
-
-    Args:
-        entry: One entry of a descriptor directory.
-
-    Returns:
-        The resolved path the entry names, or ``None`` when the entry cannot be resolved or does
-        not name a path at all.
+    The link is read with ``os.readlink`` rather than resolved through the filesystem: the link
+    target is the only statement about the object that need not be re-derived. A target that is not
+    absolute names something other than a file -- ``pipe:[1234]``, ``socket:[5678]``,
+    ``anon_inode:[eventfd]`` -- and resolving it would fabricate a path relative to the working
+    directory, so it is skipped.
     """
     try:
         link = os.readlink(entry)
@@ -251,17 +183,10 @@ def _is_under(path: Path, root: Path) -> bool:
 def _report_relative(path: str, report_dir: Path) -> str:
     """Return `path` in the portable form an artefact may carry.
 
-    No artefact records an absolute host path (AAP §0.5.5), so a path under the report directory
-    is recorded relative to it -- the same form ``summary.json`` gives ``evidence_dir`` -- and an
-    absolute path elsewhere is recorded by its name alone.  A path the caller already gave
-    relatively is returned untouched, because it never carried the run's location.
-
-    Args:
-        path: The path as observed.
-        report_dir: The run's report directory, as the resolved configuration gives it.
-
-    Returns:
-        A relative posix path when `path` lies under `report_dir`, the bare name otherwise.
+    No artefact records an absolute host path (AAP §0.5.5), so a path under `report_dir` is
+    recorded relative to it -- the same form ``summary.json`` gives ``evidence_dir`` -- and an
+    absolute path elsewhere is recorded by its name alone. A path the caller already gave relatively
+    is returned untouched, because it never carried the run's location.
     """
     if not os.path.isabs(path):
         return path
@@ -277,20 +202,15 @@ def _report_relative(path: str, report_dir: Path) -> str:
     title="No temporary files or image handles left behind",
     family="cleanup",
     requires=frozenset(),
-    dependencies=(),
+    dependencies=(DEPENDENCY_PRIMARY_DECODER,),
 )
 def cases(ctx: RunContext) -> Iterator[Case]:
     """Yield the single ``synthetic:cleanup`` case, its baseline already captured.
 
-    The baseline is taken here, when the runner enumerates this check's cases, rather than when
-    the case runs: that is the earliest observation the framework offers, because ``CL-ARTIFACTS``
-    sorts first of the twenty-one check identifiers.  Capturing it before the case means an entry
-    a sibling process left in the shared temporary directory is part of the baseline and cannot
-    be mistaken for this run's leak.
-
-    Args:
-        ctx: The run's context, accepted for the calling convention every family's ``cases``
-            shares.  Nothing is read from it here; the case reads it when it executes.
+    The baseline is taken here, at enumeration, rather than when the case runs: that is the earliest
+    observation the framework offers, because ``CL-ARTIFACTS`` sorts first of the twenty-one check
+    identifiers. Capturing it then means an entry a sibling process left in the shared temporary
+    directory is part of the baseline and cannot be mistaken for this run's leak.
 
     Yields:
         Exactly one :class:`~qrcheck.registry.check.Case`, named :data:`CASE_ID`.
@@ -308,18 +228,10 @@ def _verdict(ctx: RunContext, baseline: frozenset[str]) -> CaseResult:
     """Return the case's result for the footprint observed at execution time.
 
     Both halves are observed before any verdict is formed, so ``decoded`` describes the whole
-    footprint even when one half alone already decided the outcome -- a reader diagnosing a leak
-    should not have to guess what the other half would have said.
-
-    Args:
-        ctx: The run's context; its configuration owns ``report_dir`` and its seed is recorded
-            on the result.
-        baseline: The temporary-directory snapshot taken when the cases were enumerated.
-
-    Returns:
-        ``failed`` with reason ``value_mismatch`` when anything leaked or is open, ``skipped``
-        with reason ``unsupported_platform`` when the handle half cannot be observed and nothing
-        leaked, and ``passed`` when both halves are clean.
+    footprint even when one half alone already decided the outcome. Returns ``failed`` with reason
+    ``value_mismatch`` when anything leaked or is open, ``skipped`` with reason
+    ``unsupported_platform`` when the handle half cannot be observed and nothing leaked, and
+    ``passed`` when both halves are clean.
     """
     report_dir = ctx.config.report_dir
     leaked = leaked_temp_entries(baseline)

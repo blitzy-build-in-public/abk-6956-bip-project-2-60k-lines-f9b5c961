@@ -1,52 +1,21 @@
 """Primary reference decoder: the authority every check compares against.
 
-The framework never trusts a single decoder's opinion. This module wraps the
-pinned ``zxing-cpp`` 2.2.0 binding as the *primary* reference decoder, whose
-payload is authoritative for all twenty-one checks: a symbol the primary
-decoder cannot read is a failed or errored case even when the secondary
-decoder reads it, and the secondary decoder is never allowed to overwrite
-what this module reported.
+Wraps the pinned ``zxing-cpp`` 2.2.0 binding, whose payload is authoritative for all twenty-one
+checks: a symbol it cannot read is a failed or errored case even when the secondary decoder reads
+it, and the secondary never overwrites what this module reported. It targets only 2.2.0's flat
+function surface -- ``zxingcpp.read_barcode`` (no ``ReaderOptions``, no ``try_harder`` keyword) and
+``zxingcpp.Result``, whose ``symbology_identifier`` is ``]Q1`` without an ECI designator and ``]Q2``
+with one.
 
-The binding surface it targets is the flat function surface of 2.2.0, and
-nothing beyond it:
+2.2.0 exposes no version and no mask accessor, so ``reported_version`` is ``None`` here by design:
+the version is recovered from the sampled grid (``N = 4V + 17``) and the mask from the symbol's own
+format information. A decoder that returns no payload is ``undetected``, never a disagreement, and a
+payload of ``b""`` is one the decoder did read -- a different fact from ``None``, which the
+invalid-input checks depend on.
 
-* :func:`zxingcpp.read_barcode` -- there is no ``ReaderOptions`` class and no
-  ``try_harder`` keyword. The supported keywords are ``formats``,
-  ``try_rotate``, ``try_downscale``, ``text_mode``, ``binarizer``, ``is_pure``,
-  ``ean_add_on_symbol`` and ``return_errors``, and the image is a
-  ``numpy`` array.
-* :class:`zxingcpp.Result` -- exposes ``valid``, ``text``, ``bytes``,
-  ``format``, ``symbology_identifier`` (``"]Q1"`` without an ECI designator,
-  ``"]Q2"`` with one), ``ec_level`` (a ``str`` such as ``"M"``, added in
-  2.2.0), ``content_type``, ``position``, ``orientation`` and ``error``.
-
-What the binding does **not** provide shapes the rest of the decode layer.
-2.2.0 exposes no version and no mask accessor -- both arrive only in 3.x, via
-``Result.extra`` -- so the version is recovered from the sampled module grid
-(``N = 4V + 17``) and the mask from the symbol's own format information, and
-the corner quadrangle this module publishes is the independent geometry that
-sampling needs. ``reported_version`` is therefore ``None`` here by design, not
-by omission.
-
-Two behaviours of a decoder's silence are contract, not detail. A decoder that
-returns no payload is ``undetected``, which is recorded and is never a
-disagreement; only two differing payloads are. And a payload of ``b""`` -- an
-empty symbol the decoder did read -- is a different fact from ``None``: the
-invalid-input checks depend on that distinction.
-
-Nothing here raises on behalf of a symbol. A missing binding and a binding
-that throws both become an ``error`` outcome carrying the text to explain it,
-because a hostile or broken symbol must leave evidence behind and let the run
-continue rather than abort it. The single exception is an argument that is not
-an image at all: that is a defect in the caller, and :func:`read_primary`
-raises :class:`ValueError` for it.
-
-The binding is imported lazily, per call, so importing this module never loads
-native decoder code: ``doctor``, the capability resolver and the test suite all
-import the decode layer on machines where the primary decoder may be absent,
-and its absence is reported through
-:func:`qrcheck.decode.base.primary_available` rather than as an
-``ImportError`` escaping an import of this package.
+Nothing here raises on behalf of a symbol: a missing binding and a binding that throws both become
+an ``error`` outcome carrying the text that explains it, and ``ValueError`` is reserved for an
+argument that is not an image at all.
 """
 
 from __future__ import annotations
@@ -98,19 +67,10 @@ _CORNER_NAMES: Final[tuple[str, str, str, str]] = (
 def _load_zxingcpp() -> types.ModuleType | None:
     """Resolve the pinned ``zxingcpp`` binding, or ``None`` when it is absent.
 
-    The import is deliberately performed here instead of at module scope, and
-    it is not cached: after the first import the statement is a
-    ``sys.modules`` lookup, and resolving afresh keeps the absence path
-    exercisable at any point in a process's life -- a cached failure would
-    outlive a test that installs the binding, and a cached success would
-    outlive one that removes it.
-
-    An ``ImportError`` raised *inside* the binding's own import counts as
-    absent too, and so does an ``OSError``: a compiled extension whose shared
-    object cannot be loaded -- a wrong architecture, a missing native library
-    -- fails that way rather than with ``ImportError``, and it is equally
-    unusable. Either way the caller gets the diagnostic naming the distribution
-    it has to fix instead of a traceback out of a decoder probe.
+    The import happens per call and is not cached, so the absence path stays exercisable at any
+    point in a process's life. An ``ImportError`` raised inside the binding's own import and an
+    ``OSError`` from a shared object that cannot be loaded both mean unusable, and the caller gets
+    the diagnostic naming the distribution rather than a traceback out of a decoder probe.
     """
     try:
         import zxingcpp
@@ -122,23 +82,15 @@ def _load_zxingcpp() -> types.ModuleType | None:
 def _validate_image(image: numpy.ndarray) -> None:
     """Reject any argument that is not a supported image array.
 
-    The accepted forms are exactly the two the decode layer produces: an
-    ``H x W`` ``uint8`` grayscale array and an ``H x W x 3`` ``uint8`` ``BGR``
-    array -- three bytes per pixel in the order the pinned binding documents,
-    byte 0 blue and byte 2 red, which is not the ``RGB`` order a Pillow image
-    converts to. The consensus layer hands over grayscale, so a three-channel
-    order is never exercised by the framework itself; both shapes are accepted so
-    this wrapper stays correct on its own terms. No other dtype is accepted, so a
-    float image cannot quietly decode against a different pixel scale than the
-    ``uint8`` one the framework measured and recorded.
+    The accepted forms are exactly the two the decode layer produces: an ``H x W`` ``uint8``
+    grayscale array and an ``H x W x 3`` ``uint8`` BGR array, byte 0 blue, the order the binding
+    documents rather than the RGB a Pillow image converts to. No other dtype is accepted, so a float
+    image cannot decode at a pixel scale the framework never measured.
 
     Raises:
-        ValueError: ``image`` is not a ``numpy.ndarray``, is not ``uint8``, or
-            has a shape that is neither ``H x W`` nor ``H x W x 3``. This is a
-            defect in the caller -- the consensus layer only ever passes arrays
-            it built -- so it is raised rather than turned into an outcome:
-            recording it as a decoder failure would misattribute a programmer
-            error to the target under test.
+        ValueError: ``image`` is not a ``uint8`` ``numpy`` array of either shape -- a caller
+            defect, which recorded as an outcome would misattribute a programmer error to the target
+            under test.
     """
     if not isinstance(image, numpy.ndarray):
         raise ValueError(f"image must be a numpy.ndarray; got {type(image).__name__}")
@@ -154,11 +106,8 @@ def _validate_image(image: numpy.ndarray) -> None:
 
 
 def _optional_text(value: object) -> str | None:
-    """Return ``value`` as text, preserving ``None`` and ``""`` as distinct.
-
-    An absent value and an empty value are different evidence: the decoder
-    reports nothing for metadata it lacks and an empty string for a payload it
-    read as empty, so neither is coerced into the other.
+    """Return ``value`` as text, keeping ``None`` and ``""`` distinct: an absent value and
+    an empty payload are different evidence.
     """
     if value is None or isinstance(value, str):
         return value
@@ -168,11 +117,8 @@ def _optional_text(value: object) -> str | None:
 def _content_type(result: object) -> str | None:
     """Return the decoder's content classification as a stable string.
 
-    ``zxingcpp`` reports a ``ContentType`` enum member rather than text, and
-    the member's ``repr`` names the binding's module path, which would tie a
-    recorded piece of evidence to an implementation detail. The member's name
-    (``"Text"``, ``"Binary"``, ``"Mixed"``, ...) is recorded instead: it is
-    stable, readable and JSON-safe, which :class:`DecodeResult` requires.
+    The ``ContentType`` member's name is recorded rather than its ``repr``, which names the
+    binding's module path and would tie a piece of evidence to an implementation detail.
     """
     value = getattr(result, "content_type", None)
     if value is None:
@@ -186,16 +132,11 @@ def _content_type(result: object) -> str | None:
 def _position(result: object) -> tuple[tuple[float, float], ...] | None:
     """Return the symbol's four corners in source-image pixel coordinates.
 
-    The order is the decoder's own -- top-left, top-right, bottom-right,
-    bottom-left -- and the coordinates are the corners of the symbol itself,
-    quiet zone excluded. Grid sampling rectifies this quadrangle to recover the
-    module matrix, which is the only way the version is knowable at all
-    because no pinned decoder reports one.
-
-    ``None`` is returned when the decoder reported no quadrangle, and also when
-    any single corner is missing: a square fabricated from a partial reading
-    would rectify the wrong region and produce a matrix that is wrong without
-    looking wrong, whereas ``None`` sends sampling to its documented fallback.
+    The order is the decoder's own -- top-left, top-right, bottom-right, bottom-left -- and the
+    coordinates bound the symbol itself, quiet zone excluded. ``None`` when the decoder reported no
+    quadrangle, and also when any single corner is missing: a square fabricated from a partial
+    reading would rectify the wrong region and produce a matrix that is wrong without looking wrong,
+    whereas ``None`` sends sampling to its fallback.
     """
     quadrangle = getattr(result, "position", None)
     if quadrangle is None:
@@ -212,11 +153,8 @@ def _position(result: object) -> tuple[tuple[float, float], ...] | None:
 def _undetected_text(result: object | None) -> str:
     """Return the decoder's own message for a symbol it could not read.
 
-    ``read_barcode`` returns ``None`` when it finds nothing -- ``return_errors``
-    only surfaces a symbol it *did* detect but could not trust, such as one
-    failing a checksum -- so a missing result has no message of its own. The
-    decoder's text is preserved verbatim whenever there is one, because a
-    failing check reports it unchanged.
+    ``read_barcode`` returns ``None`` when it finds nothing, so a missing result has no message of
+    its own; text it did report is preserved verbatim.
     """
     if result is None:
         return _NO_SYMBOL_MESSAGE
@@ -225,11 +163,8 @@ def _undetected_text(result: object | None) -> str:
 
 
 def _failed_outcome(polarity: Polarity, error_text: str) -> DecoderOutcome:
-    """Build the ``error`` outcome for a decoder that could not produce a verdict.
-
-    Used for the two ways the decoder itself can fail to run -- an absent
-    binding and a binding that raised -- so both paths record identical
-    metadata and differ only in the text that explains them.
+    """Build the ``error`` outcome for a decoder that could not produce a verdict -- an
+    absent binding or one that raised -- so both paths record identical metadata.
     """
     return DecoderOutcome(
         decoder=DECODER_NAME,
@@ -248,17 +183,11 @@ def _failed_outcome(polarity: Polarity, error_text: str) -> DecoderOutcome:
 class PrimaryReading:
     """One authoritative reading of one symbol, as the consensus layer needs it.
 
-    :class:`DecoderOutcome` deliberately carries only what every decoder can
-    answer -- payload, digest, EC level, error text and geometry. The
-    :class:`DecodeResult` this reading feeds into also carries the
-    authoritative decoder's rendered text, its symbology identifier and its
-    content classification, and those are this decoder's alone, so they travel
-    beside the outcome rather than being widened into a type both decoders
-    must fill.
-
-    ``text`` is the decoder's rendering of the payload under its default
-    ``TextMode.HRI``; it is never what a round-trip assertion compares, because
-    the rendering is the decoder's choice and only ``payload`` is byte-exact.
+    ``DecoderOutcome`` carries only what every decoder can answer, so this decoder's rendered
+    ``text``, symbology identifier and content classification travel beside the outcome rather than
+    widening a type both decoders must fill. ``text`` is the rendering under the default
+    ``TextMode.HRI`` and is never what a round-trip assertion compares, because only ``payload`` is
+    byte-exact.
     """
 
     outcome: DecoderOutcome
@@ -270,28 +199,14 @@ class PrimaryReading:
 def decode_primary(image: numpy.ndarray, *, polarity: Polarity = "original") -> DecoderOutcome:
     """Decode ``image`` with the primary reference decoder.
 
-    This is the interface the rest of the decode layer calls. It returns the
-    outcome alone -- ``decoded``, ``undetected`` or ``error`` -- and never
-    raises for anything the symbol or the binding does.
-
-    Args:
-        image: An ``H x W x 3`` ``uint8`` ``BGR`` array or an ``H x W`` ``uint8``
-            grayscale array. Any other dtype or shape is rejected, so pixels
-            cannot be interpreted at a scale the framework never measured.
-        polarity: The polarity of the pixels in ``image``, stamped onto the
-            outcome for the record. This function never inverts anything: the
-            consensus layer runs an inverted request's second pass on its own
-            255-inverted copy, so the caller always states which copy it
-            passed.
-
-    Returns:
-        The decoder's outcome. ``status`` is ``decoded`` when a payload was
-        read (an empty payload is a payload), ``undetected`` when no symbol was
-        found, and ``error`` when the decoder could not run or raised.
+    Returns the outcome alone -- ``decoded``, ``undetected`` or ``error``, where an empty payload is
+    still a payload -- and never raises for anything the symbol or the binding does. ``polarity`` is
+    stamped onto the outcome for the record; this function never inverts anything, the consensus
+    layer building the inverted copy itself.
 
     Raises:
-        ValueError: ``image`` is not a supported array, which is a defect in
-            the caller rather than a fact about the symbol.
+        ValueError: ``image`` is not a supported array -- a defect in the caller rather than the
+        symbol.
     """
     return read_primary(image, polarity=polarity).outcome
 
@@ -299,21 +214,10 @@ def decode_primary(image: numpy.ndarray, *, polarity: Polarity = "original") -> 
 def read_primary(image: numpy.ndarray, *, polarity: Polarity = "original") -> PrimaryReading:
     """Decode ``image`` and return the outcome together with its text metadata.
 
-    Args:
-        image: An ``H x W x 3`` ``uint8`` ``BGR`` array or an ``H x W`` ``uint8``
-            grayscale array.
-        polarity: The polarity of the pixels in ``image``, stamped onto the
-            outcome. ``"original"`` for the artifact as the target produced it,
-            ``"inverted"`` for the 255-inverted copy the consensus layer builds
-            for an inverted request.
-
-    Returns:
-        The reading. On success the outcome is ``decoded`` with the payload
-        bytes, its SHA-256, the decoder's EC level and the corner quadrangle,
-        and the reading's own fields carry the rendered text, the symbology
-        identifier and the content type. On a symbol the decoder could not find
-        the outcome is ``undetected`` with the decoder's message; when the
-        binding is absent or raises, the outcome is ``error`` and says why.
+    On success the outcome is ``decoded`` with the payload bytes, its SHA-256, the decoder's EC
+    level and the corner quadrangle, while the reading carries the rendered text, the symbology
+    identifier and the content type. A symbol the decoder could not find is ``undetected`` with its
+    message; an absent or raising binding is ``error`` and says why.
 
     Raises:
         ValueError: ``image`` is not a supported array.

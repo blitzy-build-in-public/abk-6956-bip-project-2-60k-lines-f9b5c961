@@ -106,7 +106,7 @@ One subsection per check, in check-ID order. Every subsection carries the same s
 |-------|-------|
 | Family module | `qrcheck/checks/cleanup.py` |
 | Requires | none — this check is target-independent by contract |
-| Optional runtime dependency | none |
+| Optional runtime dependency | `primary-decoder` |
 | Cases | one synthetic case, `synthetic:cleanup` |
 | Cases / encodes / decodes | 1 / 0 / 0 |
 | Evidence | `request.json` (identity only: the case observes the run, not the target) and `decoded.json` with `temp_prefix`, `baseline_count`, `leaked`, `fd_directory`, `handle_half`, `open_under_report_dir`, `open_image_count`, `open_images`, `violations` |
@@ -125,12 +125,14 @@ A failure here is a framework defect, not a target defect: no target can cause a
 | Requires | `png` |
 | Optional runtime dependency | `primary-decoder` |
 | Cases | eight sampled corpus records × seven damage kinds, `corpus:<record-id>@<kind>` |
-| Cases / encodes / decodes | 56 / 8 / 56 |
+| Cases / encodes / decodes | 56 / 8 / 64 |
 | Evidence | `symbol.png` (the pristine artefact), one `damage-<kind>-<seed>.png` per variant, and `decoded.json` with `pristine` (`version`, `ec_level_decoder`, `ec_level_format`, `matrix_sha256`, `sampling`) and `damage[]` (`kind`, `seed`, `agreement`, `decoded_len`, `applied`, `per_decoder`) |
 | Failure reasons | `value_mismatch`; `sampling_failed` |
 | Reproduce | `qrcheck run --checks DM-RESILIENCE --seed <seed> --ec <level>` |
 
 **What it asserts.** That a symbol survives the damage its own error-correction level promises to survive. The sample is the first eight corpus records in `id` order whose payload is short enough to sit comfortably inside capacity, so the damage budget — not the payload size — is the only thing under test. Each sampled record is encoded once, and the seven variants are derived from that one symbol in the fixed kind order; the primary decoder must return the requested payload from every variant.
+
+Those eight shared readings are why the row's decode count of 64 exceeds its 56 cases: each sampled record's pristine symbol is decoded once, memoised, and reused by all seven of its variants, because the occlusion budget is the recovery capacity of the error-correction level decoded from that symbol and of the module grid sampled from it — facts that exist only after a decode. The decode column of AAP §0.8.1's case matrix counts the 56 damaged reads alone.
 
 Two rules shape the verdict. The occlusion budget is read from the **error-correction level decoded from the symbol**, never from the level that was requested, and the occluders are placed only in the data area — never over a finder, separator, timing or alignment pattern, a copy of the format information or the fixed dark module — because covering a function pattern makes a symbol undetectable however much capacity remains. And under damage only the primary decoder is authoritative: the secondary decoder's silence is recorded in `per_decoder` and never treated as a disagreement, which is what `architecture.md` describes as the consensus rules.
 
@@ -475,7 +477,7 @@ The counts above are the rows of the case matrix, and they add up to a fixed wor
 | Check | Cases | Encodes | Decodes |
 |-------|------:|--------:|--------:|
 | `CL-ARTIFACTS` | 1 | 0 | 0 |
-| `DM-RESILIENCE` | 56 | 8 | 56 |
+| `DM-RESILIENCE` | 56 | 8 | 64 |
 | `DM-SEEDED` | 56 | 0 | 56 |
 | `DT-DETERMINISTIC` | 6 | 12 | 12 |
 | `IV-BAD-OPTION` | 4 | 4 | 0 |
@@ -495,7 +497,9 @@ The counts above are the rows of the case matrix, and they add up to a fixed wor
 | `SY-MASK` | 240 | 240 | 240 |
 | `SY-MATRIX-EQUIV` | 8 | 8 | 8 |
 | `SY-VERSION-MIN` | 240 | 240 | 240 |
-| **Total per full run at EC M** | **1,283** | **1,287** | **1,462** |
+| **Total per full run at EC M** | **1,283** | **1,287** | **1,470** |
+
+One row carries a decode count larger than its case count: `DM-RESILIENCE`'s 64 is its 56 damaged reads plus one memoised pristine decode for each of the eight sampled records, because that pristine reading is what yields the error-correction level the occlusion budget is derived from and it is shared by all seven of the record's variants. The decode column of AAP §0.8.1's case matrix counts only the 56 damaged reads, which is where its 1,462 total comes from; the total above is that 1,462 plus the eight. One row's decode is conditional rather than fixed: `IV-OVERCAPACITY` has an image to decode only when the target accepts the over-capacity request, so a conforming `reference` run performs 1,469 decodes while a target that accepts it, such as `defective`, performs the full 1,470.
 
 The samples are deterministic subsets rather than arbitrary lists. `RN-QUIET-ZONE`, `RN-MODULE-SIZE` and `RN-SVG` take the first twelve records in `id` order. `DM-RESILIENCE` and `DM-SEEDED` take the first eight records in `id` order whose payload length is between 8 and 64 bytes, which is short enough that no payload-truncation defect can reach them and comfortably inside capacity, so the damage budget is the only thing under test. `MD-MODE-OPTIMAL`'s twenty-four discriminating cases are the two boundary classes in full and its thirty-six byte-mode cases follow the same first-in-order rule over records verified to lie outside both smaller charsets.
 

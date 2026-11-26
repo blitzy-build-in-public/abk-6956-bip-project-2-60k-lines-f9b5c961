@@ -1,35 +1,22 @@
 """Every one of the twenty-one checks must fail on the defect it asserts against.
 
-Each registered check is driven through its own ``cases`` generator with a protocol-conforming
-stub adapter and a stubbed decode carrying the **one** defect that check exists to detect, and
-the assertion is the check's exact :class:`~qrcheck.report.model.Reason`, never merely "it
-failed": a case failing for an unrelated reason would satisfy ``status is failed`` and say
-nothing about the assertion under test (AAP §0.4.4). Every check also carries a control round
-with no defect injected, which must pass, so a negative round is attributable to the injected
-defect rather than the harness.
+For each registered check this module drives the check's own ``cases`` generator with a
+protocol-conforming stub adapter and a stubbed decode result carrying the **one** defect it
+exists to detect, and asserts the check's exact :class:`~qrcheck.report.model.Reason`, never
+merely "it failed" (AAP §0.4.4). Every check also carries a **control** round with no defect
+injected, which must pass, so a negative round is attributable to the injected defect and not to
+the harness.
 
-The decoders are stubs because a negative case has to *put* a defect in front of a check and a
-real decoder cannot be asked for one: :func:`_render` is a segno-backed target honouring module
-size, quiet zone, colours, version and mask pins, the ``png``/``svg`` format and the logo
-overlay, which is what the five ``RN-*`` checks measure, and :func:`_echo` is a conforming
-decoder. :data:`EXPECTED_INVOCATIONS` declares the ``generate`` calls each check makes for ``n``
-cases and the observed count is asserted equal to it, so the one thing a recorded artefact
-cannot show -- a retry -- registers as the declared count plus one. Each check executes a
-documented prefix of its own ascending case order (:attr:`NegativeSpec.case_limit`),
-reproducible from the check's source alone, and three reasons are asserted as the owning module
-documents them rather than as the plan's prose reads them: ``SY-MASK``, ``IV-BAD-OPTION`` and
-``CL-ARTIFACTS`` all report ``value_mismatch`` (``CL-ARTIFACTS``'s skip is
-``unsupported_platform``), while ``RN-SVG``'s payload-less round asserts ``value_mismatch``
-rather than ``sampling_failed``.
+The decoders are stubs because a negative case must *put* a specific defect in front of a check,
+and a real decoder cannot be asked for one. :data:`EXPECTED_INVOCATIONS` declares the
+``generate`` calls each check makes for ``n`` cases and the observed count is asserted **equal**
+to it, so a retry registers as the declared count plus one; each check drives a documented prefix
+of its own ascending case order (:attr:`NegativeSpec.case_limit`).
 
-``DM-RESILIENCE``'s eight declared invocations are expressed as one per seven cases, held
-against each family module's own ``EXPECTED_ENCODES`` by
-:func:`test_declared_invocations_match_the_family_tables` so the two cannot drift, and
-``DM-SEEDED`` reads the readings that check memoises on the damage module, so each damage run
-clears that memo and re-derives it through its own prerequisite. Every artefact is written under
-the test's own report directory, every image the harness opens is closed before ``CL-ARTIFACTS``
-executes, and the one temporary entry its round injects is removed in a ``finally``.
-"""
+Three reasons are asserted as the owning module documents them: ``SY-MASK``, ``IV-BAD-OPTION``
+and ``CL-ARTIFACTS`` report ``value_mismatch``, and ``RN-SVG``'s round too rather than
+``sampling_failed``. ``DM-RESILIENCE``'s eight invocations are held against each family module's
+own ``EXPECTED_ENCODES``, and ``DM-SEEDED`` clears the memo ``DM-RESILIENCE`` leaves first."""
 
 from __future__ import annotations
 
@@ -74,9 +61,7 @@ from qrcheck.targets.base import (
 # before the module is collected rather than when a test happens to need it.
 REGISTERED: Final[tuple[str, ...]] = load_families()
 
-# ---------------------------------------------------------------------------
 # Harness constants: stub geometry and the one recorded count that is not per case
-# ---------------------------------------------------------------------------
 
 # The module edge the stub renderer draws when a request pins none. Four pixels is enough for
 # a decoder to read the symbol and small enough that a 500-pixel probe image is unnecessary
@@ -104,20 +89,13 @@ _RECORDS_PER_CHECK: Final[int] = 2
 # which is what makes it a leak rather than stray test debris.
 _LEAK_NAME: Final[str] = f"{cleanup_family.TEMP_PREFIX}negative-case-leak"
 
-# ---------------------------------------------------------------------------
 # The two tables under test: the negative rounds and the controls
-# ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True, slots=True)
 class NegativeRound:
     """One driven variant of a check: what is injected, and what must happen. A round names its
-    defects rather than carrying them, so the table below is data a reader can audit without
-    following a callable: each name is resolved per run through :data:`DECODE_DEFECTS`,
-    :data:`SYMBOL_DEFECTS` or :data:`PREPARATIONS`, which is also what lets a stateful defect
-    (a mask that changes between two calls) keep its state inside the run instead of inside the
-    module.
-    """
+    defects, resolved per run so a stateful defect keeps its state inside the run."""
 
     label: str
     status: Status = Status.FAILED
@@ -165,9 +143,7 @@ def _control(
     )
 
 
-# ---------------------------------------------------------------------------
 # The declared adapter-invocation contract, one entry per check (AAP §0.4.3, §0.5.6)
-# ---------------------------------------------------------------------------
 
 # The performance defaults, read from the configuration model rather than typed: PF-ENCODE
 # asks the target for one symbol ``warmup + encode_samples`` times, and that number must be the
@@ -227,11 +203,9 @@ EXPECTED_INVOCATIONS: Final[dict[str, Callable[[int], int]]] = {
 }
 
 # The negative rounds: one entry per check identifier, control first. Each round injects the
-# minimum change the check's own assertion detects -- one field of the decoded evidence, one
-# property of the rendered artefact, one adapter behaviour or one configuration threshold -- so
-# a failing round cannot be failing for a second reason. The reasons are the ones the family
-# modules document; where AAP §0.4.4's prose named another, the module docstring records the
-# delta.
+# minimum change the check's own assertion detects, so a failing round cannot be failing for a
+# second reason: one field of the decoded evidence, one property of the artefact, one adapter
+# behaviour or one configuration threshold.
 
 NEGATIVE_CASES: Final[dict[str, NegativeSpec]] = {
     "RT-ROUNDTRIP": NegativeSpec(
@@ -524,9 +498,7 @@ NEGATIVE_CASES: Final[dict[str, NegativeSpec]] = {
 
 
 
-# ---------------------------------------------------------------------------
 # The conforming stubs: a renderer that honours a request, a decoder that echoes one
-# ---------------------------------------------------------------------------
 
 
 def _oracle(payload: bytes, request: GenerateRequest) -> segno.QRCode:
@@ -602,10 +574,8 @@ def _render(request: GenerateRequest) -> GeneratedSymbol:
 
 
 def _composite_logo(artefact: bytes, overlay_path: Path) -> bytes:
-    """Composite the request's logo bitmap onto the centre of the rendered symbol. A target that
-    declares ``logo_overlay`` is expected to have behaviour behind it, and ``RN-LOGO`` asserts
-    exactly that: the rendered image carries colours the two-colour symbol did not have.
-    """
+    """Composite the request's logo bitmap onto the centre of the rendered symbol: a target that
+    declares ``logo_overlay`` must have behaviour behind it, which ``RN-LOGO`` asserts."""
     with Image.open(io.BytesIO(artefact)) as base_image:
         canvas = base_image.convert("RGB")
     with Image.open(overlay_path) as overlay_image:
@@ -619,10 +589,8 @@ def _composite_logo(artefact: bytes, overlay_path: Path) -> bytes:
 
 
 def _request_key(request: GenerateRequest) -> tuple[Any, ...]:
-    """Return the identity of a request: every field a conforming target reads. Used as a memo
-    key, so the stub answers an identical request with the identical artefact and the identical
-    evidence.
-    """
+    """Return the identity of a request -- every field a conforming target reads -- as a memo key,
+    so an identical request gets the identical artefact and the identical evidence."""
     return (
         request.payload,
         request.ec_level,
@@ -638,11 +606,8 @@ def _request_key(request: GenerateRequest) -> tuple[Any, ...]:
 
 
 def _memoised(answer: Callable[[GenerateRequest], Any]) -> Callable[[GenerateRequest], Any]:
-    """Return `answer` behind a per-run memo keyed on the request's identity. A defect that
-    depends on call order (the mask that changes between two calls) wraps *this* function
-    rather than living inside it, so the re-render it forces still differs from the memoised
-    answer.
-    """
+    """Return `answer` behind a per-run memo keyed on the request's identity; a defect that depends
+    on call order wraps *this* function, so the re-render it forces still differs from the memo."""
     cache: dict[tuple[Any, ...], Any] = {}
 
     def memoised(request: GenerateRequest) -> Any:
@@ -659,8 +624,7 @@ def _echo_factory(
     make_decode_result: Callable[..., DecodeResult],
 ) -> Callable[[GenerateRequest], DecodeResult]:
     """Return the conforming decoder: the evidence a perfect decoder would report. A check driven
-    with it must pass, which is what makes the control round meaningful.
-    """
+    with it must pass, which is what makes the control round meaningful."""
 
     def echo(request: GenerateRequest) -> DecodeResult:
         """Return the conforming decoded evidence for `request`."""
@@ -713,11 +677,8 @@ SymbolDefect = Callable[[GenerateRequest, GeneratedSymbol], GeneratedSymbol]
 
 
 def _replace(result: DecodeResult, **overrides: Any) -> DecodeResult:
-    """Return `result` with `overrides` applied through the record's own constructor.
-    ``dataclasses.replace`` re-runs ``DecodeResult.__post_init__``, so a defect that changes
-    the grid and forgets the digest is refused rather than quietly recorded beside a stale
-    digest.
-    """
+    """Return `result` with `overrides` applied through the record's own constructor, whose
+    ``__post_init__`` refuses a changed grid beside a stale digest rather than recording it."""
     return dataclasses.replace(result, **overrides)
 
 
@@ -737,11 +698,8 @@ def _other_level(ec_level: str) -> str:
 
 
 def _decode_defect(name: str) -> DecodeDefect:
-    """Return the decode defect registered under `name`, built fresh for one run. Fresh per run
-    because two of them are stateful -- the damaged-variant defect echoes the first decode and
-    reports nothing afterwards, which is what models a symbol that reads before it is damaged
-    -- and a module-level closure would carry a counter from one run into the next.
-    """
+    """Return the decode defect registered under `name`, built fresh for one run: a module-level
+    closure would carry a stateful defect's counter from one run into the next."""
     if name == "payload-last-byte-changed":
         return lambda request, result: _replace(
             result, payload_bytes=_last_byte_changed(request.payload)
@@ -835,9 +793,7 @@ def _symbol_defect(name: str) -> SymbolDefect:
 
 
 
-# ---------------------------------------------------------------------------
 # The adapter behaviours a round may name: a declared rejection, a crash, canned bytes
-# ---------------------------------------------------------------------------
 
 # The error each name raises on every invocation, as a factory so no exception instance is
 # re-raised after a traceback has been attached to it.  Both are drawn from the port's closed
@@ -878,9 +834,7 @@ def _responder(round_spec: NegativeRound) -> Callable[[GenerateRequest], Generat
     return responder
 
 
-# ---------------------------------------------------------------------------
 # The window between enumerating a check's cases and executing them
-# ---------------------------------------------------------------------------
 
 # What a preparation may read: the run's context, the cases about to execute, and the cases a
 # prerequisite round enumerated -- which is how the seeded-damage defect finds the variants the
@@ -899,11 +853,8 @@ _TAMPERED_VARIANT: Final[bytes] = b"qrcheck negative tampered variant"
 
 @contextlib.contextmanager
 def _leak_temp_entry(preparation: _Preparation) -> Iterator[None]:
-    """Leave one framework-prefixed entry in the temporary directory, then remove it. The entry is
-    created after ``CL-ARTIFACTS`` snapshotted the directory at enumeration and before its case
-    executes, which is the only window in which the check's own observation is the thing under
-    test rather than a sibling process's debris.
-    """
+    """Leave one framework-prefixed entry in the temporary directory, then remove it after
+    ``CL-ARTIFACTS`` snapshotted it -- the only window where the check's own view is under test."""
     del preparation
     leaked = Path(tempfile.gettempdir()) / _LEAK_NAME
     if leaked.exists():
@@ -918,11 +869,8 @@ def _leak_temp_entry(preparation: _Preparation) -> Iterator[None]:
 
 @contextlib.contextmanager
 def _tamper_recorded_variant(preparation: _Preparation) -> Iterator[None]:
-    """Replace every variant the prerequisite round recorded with bytes no seed can derive. The
-    case identifiers of the prerequisite are ``corpus:<record-id>@<kind>`` (AAP §0.3.4), so the
-    record and the damage kind are read off the cases themselves: no damage-kind name is
-    transcribed here, and a kind added to the check is covered without a second list.
-    """
+    """Replace every recorded variant with bytes no seed can derive: record and damage kind are
+    read off the ``corpus:<record-id>@<kind>`` cases (AAP §0.3.4), never transcribed."""
     for case in preparation.prerequisite_cases:
         record_part, _, kind = case.case_id.partition("@")
         record_id = record_part.split(":", 1)[1]
@@ -935,9 +883,7 @@ PREPARATIONS: Final[dict[str, Callable[[_Preparation], Iterator[None]]]] = {
     "tamper-recorded-variant": _tamper_recorded_variant,
 }
 
-# ---------------------------------------------------------------------------
 # Driving one round: enumerate, install the decode stub, prepare, execute, count
-# ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True, slots=True)
@@ -986,12 +932,8 @@ class _Harness:
 def _decode_stub(
     harness: _Harness, round_spec: NegativeRound
 ) -> Callable[..., DecodeResult]:
-    """Return the decode entry one round runs against. The two invalid-input probes that return a
-    symbol instead of a rejection are given the constant *undetected* result the
-    ``patch_decode`` patcher holds, because an over-capacity payload has no symbol to describe:
-    the probe's evidence records that the primary decoder read nothing, which is the truth
-    about that artefact.
-    """
+    """Return the decode entry one round runs against; the two invalid-input probes get the constant
+    *undetected* result, because an over-capacity payload has no symbol to describe."""
     echo = _echo_factory(harness.make_decode_result)
     defect = None if round_spec.decode_defect is None else _decode_defect(round_spec.decode_defect)
     if round_spec.adapter_symbol is None:
@@ -1063,10 +1005,8 @@ def _drive_round(
 
 
 def _execute_round(check_id: str, round_spec: NegativeRound, harness: _Harness) -> _Outcome:
-    """Drive one round, running the prerequisite round it names before it. No prerequisite names a
-    prerequisite, so the recursion is one level deep by construction rather than by a depth
-    limit.
-    """
+    """Drive one round, running the prerequisite round it names first: no prerequisite names a
+    prerequisite, so the recursion is one level deep by construction, not by a depth limit."""
     prerequisite_cases: tuple[Case, ...] = ()
     if round_spec.prerequisite is not None:
         prerequisite = _execute_round(
@@ -1089,9 +1029,7 @@ def _drive(check_id: str, harness: _Harness) -> _CheckRun:
 
 
 
-# ---------------------------------------------------------------------------
 # Fixtures
-# ---------------------------------------------------------------------------
 
 
 @pytest.fixture
@@ -1104,10 +1042,8 @@ def harness(
     counting_adapter: Any,
     committed_corpus: Sequence[Any],
 ) -> _Harness:
-    """Return the fixtures one driven round needs, over a two-record corpus. Two records rather
-    than one so a check that cycles a request parameter over its sample is driven through more
-    than the first choice.
-    """
+    """Return the fixtures one driven round needs, over a two-record corpus: two records so a check
+    that cycles a request parameter over its sample is driven through more than the first choice."""
     return _Harness(
         config_factory=config_factory,
         make_run_context=make_run_context,
@@ -1119,19 +1055,13 @@ def harness(
     )
 
 
-# ---------------------------------------------------------------------------
-# The guard: no check may exist without a negative round, and no round may name a defect
-# that does not exist
-# ---------------------------------------------------------------------------
+# The guard: no check may exist without a negative round, and no round may name a defect that
+# does not exist
 
 
 def test_the_tables_cover_every_registered_check() -> None:
-    """Both tables name every registered check, and every round names something real. This is the
-    gate AAP §0.4.4 needs at the table level: a newly registered check cannot slip in without a
-    negative round, an identifier cannot be dropped from the registry without the tables
-    failing, and a round that misspells a defect is caught here rather than as a ``KeyError``
-    in the middle of a drive.
-    """
+    """Both tables name every registered check and every round names something real -- the
+    table-level gate AAP §0.4.4 needs, where a misspelt defect fails here."""
     assert REGISTERED == registered_ids(), (
         "loading the families must not change the registered set: "
         f"{REGISTERED} != {registered_ids()}"
@@ -1199,19 +1129,15 @@ def _assert_round_resolves(check_id: str, round_spec: NegativeRound) -> None:
         assert round_spec.prerequisite in NEGATIVE_CASES, round_spec.prerequisite
 
 
-# ---------------------------------------------------------------------------
 # The negative case itself: the exact status and the exact reason, per check
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("check_id", sorted(NEGATIVE_CASES), ids=lambda value: value)
 def test_every_negative_round_fails_with_the_reason_it_documents(
     check_id: str, harness: _Harness
 ) -> None:
-    """The check passes its control and fails each injected defect for that defect's reason. The
-    control is asserted first, because a negative round that fails proves nothing unless the
-    same harness, unchanged, makes the same check pass.
-    """
+    """The check passes its control and fails each injected defect for that defect's reason, the
+    control first: a negative round proves nothing unless the same harness makes the check pass."""
     run = _drive(check_id, harness)
     control = run.control
     assert control.cases >= 1, f"{check_id}: the control executed no case"
@@ -1238,19 +1164,13 @@ def test_every_negative_round_fails_with_the_reason_it_documents(
             )
 
 
-# ---------------------------------------------------------------------------
 # The declared invocation counts: an exact equality, so a retry is visible
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("check_id", sorted(NEGATIVE_CASES), ids=lambda value: value)
 def test_adapter_invocations_match_the_declared_count(check_id: str, harness: _Harness) -> None:
-    """Every round invokes the target exactly as often as the contract declares. Asserted as an
-    equality rather than an upper bound: a retry -- the one thing a recorded artefact cannot
-    show, and the reason AAP §0.4.3 forbids one -- registers as the declared count plus one and
-    fails here, and a case that quietly skipped its encode registers as the declared count
-    minus one and fails here too.
-    """
+    """Every round invokes the target exactly as often as the contract declares, as an equality
+    rather than a bound: a retry registers as one more call and a skipped encode as one fewer."""
     run = _drive(check_id, harness)
     expected = EXPECTED_INVOCATIONS[check_id]
     for outcome in run.all:
@@ -1267,13 +1187,8 @@ def test_adapter_invocations_match_the_declared_count(check_id: str, harness: _H
 def test_declared_invocations_match_the_family_tables(
     harness: _Harness, committed_corpus: Sequence[Any]
 ) -> None:
-    """At full scale every declared count equals the family module's own ``EXPECTED_ENCODES``. The
-    unit above is driven over a bounded prefix, so this is the other end of the same contract:
-    enumerate every check's cases over the whole committed corpus -- which executes nothing,
-    because a case is a closure until the runner calls it -- and check that
-    :data:`EXPECTED_INVOCATIONS` evaluated at that full case count reproduces the number the
-    owning family module declares.
-    """
+    """At full scale every declared count equals the family module's own ``EXPECTED_ENCODES``: cases
+    are enumerated over the whole corpus, which executes nothing, and the count must reproduce."""
     family_counts: dict[str, int] = {}
     for family, module in FAMILY_MODULE_OBJECTS.items():
         declared = getattr(module, "EXPECTED_ENCODES", None)
@@ -1299,19 +1214,13 @@ def test_declared_invocations_match_the_family_tables(
     )
 
 
-# ---------------------------------------------------------------------------
 # Thresholds come from the resolved configuration, never from a literal here
-# ---------------------------------------------------------------------------
 
 
 def test_performance_results_copy_the_configured_thresholds(harness: _Harness) -> None:
-    """Both performance checks report the thresholds the configuration declares, and their
-    samples. The measured durations are recorded and never asserted -- a wall-clock reading in
-    an assertion would break AAP §0.5.5 -- so what is asserted is that the result carries the
-    *configured* floor it was compared against, read from the configuration the round ran with
-    rather than from any number written in this module, together with the sample count the
-    probe actually took.
-    """
+    """Both performance checks report the configured thresholds and their sample count; the measured
+    durations are recorded, never asserted, so no wall-clock value reaches an assertion
+    (§0.5.5)."""
     expectations: dict[str, tuple[str, ...]] = {
         "PF-ENCODE": ("encode_p95_ms", "encode_samples", "min_symbols_per_minute", "warmup"),
         "PF-DECODE": ("decode_image_px", "decode_p95_ms", "decode_samples", "warmup"),
@@ -1338,12 +1247,8 @@ def test_performance_results_copy_the_configured_thresholds(harness: _Harness) -
 
 
 def test_a_skipped_round_is_never_counted_as_a_pass(harness: _Harness) -> None:
-    """The one documented skip is tallied in ``skipped`` alone, leaving ``passed`` at zero. AAP
-    §0.3.4 makes a skipped result a real outcome rather than a flavoured pass, and the
-    four-integer :class:`~qrcheck.report.model.Counts` is what holds that: the
-    missing-rasterizer round contributes to ``skipped`` and to nothing else, so a run that
-    skipped a check can never look green because of it.
-    """
+    """The one documented skip is tallied in ``skipped`` alone, leaving ``passed`` at zero: AAP
+    §0.3.4 makes a skip a real outcome, and the four-integer ``Counts`` is what holds that."""
     run = _drive("RN-SVG", harness)
     skipped = [outcome for outcome in run.rounds if outcome.round.status is Status.SKIPPED]
     assert len(skipped) == 1, "RN-SVG declares exactly one skip round"

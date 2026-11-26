@@ -1,20 +1,17 @@
 """Determinism proofs for ``qrcheck/config/seeding.py``, the only seed-derivation point.
 
 ``derive_seed`` turns a run seed into the seed of one draw, and two properties make a run
-reproducible from the ``seed`` its report records: the derivation is a stated formula,
-recomputed here from :func:`hashlib.sha256` over the same ``"|"``-joined, UTF-8-encoded parts,
-so a change to it fails here instead of silently re-seeding every derived draw; and it reads no
-ambient process state, returning the same values under two different ``PYTHONHASHSEED`` values,
-while no module under ``qrcheck/`` reaches for ``random``, ``hash()``, ``id()``, ``os.urandom``
-or the wall clock. An integer part and its decimal string derive the same seed, because every
-part is stringified with ``str()``.
+reproducible from the ``seed`` its report records: the derivation is a stated formula, recomputed
+here from :func:`hashlib.sha256` over the same ``"|"``-joined UTF-8 parts, so a change to it
+fails here instead of silently re-seeding every derived draw; and it reads no ambient process
+state, returning the same values under two ``PYTHONHASHSEED`` values while no module under
+``qrcheck/`` reaches for ``random``, ``hash()``, ``id()``, ``os.urandom`` or the wall clock.
 
-The parts are joined without escaping, so ``("a", "b")`` and ``("a|b")`` collide -- a documented
-limitation rather than a defect, because the call sites pass identifiers (check IDs,
-``corpus:<record-id>`` case IDs, class names, damage-kind tokens) that cannot contain ``"|"``,
-and escaping would change every derived seed and therefore every committed
-``damage-<kind>-<seed>.png`` name. Every value lies in ``0 <= seed < 2**64``, the range
-``numpy.random.PCG64`` accepts directly.
+Two properties of the definition are asserted rather than assumed: an integer part and its
+decimal string derive the same seed, because every part is stringified with ``str()``; and parts
+are joined without escaping, so ``("a", "b")`` and ``("a|b")`` collide -- a documented
+limitation, since escaping would change every derived seed and every committed damage image name.
+Every value lies in ``0 <= seed < 2**64``, the range ``numpy.random.PCG64`` accepts directly.
 """
 
 import ast
@@ -31,17 +28,15 @@ import pytest
 from qrcheck.config import seeding as seeding_module
 from qrcheck.config.seeding import derive_seed
 
-# Resolved from the imported module, never from the working directory: a submodule's
-# __file__ is always the real source file, so the package directory and the repository
-# root above it are derived from the module rather than from the shell's cwd.
+# Resolved from the imported module, never the working directory: a submodule's __file__ is the real
+# source file, so the package directory and the root above it are derived from the module.
 _SEEDING_PATH = Path(seeding_module.__file__).resolve()
 _PACKAGE_DIR = _SEEDING_PATH.parents[1]  # .../qrcheck
 _REPOSITORY_ROOT = _SEEDING_PATH.parents[2]  # the directory that holds qrcheck/
 
-# Call shapes worth pinning: no parts, one integer part, several mixed parts, a
-# non-ASCII part, a long part, the configured default seed and the largest run seed
-# a JSON-configurable integer realistically reaches. Sorted by repr so the
-# parametrisation order does not depend on the order the literal was edited in.
+# Call shapes worth pinning: no parts, one integer part, several mixed parts, a non-ASCII part, a
+# long part, the configured default seed and the largest run seed a JSON integer realistically
+# reaches. Sorted by repr so the parametrisation order does not depend on editing order.
 _DEFINITION_SPECS: tuple[tuple[object, ...], ...] = (
     (0,),
     (1, 2),
@@ -58,11 +53,9 @@ _DEFINITION_SPECS: tuple[tuple[object, ...], ...] = (
 
 DEFINITION_CASES: tuple[tuple[object, ...], ...] = tuple(sorted(_DEFINITION_SPECS, key=repr))
 
-# Pairs that differ in exactly one way: the run seed, one part's text, one part's
-# namespace, an extra part, or the order of two parts. An integer part and its
-# decimal string are deliberately absent, because the derivation makes them equal and
-# the equivalence is asserted rather than perturbed. Sorted by repr for the same
-# reason the definition table is.
+# Pairs that differ in exactly one way: the run seed, one part's text, one part's namespace, an
+# extra part, or two parts' order. An integer part and its decimal string are absent because the
+# derivation makes them equal; that equivalence is asserted instead. Sorted by repr.
 _PERTURBATION_SPECS: tuple[tuple[tuple[object, ...], tuple[object, ...]], ...] = (
     ((0, "url", 3), (1, "url", 3)),
     ((7, "utf8-multibyte", "caf\u00e9"), (7, "utf8-multibyte", "cafe")),
@@ -80,8 +73,7 @@ PERTURBATIONS: tuple[tuple[tuple[object, ...], tuple[object, ...]], ...] = tuple
     sorted(_PERTURBATION_SPECS, key=repr)
 )
 
-# The integer-part shapes the product actually uses: a corpus record index passed as
-# an int by qrcheck/corpus/payloads.py, and a run seed derived before it is used.
+# The integer-part shapes the product uses: a corpus record index passed as an int, and a run seed.
 _INT_PART_SPECS: tuple[tuple[int, str, int], ...] = (
     (0, "random-bytes", 0),
     (20240101, "boundary-byte", 15),
@@ -91,17 +83,13 @@ _INT_PART_SPECS: tuple[tuple[int, str, int], ...] = (
 
 INT_PART_CASES: tuple[tuple[int, str, int], ...] = tuple(sorted(_INT_PART_SPECS, key=repr))
 
-# The two hash seeds the subprocess runs under. PYTHONHASHSEED perturbs only
-# CPython's own string hashing, so a derivation that agrees under both cannot be
-# leaning on hash or dict order.
+# The two hash seeds the subprocess runs under: PYTHONHASHSEED perturbs only CPython's own string
+# hashing, so a derivation agreeing under both cannot lean on hash or dict order.
 _HASH_SEEDS: tuple[str, ...] = ("0", "12345")
 
 
 def reference_seed(run_seed: int, *parts: str | int) -> int:
-    """Recompute the documented derivation independently of the module under test. The expectation
-    is the definition written out again, never a value copied from a run: a formula change has
-    to be a deliberate change in two places, which is the whole point of pinning it.
-    """
+    """Recompute the documented derivation independently of the module under test."""
     joined = "|".join(str(part) for part in (run_seed, *parts))
     return int.from_bytes(hashlib.sha256(joined.encode("utf-8")).digest()[:8], "big")
 
@@ -132,10 +120,7 @@ def _expected_value() -> list[int]:
 
 
 def _subprocess_source() -> str:
-    """Build the probe payload: the definition table in, derived seeds out. The table is embedded
-    with ``!a`` -- an ASCII-only ``repr`` -- so the payload survives an ``argv`` entry whatever
-    characters a part holds.
-    """
+    """Build the probe payload -- the definition table in, derived seeds out."""
     return (
         "import json\n"
         "\n"
@@ -149,9 +134,8 @@ def _derive_in_subprocess(hash_seed: str) -> list[int]:
     """Derive every definition-table case in a fresh interpreter under one hash seed."""
     environment = dict(os.environ)
     environment["PYTHONHASHSEED"] = hash_seed
-    # qrcheck is not installed into the interpreter's site-packages here, so the
-    # checkout root must be reachable both as the working directory and on the path;
-    # neither depends on who launched pytest or from where.
+    # qrcheck is not installed into site-packages here, so the checkout root must be reachable both
+    # as the working directory and on the path; neither depends on who launched pytest.
     environment["PYTHONPATH"] = os.pathsep.join(
         entry for entry in (str(_REPOSITORY_ROOT), environment.get("PYTHONPATH", "")) if entry
     )
@@ -210,9 +194,7 @@ def test_one_perturbation_changes_the_derived_seed(
 
 
 def test_appending_an_empty_part_is_a_distinct_namespace() -> None:
-    """An empty trailing part is a part: the join keeps its separator. ``(1,)`` joins to ``"1"``
-    while ``(1, "")`` joins to ``"1|"``, so the two namespaces differ and so do their seeds.
-    """
+    """An empty trailing part is a part: ``(1,)`` and ``(1, "")`` are different namespaces."""
     assert derive_seed(1) == reference_seed(1)
     assert derive_seed(1, "") == reference_seed(1, "")
     assert derive_seed(1) != derive_seed(1, "")
@@ -220,11 +202,7 @@ def test_appending_an_empty_part_is_a_distinct_namespace() -> None:
 
 
 def test_the_documented_join_collision_is_preserved() -> None:
-    """Parts are joined unescaped, so an embedded separator collides with a boundary. The product
-    promises nothing stronger, and escaping would change every derived seed and every committed
-    ``damage-<kind>-<seed>.png`` name, so the behaviour is pinned as documented instead of
-    being asserted away.
-    """
+    """Parts are joined unescaped, so an embedded separator collides with a boundary."""
     assert derive_seed(1, "a", "b") == derive_seed(1, "a|b")
     assert derive_seed(1, "a|b") == reference_seed(1, "a|b")
 
@@ -233,10 +211,7 @@ def test_the_documented_join_collision_is_preserved() -> None:
 def test_an_integer_part_and_its_decimal_string_derive_the_same_seed(
     case: tuple[int, str, int],
 ) -> None:
-    """``str()`` inside the derivation makes an int part and its text equivalent.
-    ``qrcheck/corpus/payloads.py`` passes a corpus record index as an ``int`` while the other
-    call sites pass tokens, so the two shapes must not diverge.
-    """
+    """``str()`` makes an int part and its text equivalent derive the same seed."""
     run_seed, word, index = case
     assert derive_seed(run_seed, word, index) == derive_seed(run_seed, word, str(index))
     assert derive_seed(run_seed, word, index) == reference_seed(run_seed, word, str(index))
@@ -251,11 +226,7 @@ def test_a_derived_seed_is_usable_as_a_part() -> None:
 
 
 def test_every_derived_seed_is_a_legal_pcg64_seed() -> None:
-    """Every value lies in ``0 <= seed < 2**64``, the range ``PCG64`` accepts.
-    ``numpy.random.PCG64`` rejects a negative or oversized seed, and
-    ``Generator(PCG64(derive_seed(...)))`` is the only entropy path the product allows, so an
-    out-of-range value would break every seeded draw downstream.
-    """
+    """Every value lies in ``0 <= seed < 2**64``, the range ``PCG64`` accepts."""
     values = sorted(_expected_value())
     assert values, "the definition table is empty"
     for value in values:
@@ -270,35 +241,28 @@ def test_a_derived_seed_reproduces_a_pcg64_bit_stream() -> None:
         assert first.tolist() == second.tolist(), value
 
 
-# --------------------------------------------------------------------------- #
-# The package-wide prohibition on ambient entropy
-# --------------------------------------------------------------------------- #
+# --- The package-wide prohibition on ambient entropy ---
 
-# Modules whose import lets a non-deterministic value into the product. ``uuid`` and
-# ``secrets`` belong here for the same reason as ``random``: the summary's
-# ``run_id`` is a content hash and no artefact carries a random token, so neither has
-# a sanctioned use anywhere in the package.
+# Modules whose import lets a non-deterministic value into the product. ``uuid`` and ``secrets``
+# belong here for the same reason as ``random``: the summary's ``run_id`` is a content hash and no
+# artefact carries a random token, so neither has a sanctioned use.
 _PROHIBITED_IMPORTS: frozenset[str] = frozenset({"random", "secrets", "uuid"})
 
-# Builtin calls that return a value differing between processes: ``hash()`` is
-# salted per interpreter run and ``id()`` is an address inside one.
+# Builtin calls returning a value that differs between processes: ``hash()`` is salted per run and
+# ``id()`` is an address inside one.
 _PROHIBITED_BUILTIN_CALLS: frozenset[str] = frozenset({"hash", "id"})
 
-# Wall-clock readers. A wall clock has no sanctioned use in the product: the
-# summary's ``started_at``/``finished_at`` are built from ``datetime`` in UTC, and
-# every other timing figure is a duration measured with a monotonic clock.
+# Wall-clock readers. A wall clock has no sanctioned use: ``started_at``/``finished_at`` are built
+# from ``datetime`` in UTC and every other timing figure is a monotonic duration.
 _WALL_CLOCK_ATTRS: frozenset[str] = frozenset({"time", "time_ns"})
 
-# Monotonic readers are deliberately NOT prohibited. A monotonic clock can only
-# produce a duration, the result schema records ``duration_ms`` for every case, and
-# AAP 0.5.4 masks that field in every determinism comparison. The performance checks
-# read one for their p95 figures and every other case is timed somewhere outside
-# ``qrcheck/checks/performance.py``, so restricting the read to that one module would
-# fail a conforming package. What is prohibited outright is a *wall-clock* read.
+# Monotonic readers are deliberately NOT prohibited: a monotonic clock can only produce a duration,
+# AAP 0.5.4 masks ``duration_ms`` in every determinism comparison, and the performance checks read
+# one for their p95 figures outside ``qrcheck/checks/performance.py``. A *wall-clock* read is what
+# is prohibited outright.
 
-# OS-provided ambient identity. Each value differs between machines or between
-# processes, and none may reach an artefact (AAP 0.5.5): no hostname, user name or
-# process ID in a report, an evidence file or a filename.
+# OS-provided ambient identity: each value differs between machines or processes, and none may reach
+# an artefact (AAP 0.5.5) -- no hostname, user name or process ID in a report or a filename.
 _AMBIENT_IDENTITY_ATTRS: dict[str, frozenset[str]] = {
     "getpass": frozenset({"getuser"}),
     "os": frozenset({"getlogin", "getpid", "getrandom", "urandom"}),
@@ -312,10 +276,9 @@ _INSPECTED_MODULES: frozenset[str] = frozenset(
     {"getpass", "numpy", "os", "platform", "socket", "time", "uuid"}
 )
 
-# numpy's *global* random API, which seeds itself from OS entropy at first use. The
-# sanctioned path is ``Generator(PCG64(derive_seed(...)))``; ``Generator``, ``PCG64``
-# and the bit-generator classes are attributes of ``numpy.random`` but are absent
-# from this set, as are the instance methods a seeded generator exposes.
+# numpy's *global* random API, which seeds itself from OS entropy at first use. The sanctioned path
+# is ``Generator(PCG64(derive_seed(...)))``; ``Generator``, ``PCG64`` and the bit-generator classes
+# are attributes of ``numpy.random`` but are absent from this set, as are instance methods.
 _NUMPY_GLOBAL_RNG_ATTRS: frozenset[str] = frozenset(
     {
         "bytes",
@@ -342,9 +305,9 @@ _ENTROPY_DEFAULT_CALLS: frozenset[str] = frozenset(
     {"PCG64", "RandomState", "SeedSequence", "default_rng"}
 )
 
-# A source carrying every prohibited pattern once, with an aliased clock, an aliased
-# global numpy RNG and an ordinary ``import os`` that must stay silent, so the
-# self-test proves both that the detectors fire and that they are not blanket bans.
+# A source carrying every prohibited pattern once, with an aliased clock, an aliased global numpy
+# RNG and an ordinary ``import os`` that must stay silent, so the self-test proves both that the
+# detectors fire and that they are not blanket bans.
 _OFFENDING_SOURCE = """\
 import os
 import random
@@ -400,10 +363,9 @@ _OFFENDING_EXPECTED: frozenset[str] = frozenset(
     }
 )
 
-# The primitives the product does allow, so a detector that fires on everything would
-# fail here instead of passing the package scan by accident: ``hashlib``, a UTC
-# ``datetime`` timestamp, an explicitly seeded ``PCG64`` generator, a seeded
-# ``default_rng``, generator instance methods and a monotonic clock read.
+# The primitives the product does allow, so a detector firing on everything would fail here instead
+# of passing the package scan by accident: ``hashlib``, a UTC ``datetime``, an explicitly seeded
+# ``PCG64``, a seeded ``default_rng``, generator methods and a monotonic clock read.
 _SANCTIONED_SOURCE = """\
 import datetime
 import hashlib
@@ -448,11 +410,7 @@ def _root_and_chain(node: ast.AST) -> tuple[str | None, tuple[str, ...]]:
 
 
 def _alias_maps(tree: ast.AST) -> tuple[dict[str, str], dict[str, str]]:
-    """Map bound names to the inspected module, or to a direct import's canonical name. Aliasing
-    is honoured because ``import time as clock`` followed by ``clock.time()`` is the same
-    wall-clock read as ``time.time()``, and a scan that knew only the canonical module names
-    would miss it.
-    """
+    """Map bound names to the inspected module, or to a direct import's canonical name."""
     modules: dict[str, str] = {module: module for module in sorted(_INSPECTED_MODULES)}
     attributes: dict[str, str] = {}
     for node in ast.walk(tree):

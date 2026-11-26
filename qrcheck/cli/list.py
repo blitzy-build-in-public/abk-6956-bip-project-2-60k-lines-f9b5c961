@@ -1,58 +1,20 @@
 """``qrcheck list``: enumerate every registered check, and nothing else.
 
-The registry is the single source of check identity (AAP §0.3.4), so this command adds,
-filters, renames and reorders nothing. It imports the check families so that they register
-themselves, then prints exactly what :func:`qrcheck.registry.check.iter_checks` returns:
-every registered check, in ascending identifier order. Two runs on the same installation
-therefore describe the same checks in the same order, and a check that a run executes but
-this listing omits -- or the reverse -- is a defect in the registry rather than a
-difference between two surfaces (see ``tests/integration/test_registry_reachability.py``).
+The registry is the single source of check identity (AAP §0.3.4), so this command adds, filters,
+renames and reorders nothing: it imports the check families so they register themselves, then prints
+exactly what :func:`qrcheck.registry.check.iter_checks` returns, in ascending identifier order.
 
-Registration is import-time, and ``qrcheck.registry`` never imports ``qrcheck.checks``
-(that would close the registration cycle), so this module imports the family package and
-calls :func:`qrcheck.checks.load_families` before it reads the registry. Without that call
-the listing would be empty while every other surface reported twenty-one checks, which is
-the one silent failure this file can have; the call is idempotent, so it costs nothing
-when ``qrcheck.cli.main`` already imported the checks.
+``--json`` prints the object array AAP §0.8.3 fixes as a public surface: one object per check
+carrying exactly the five keys ``id``, ``title``, ``family``, ``requires`` and ``dependencies``,
+keys sorted, because tooling and ``tests/integration/test_registry_reachability.py`` compare it
+against the ``check_id`` values a run's ``summary.json`` records. The table form prints the same
+rows in the same order, capability and dependency lists comma-joined with an empty one as ``-``, on
+widths derived from the values rather than the terminal.
 
-No configuration is read here, deliberately: no ``--config`` option, no
-``qrcheck.config.load_config`` call and no configurable default. ``qrcheck list`` has to
-answer "which checks does this installation have?" in a checkout with no ``qrcheck.toml``,
-before a target is configured and before ``qrcheck doctor`` has anything to verify. A
-configuration load would also let a malformed file describing a *target* hide checks that
-exist, so it must never be added.
-
-Two output forms, one set of rows
---------------------------------
-``--json`` prints the object array that AAP §0.8.3 fixes as a public surface: one object
-per check carrying exactly the five keys ``id``, ``title``, ``family``, ``requires`` and
-``dependencies``, sorted by ``id``, with the keys themselves in sorted order because the
-product's single JSON formatter writes them
-(:func:`qrcheck.report.json_report.dumps_canonical`). Tooling and
-``tests/integration/test_registry_reachability.py`` compare that array against the
-``check_id`` values a run's ``summary.json`` records, so the key names are a contract: a
-renamed key, a wrapping object or a nesting level would make a consumer mis-parse a
-correct run. The table form prints the same rows in the same order, with the capability
-and dependency lists comma-joined, an empty one rendered as ``-``, and the title last so
-the short, machine-relevant columns line up. Its header names are the row keys, so the
-two forms describe the same five fields with the same words.
-
-Determinism
------------
-``CheckContract.requires`` is a ``frozenset`` of :class:`qrcheck.targets.base.Capability`
-members, so its iteration order is not stable across processes; both list-valued fields
-are sorted before they are emitted (AAP §0.5.3). Column widths come from the values being
-printed, never from the terminal, so neither form wraps, truncates an identifier or
-depends on the environment.
-
-Exit code
----------
-:data:`qrcheck.cli.exit.EXIT_OK` and nothing else. A broken installation is not a listed
-condition: a missing family module raises :exc:`ImportError` and a contradictory
-registration raises :class:`qrcheck.registry.check.CheckRegistrationError` out of
-``load_families``, which the CLI group turns into exit code 3 rather than into a short,
-plausible-looking table. Click's own usage errors are mapped to exit code 2 by
-``qrcheck.cli.main``, so this module decides neither.
+No configuration is read here, deliberately: a malformed file describing a target must never hide
+checks that exist. The exit code is ``EXIT_OK`` and nothing else; a missing family module raises
+``ImportError`` and a contradictory registration ``CheckRegistrationError`` out of
+``load_families``, which the CLI group turns into exit code 3.
 """
 
 from __future__ import annotations
@@ -91,9 +53,7 @@ _COLUMN_GAP: Final[str] = "  "
 class _Row(TypedDict):
     """One listing row: the five keys of the ``--json`` contract, already JSON-ready.
 
-    The field names are the contract (AAP §0.8.3), so they are spelled here once and
-    nowhere else: :func:`_row` builds every row through this type, which is what keeps the
-    two output forms and the machine consumer naming the same five fields.
+    The field names are the contract (AAP §0.8.3), so they are spelled here once and nowhere else.
     """
 
     id: str
@@ -106,22 +66,16 @@ class _Row(TypedDict):
 def list_checks(as_json: bool) -> int:
     """Print every registered check and return the process exit code.
 
-    Args:
-        as_json: ``True`` for the object array that machine consumers read, ``False`` for
-            the human table. Both describe the same rows in the same order.
-
-    Returns:
-        :data:`qrcheck.cli.exit.EXIT_OK`, always. A listing has no failing condition of its
-        own: it reports what the registry holds, and a defect in the registry raises out of
-        :func:`qrcheck.checks.load_families` before anything is printed.
+    Both output forms describe the same rows in the same order, and the return value is ``EXIT_OK``
+    always: a listing has no failing condition of its own.
 
     Raises:
-        ImportError: A check family module is missing or fails to import. Deliberately not
-            caught: an installation that cannot load its checks must fail the process, not
-            print a shorter listing that a reader would take for the whole inventory.
-        CheckRegistrationError: A check module registers an identifier twice, or registers
-            one that contradicts its declaration. Also deliberately uncaught, because
-            ``qrcheck list`` and a run must never disagree about which checks exist.
+        ImportError: A check family module is missing or fails to import, deliberately uncaught:
+            an installation that cannot load its checks must fail the process rather than print a
+            shorter listing.
+        CheckRegistrationError: A check module registers an identifier twice or against its own
+            declaration, also uncaught, because this listing and a run must never disagree about
+            which checks exist.
     """
     # Registration is import-time and the registry package never imports this one, so the
     # families are loaded here before the registry is read; the call is idempotent.
@@ -140,15 +94,9 @@ def list_checks(as_json: bool) -> int:
 def _row(contract: CheckContract) -> _Row:
     """Return the listing row for ``contract``.
 
-    Both list-valued fields are sorted before they leave this function: ``requires`` is a
-    ``frozenset`` whose iteration order differs between processes, and ``dependencies`` is
-    a tuple the registry already normalised but whose order is not a contract a listing may
-    rely on. Sorting here rather than at emission is what makes both output forms agree
-    member for member (AAP §0.5.3).
-
-    Capability members are a :class:`~enum.StrEnum`, so ``str()`` yields the member's
-    value -- ``"png"``, ``"ec_level"`` -- which is the spelling the configuration, the
-    resolution table and the reports all use.
+    Both list-valued fields are sorted here rather than at emission, so both output forms agree
+    member for member (AAP §0.5.3); capability members are a ``StrEnum``, so ``str()`` yields the
+    value.
     """
     return _Row(
         id=contract.id,
@@ -162,10 +110,8 @@ def _row(contract: CheckContract) -> _Row:
 def _table_lines(rows: Sequence[_Row]) -> list[str]:
     """Render the header row and one line per check, aligned on data-derived widths.
 
-    Widths come from the values being printed, so two runs of the same installation produce
-    the same bytes and no width depends on a terminal or an environment variable. Only the
-    four leading columns are padded; the last one is printed as it stands, so no line ends
-    in padding whitespace.
+    Two runs of the same installation therefore produce the same bytes. Only the four leading
+    columns are padded, so no line ends in padding whitespace.
     """
     body = [_cells(row) for row in rows]
     widths = [

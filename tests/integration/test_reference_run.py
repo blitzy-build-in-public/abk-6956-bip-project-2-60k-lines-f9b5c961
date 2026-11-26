@@ -1,27 +1,16 @@
 """The reference run's gates: a conforming target must come back completely clean.
 
-Holds the acceptance evidence AAP §0.4.1 and §0.6.1 rows #1, #2, #3, #5 and #10 require from a
-whole run against the built-in ``reference`` target over the committed 240-record corpus at EC
-level M, plus the boundary subset #2 replays at L, Q and H. Each condition below fails on a
-vacuous suite: the run is clean, with ``failed``, ``error`` and ``skipped`` all zero; all 21
-registered checks executed and passed something, so none is reachable from a test alone (#8);
-the observable workload equals the case matrix check for check, 1,283 cases; round-trip holds
-for all 240 records with the identifiers tied back to the corpus file (#2); the same round-trip,
-version and EC assertions hold for the 40 boundary records at L, Q and H; and the performance
-floors are the configured ones, read from ``qrcheck.toml`` by the check and reported in
-``expected`` so nothing is restated (#10, §0.6.2). The report contracts are held here too:
-``summary.json`` is exactly the documented schema in the documented order, ``junit.xml`` is the
-``xunit2`` document carrying no hostname or timestamp, ``index.html`` cites no external origin,
-and a clean run writes no evidence (#6).
+This module asserts the acceptance evidence AAP §0.4.1 and §0.6.1 rows **#1, #2, #3, #5**,
+**#6**, **#8**, **#10** and **#11** require from a whole run over the committed 240-record
+corpus at EC M plus the boundary subset #2 replays at L, Q and H: a clean run, all 21 checks
+executed and passing, the workload equal to the case matrix, round-trip over every committed
+and boundary record, the configured performance floors, and the three report artefacts
+against their documented schemas.
 
-Both runs come from the session-scoped ``reference_report`` and ``boundary_runs`` fixtures in
-``tests/integration/conftest.py``, because #9 allows the tier five runs inside 600 s and a
-second reference run "to compare" would break it; nothing here starts a run, calls the command
-line or writes a report. No wall-clock quantity is compared -- ``duration_ms`` is recorded and
-never asserted, and the run timestamps are checked for shape only (§0.5.5, §0.12) -- and every
-collection is walked in sorted order or through the ordering the schema fixes, so a failure
-message names the same case on every machine.
-"""
+Both runs come from the session-scoped fixtures in ``tests/integration/conftest.py``, so each
+is paid for once inside §0.6.1 #9's five-run budget; no wall-clock quantity is compared (AAP
+§0.5.5), every collection is walked in sorted order, and no threshold is written in this
+file."""
 
 from __future__ import annotations
 
@@ -36,29 +25,20 @@ from typing import Any, Final
 
 import pytest
 
-# Imported for its side effect only: importing ``qrcheck.checks`` imports the nine family
-# modules, and each one registers its checks in ``qrcheck.registry.check.REGISTRY``. Without
-# this the registry is empty in a fresh interpreter and the reachability half of
-# ``test_every_check_registered_is_executed_and_passes`` would compare a run's executed set
-# against nothing (AAP §0.4.1, §0.6.1 #8).
+# Imported for its side effect only: ``qrcheck.checks`` registers the nine families in ``REGISTRY``,
+# without which the registry is empty in a fresh interpreter.
 import qrcheck.checks  # noqa: F401  (registration side effect)
 from qrcheck.corpus.io import filter_by_class, load_corpus
 from qrcheck.registry.check import REGISTRY
 
-# The dominant cost of this module is a full 240-record run, which AAP §0.6.1 assigns to the
-# ``e2e`` CI job rather than the fast unit job. One module-level marker therefore deselects
-# all nine tests together under ``-m "not e2e"``; the marker itself is registered in
-# ``pyproject.toml``, which is the single declaration of it.
+# A full 240-record run is the dominant cost, which AAP §0.6.1 puts in the ``e2e`` CI job.
 pytestmark = pytest.mark.e2e
 
 
-# The contract constants. Each value below is a fact the report is asserted against, never a
-# threshold this file chose: the identifiers and the case counts are AAP §0.3.4's and
-# §0.8.1's, the seed and the EC level are the committed configuration's, and the corpus size is
-# the committed file's.
+# The contract constants: each value is a fact the report is asserted against, never a threshold --
+# the identifiers and counts are AAP's, the seed and EC level the committed configuration's.
 
-#: The 21 check identifiers of AAP §0.3.4, verbatim. A check cannot be dropped, renamed or
-#: silently duplicated without this set disagreeing with the run.
+#: The 21 check identifiers of AAP §0.3.4, verbatim.
 CHECK_IDS: Final[frozenset[str]] = frozenset(
     {
         "RT-ROUNDTRIP",
@@ -85,9 +65,7 @@ CHECK_IDS: Final[frozenset[str]] = frozenset(
     }
 )
 
-#: AAP §0.8.1's case matrix: the observable number of cases each check runs in one full run
-#: at EC M over the default 240-record corpus. A re-balanced matrix fails loudly here rather
-#: than quietly changing what "a full run" means for every other gate.
+#: AAP §0.8.1's case matrix: the cases each check runs in one full run at EC M over 240 records.
 CASE_MATRIX: Final[Mapping[str, int]] = {
     "RT-ROUNDTRIP": 240,
     "MD-MODE-OPTIMAL": 60,
@@ -112,14 +90,10 @@ CASE_MATRIX: Final[Mapping[str, int]] = {
     "CL-ARTIFACTS": 1,
 }
 
-#: The total the matrix comes to. AAP §0.8.1 states it beside the row-by-row counts, so it is
-#: asserted separately: a matrix that still summed to this while a row moved would be a
-#: coincidence, and a sum that moved would be a re-balanced workload.
+#: The total the matrix comes to, asserted separately from the rows.
 DECLARED_CASES: Final[int] = 1_283
 
-#: The nine top-level fields of ``summary.json`` (AAP §0.3.4). Unknown keys are additive for
-#: consumers, but a *documented* field that disappeared or was renamed breaks every one of
-#: them, so the exact set is asserted rather than a subset.
+#: The nine top-level fields of ``summary.json`` (AAP §0.3.4), asserted as an exact set.
 SUMMARY_KEYS: Final[frozenset[str]] = frozenset(
     {
         "run_id",
@@ -150,55 +124,43 @@ RESULT_KEYS: Final[frozenset[str]] = frozenset(
     }
 )
 
-#: The four tallies, kept as four separate integers so a skip can never be folded into a pass
-#: (AAP §0.3.4).
+#: The four tallies, four separate integers so a skip can never fold into a pass (AAP §0.3.4).
 COUNT_KEYS: Final[frozenset[str]] = frozenset({"passed", "failed", "skipped", "error"})
 
 #: The adapter the reference fixture runs, which must be the conforming built-in target.
 REFERENCE_ADAPTER: Final[str] = "reference"
 
-#: The error-correction level the whole-corpus fixture runs at, and the seed the committed
-#: configuration declares. Both are copied from ``qrcheck.toml``'s defaults by the fixture, so
-#: they are the values a reader of the report would see there too.
+#: The EC level the whole-corpus fixture runs at, and the seed the configuration declares.
 RUN_EC_LEVEL: Final[str] = "M"
 RUN_SEED: Final[int] = 20240101
 
-#: The 40-record boundary subset success criterion 2 replays at the three remaining levels
-#: (AAP §0.6.1 #2), selected by a corpus class glob rather than by a hand-written id list.
+#: The 40-record boundary subset criterion 2 replays at L, Q and H (AAP §0.6.1 #2).
 BOUNDARY_LEVELS: Final[tuple[str, ...]] = ("L", "Q", "H")
 BOUNDARY_CLASS_GLOB: Final[str] = "boundary-*"
 BOUNDARY_RECORDS: Final[int] = 40
 CORPUS_RECORDS: Final[int] = 240
 
-#: The committed corpus's location relative to the repository root, as the configuration
-#: names it (AAP §0.9.2), and the committed configuration's own file name.
+#: The committed corpus's location relative to the root (AAP §0.9.2), and the configuration's name.
 CORPUS_PATH: Final[tuple[str, ...]] = ("corpus", "default.jsonl")
 CONFIG_FILE_NAME: Final[str] = "qrcheck.toml"
 
-#: The prefix a corpus-driven case identifier carries (AAP §0.3.4: ``corpus:<record-id>``),
-#: which is also what distinguishes a corpus-driven request from a synthetic one.
+#: The prefix a corpus-driven case identifier carries (AAP §0.3.4: ``corpus:<record-id>``).
 CORPUS_CASE_PREFIX: Final[str] = "corpus:"
 
 #: The three report artefacts a run writes (AAP §0.3.4), in the order the summary names them.
 REPORT_ARTEFACTS: Final[tuple[str, ...]] = ("summary.json", "junit.xml", "index.html")
 
-#: The two attributes AAP §0.3.4 deliberately omits from ``junit.xml`` so the file is
-#: reproducible; pytest's own writer emits both, which is why their absence is asserted.
+#: The two attributes AAP §0.3.4 omits from ``junit.xml``; pytest's own writer emits both.
 VOLATILE_XML_ATTRIBUTES: Final[frozenset[str]] = frozenset({"hostname", "timestamp"})
 
-#: How a reference to an external origin begins. A self-contained report opens with no
-#: network access, so none of these may appear as a ``src`` or ``href`` value.
+#: How a reference to an external origin begins; a self-contained report may carry none of them.
 EXTERNAL_REFERENCE_PREFIXES: Final[tuple[str, ...]] = ("http:", "https:", "//")
 
-#: The platform descriptor directories ``CL-ARTIFACTS`` records as the one it enumerated. They
-#: are absolute, but they name a fixed operating-system interface rather than the clone or the
-#: machine a run happened in, which is what AAP §0.5.5 forbids in an artefact -- so they are
-#: the documented exemption from the absolute-path scan below and nothing else is.
+#: The platform descriptor directories ``CL-ARTIFACTS`` enumerates: absolute, but a fixed
+#: operating-system interface, so they are the documented exemption from the scan below.
 PLATFORM_FD_DIRECTORIES: Final[frozenset[str]] = frozenset({"/proc/self/fd", "/dev/fd"})
 
 #: The shape of ``run_id``: the SHA-256 hex digest the runner computes over what the run was.
-#: Asserting the shape is what rejects a per-run UUID or a timestamp as a run's identity, both
-#: of which AAP §0.3.4 forbids (and ``RunResult`` refuses).
 SHA256_HEX: Final[re.Pattern[str]] = re.compile(r"[0-9a-f]{64}")
 
 #: Matches a ``src`` or ``href`` attribute of the HTML report, in either quoting style.
@@ -207,21 +169,11 @@ _REFERENCE_ATTRIBUTE: Final[re.Pattern[str]] = re.compile(
 )
 
 
-# Reading the artefacts. Every helper below either returns a value or fails with a diagnostic
-# naming what it saw; none skips, retries or repairs. A report that cannot be read is a defect
-# in the product, and a test that tolerated it would be the vacuous gate this module exists to
-# prevent (AAP §0.4.3).
+# Reading the artefacts: every helper returns a value or fails with a diagnostic naming what it saw.
 
 
 def _results(summary: Mapping[str, Any]) -> list[Mapping[str, Any]]:
-    """Return a run's result objects, in the ``(check_id, case_id)`` order the schema fixes.
-
-    Args:
-        summary: The parsed ``summary.json``.
-
-    Returns:
-        The result objects, in the order the report stores them.
-    """
+    """Return a run's result objects, in the ``(check_id, case_id)`` order the schema fixes."""
     results = summary.get("results")
     assert isinstance(results, list), (
         f"summary.json carries no 'results' list, but a {type(results).__name__}; a run "
@@ -231,16 +183,7 @@ def _results(summary: Mapping[str, Any]) -> list[Mapping[str, Any]]:
 
 
 def _results_of(summary: Mapping[str, Any], check_id: str) -> list[Mapping[str, Any]]:
-    """Return one check's results, ordered by case identifier.
-
-    Args:
-        summary: The parsed ``summary.json``.
-        check_id: The check identifier to select, such as ``RT-ROUNDTRIP``.
-
-    Returns:
-        That check's result objects; an empty list when the check did not execute, which the
-        caller's own count assertion reports.
-    """
+    """Return one check's results ordered by case identifier, empty when it did not execute."""
     return sorted(
         (result for result in _results(summary) if result.get("check_id") == check_id),
         key=lambda result: str(result.get("case_id")),
@@ -248,15 +191,7 @@ def _results_of(summary: Mapping[str, Any], check_id: str) -> list[Mapping[str, 
 
 
 def _single(summary: Mapping[str, Any], check_id: str) -> Mapping[str, Any]:
-    """Return the one result ``check_id`` produced in a full run.
-
-    Args:
-        summary: The parsed ``summary.json``.
-        check_id: A check whose case matrix is a single constructed case, such as ``PF-ENCODE``.
-
-    Returns:
-        That check's only result object.
-    """
+    """Return the one result ``check_id`` produced in a full run."""
     results = _results_of(summary, check_id)
     assert len(results) == 1, (
         f"{check_id} must report exactly 1 case in a full run per AAP §0.8.1's case matrix, "
@@ -266,12 +201,7 @@ def _single(summary: Mapping[str, Any], check_id: str) -> Mapping[str, Any]:
 
 
 def _assert_all_passed(results: Sequence[Mapping[str, Any]], what: str) -> None:
-    """Assert every result in ``results`` is ``passed``, naming any that is not.
-
-    Args:
-        results: The result objects to check.
-        what: What they are, for the diagnostic -- a check identifier or a check and level.
-    """
+    """Assert every result is ``passed``, naming any that is not."""
     offenders = sorted(
         f"{result.get('case_id')!r} status={result.get('status')!r} "
         f"reason={result.get('reason')!r}"
@@ -286,14 +216,7 @@ def _assert_all_passed(results: Sequence[Mapping[str, Any]], what: str) -> None:
 
 
 def _corpus(repo_root: Path) -> list[Any]:
-    """Return the committed corpus's records, in the file's own ``id``-ascending order.
-
-    Args:
-        repo_root: The repository root the corpus is read from.
-
-    Returns:
-        Every record of ``corpus/default.jsonl``.
-    """
+    """Return the committed corpus's records, in the file's own ``id``-ascending order."""
     path = repo_root.joinpath(*CORPUS_PATH)
     assert path.is_file(), (
         f"the committed corpus is missing at {path}; the run's 240 cases are asserted "
@@ -303,18 +226,7 @@ def _corpus(repo_root: Path) -> list[Any]:
 
 
 def _committed_config(repo_root: Path) -> Mapping[str, Any]:
-    """Return the committed ``qrcheck.toml`` parsed with the standard library's TOML reader.
-
-    The configuration is the single source of every threshold (AAP §0.6.2), so this test
-    module reads it instead of restating a number: a floor that changed in the document would
-    otherwise have to be changed here too, which is exactly the drift the plan forbids.
-
-    Args:
-        repo_root: The repository root the document is read from.
-
-    Returns:
-        The parsed document.
-    """
+    """Return the committed ``qrcheck.toml``, the single source of every threshold (AAP §0.6.2)."""
     path = repo_root / CONFIG_FILE_NAME
     assert path.is_file(), (
         f"the committed configuration is missing at {path}; the thresholds a run reports in "
@@ -325,16 +237,7 @@ def _committed_config(repo_root: Path) -> Mapping[str, Any]:
 
 
 def _string_values(node: Any, path: str) -> Iterator[tuple[str, str]]:
-    """Yield every string value of a JSON document with the field path it sits at.
-
-    Args:
-        node: The value to walk -- a mapping, a sequence or a scalar.
-        path: The field path of ``node`` in the document, such as ``$.results[0].decoded``.
-
-    Yields:
-        ``(field_path, value)`` for every string leaf, ordered by key and by index so two runs
-        report their offenders in the same order.
-    """
+    """Yield every string value of a JSON document with the field path it sits at, ordered."""
     if isinstance(node, Mapping):
         for key in sorted(node, key=str):
             yield from _string_values(node[key], f"{path}.{key}")
@@ -346,20 +249,8 @@ def _string_values(node: Any, path: str) -> Iterator[tuple[str, str]]:
 
 
 def _absolute_path_offenders(summary: Mapping[str, Any]) -> list[tuple[str, str]]:
-    """Return every field whose string value names an absolute path.
-
-    AAP §0.5.5 forbids an absolute path in an artefact: evidence paths are relative to
-    ``report_dir`` and a request records a path as the configuration gave it. The one
-    documented exception is the platform descriptor directory ``CL-ARTIFACTS`` names as the
-    one it enumerated, which is a fixed operating-system interface and therefore names neither
-    the clone nor the machine a run happened in.
-
-    Args:
-        summary: The parsed ``summary.json``.
-
-    Returns:
-        ``(field_path, value)`` pairs, sorted; empty when the artefact is clean.
-    """
+    """Return every field whose string value names an absolute path, sorted; AAP §0.5.5 forbids
+    one, and ``CL-ARTIFACTS``'s platform descriptor directory is the documented exemption."""
     return sorted(
         (path, value)
         for path, value in _string_values(summary, "$")
@@ -368,42 +259,21 @@ def _absolute_path_offenders(summary: Mapping[str, Any]) -> list[tuple[str, str]
 
 
 def _reference_attributes(document: str) -> list[str]:
-    """Return every ``src`` and ``href`` value of an HTML document.
-
-    Args:
-        document: The HTML text.
-
-    Returns:
-        The attribute values, in document order.
-    """
+    """Return every ``src`` and ``href`` value of an HTML document, in document order."""
     return [
         double or single
         for double, single in _REFERENCE_ATTRIBUTE.findall(document)
     ]
 
 
-# The gates: one test per condition, in the order the report is read -- is the run clean, did
-# every check execute, did each run the declared number of cases, then the case-level proofs
-# (round-trip over the committed corpus, the boundary subset at three levels, the performance
-# floors) and finally the three report contracts. No test repeats another's assertion.
+# The gates: one test per condition, in the order the report is read -- clean run, executed checks,
+# declared case counts, then the case-level proofs and the three report contracts.
 
 
 def test_reference_run_is_clean(
     reference_report: tuple[Path, dict[str, Any], int],
 ) -> None:
-    """Catch a suite that cannot come back clean: any failed, errored or skipped case.
-
-    AAP §0.4.1 requires ``counts.failed == 0``, ``counts.error == 0`` **and**
-    ``counts.skipped == 0`` from the conforming target. The zero-skip half is never softened:
-    a skipped ``RN-SVG`` would let the CI gate pass without rasterizing a single SVG, which is
-    exactly why the e2e job installs the rasterizer (``librsvg2-bin``, the package providing
-    ``rsvg-convert``) instead of tolerating the skip. A degraded environment therefore fails
-    here and names the check that skipped, rather than turning a gate into a formality.
-
-    The identity half -- the adapter, the EC level, the seed and the ``run_id`` shape -- is here
-    because every later test compares its case list against those three values: a run of some
-    other configuration would make them all assert something other than what they name.
-    """
+    """Catch a suite that cannot come back clean: any failed, errored or skipped case."""
     report_root, summary, exit_code = reference_report
     counts = summary["counts"]
     results = _results(summary)
@@ -457,18 +327,7 @@ def test_reference_run_is_clean(
 def test_every_check_registered_is_executed_and_passes(
     reference_report: tuple[Path, dict[str, Any], int],
 ) -> None:
-    """Catch a check that never executes, or that executes and never passes.
-
-    This is AAP §0.4.1's second clause and AAP §0.6.1 #8 together: the set of checks the run
-    executed equals the 21 declared identifiers, the registry equals the same set so no check
-    exists only for a test, and every executed check has at least one ``passed`` result -- a
-    check counted as green merely because it is present would be the vacuous gate the
-    self-verification section exists to prevent.
-
-    The status/reason biconditional is asserted in the same pass because it is the model's own
-    invariant (``CaseResult`` enforces it): a pass carries no reason and every other status
-    carries exactly one, so neither a reason on a pass nor a reasonless failure can hide here.
-    """
+    """Catch a check that never executes, or that executes and never passes."""
     _report_root, summary, _exit_code = reference_report
     results = _results(summary)
 
@@ -512,19 +371,10 @@ def test_case_matrix_matches_the_declared_workload(
 ) -> None:
     """Catch a re-balanced workload: any check running a number of cases the matrix denies.
 
-    AAP §0.8.1 fixes the case matrix, and the whole comparison is made -- every one of the 21
-    rows, not a sample -- so moving cases from one check to another fails loudly instead of
-    leaving a workload nobody declared. The total is asserted separately from the rows so a
-    matrix that happened to sum to the declared figure while a row moved is still caught by
-    the row comparison.
-
-    AAP §0.8.1's 1,287 encode invocations and 1,462 primary decodes are **not** fields of
-    ``summary.json``, and they are deliberately not made into fields here: the totals are
-    asserted only through what the report does expose -- the per-check case counts below,
-    ``PF-ENCODE``'s and ``PF-DECODE``'s measured sample counts, ``DT-DETERMINISTIC``'s six
-    paired cases and ``DM-RESILIENCE``'s eight-record by seven-kind shape. Inventing a counter
-    to make them directly observable would change the product to suit the test.
-    """
+    AAP §0.8.1's 1,287 encode invocations and 1,462 primary decodes -- a decode column that
+    counts only the damaged reads, so with ``DM-RESILIENCE``'s eight memoised pristine reads the
+    declared workload is 1,470 decodes -- are **not** fields of ``summary.json``, and inventing a
+    counter to make them observable would change the product to suit the test."""
     _report_root, summary, _exit_code = reference_report
     observed = Counter(str(result["check_id"]) for result in _results(summary))
     mismatched = {
@@ -546,13 +396,7 @@ def test_roundtrip_covers_all_240_corpus_records(
     reference_report: tuple[Path, dict[str, Any], int],
     repo_root: Path,
 ) -> None:
-    """Catch a round-trip gate that tests fewer records, or a different corpus, than it claims.
-
-    AAP §0.6.1 #2 requires round-trip to hold for all 240 records at EC M. The case list is
-    compared against ``corpus/default.jsonl`` read from the repository rather than against the
-    report's own list, so a corpus that lost a record, gained one, or was replaced under the run
-    fails here: the run is tied to the committed corpus, not to itself.
-    """
+    """Catch a round-trip gate that tests fewer records, or a different corpus, than it claims."""
     _report_root, summary, _exit_code = reference_report
     results = _results_of(summary, "RT-ROUNDTRIP")
 
@@ -581,20 +425,7 @@ def test_boundary_subset_passes_at_every_ec_level(
     boundary_runs: Mapping[str, tuple[Path, dict[str, Any], int]],
     repo_root: Path,
 ) -> None:
-    """Catch a boundary subset that is not 40 records, or that breaks at L, Q or H.
-
-    This is how AAP §0.6.1 #2's four-run sequence is invoked: 240 records at EC M (the fixture
-    above) and the 40-record boundary subset at each of L, Q and H. Round-trip, minimal version
-    and EC match are asserted at 40 cases per level, and each corpus-driven request is checked
-    to carry the level the run was invoked with, so a run that ignored ``--ec`` cannot pass on a
-    report that merely says the right level at the top.
-
-    The synthetic checks are exempt from that per-request assertion because ``--class`` does not
-    reach them: they build their own requests, so ``CL-ARTIFACTS`` sends none, the ``IV-*`` probes
-    send the level their contract fixes, and ``RN-LOGO`` sends EC H and EC L by design (AAP
-    §0.8.1). Their case counts are consequently the same as in the full run, which is why only
-    the corpus-driven rows are asserted at 40 here.
-    """
+    """Catch a boundary subset that is not 40 records, or that breaks at L, Q or H."""
     assert set(boundary_runs) == set(BOUNDARY_LEVELS), (
         f"the boundary fixtures cover {sorted(boundary_runs)} rather than "
         f"{list(BOUNDARY_LEVELS)}; success criterion 2 runs the subset at every remaining level"
@@ -670,19 +501,7 @@ def test_performance_floors_are_asserted_by_the_product_from_one_source(
     reference_report: tuple[Path, dict[str, Any], int],
     repo_root: Path,
 ) -> None:
-    """Catch a performance floor the product reported from somewhere other than the config.
-
-    AAP §0.6.1 #10 and §0.6.2 require the encode p95, the decode p95 and the throughput floor to
-    be declared once and every gate to read that one declaration. The claim is made mechanical
-    here rather than restated: the thresholds are read from the committed ``qrcheck.toml`` and
-    compared with the values the run itself copied into each result's ``expected``, so this file
-    carries no floor of its own and a floor edited in the document is followed rather than
-    contradicted.
-
-    ``samples`` counts the **measured** invocations: the warm-up is untimed and precedes them
-    (AAP §0.8.1), so the count is asserted against the configured sample size rather than
-    against the invocation total the case matrix records.
-    """
+    """Catch a performance floor the product reported from somewhere other than the config."""
     _report_root, summary, _exit_code = reference_report
     limits = _committed_config(repo_root)["checks"]["performance"]
     encode = _single(summary, "PF-ENCODE")
@@ -705,8 +524,7 @@ def test_performance_floors_are_asserted_by_the_product_from_one_source(
         f"configured {limits['decode_samples']}; a retried or dropped sample would show here"
     )
 
-    # The three floors the plan names by key, asserted one by one so this test cannot pass by
-    # iterating an empty mapping if a check stopped reporting its budget.
+    # The three floors the plan names by key, asserted one by one so an empty mapping cannot pass.
     for key in ("encode_p95_ms", "min_symbols_per_minute"):
         assert key in encode["expected"], (
             f"PF-ENCODE's expected block does not report {key!r}, so the budget it was measured "
@@ -727,8 +545,7 @@ def test_performance_floors_are_asserted_by_the_product_from_one_source(
         f"the single declaration (AAP §0.6.2)"
     )
 
-    # Every other budget the case reported is the configured one too: the sample counts, the
-    # warm-up and the probe size all live in the same table, so none of them may be restated.
+    # Every other budget the case reported is configured too: none of them may be restated.
     for result in (encode, decode):
         restated = {
             key: (value, limits.get(key))
@@ -755,20 +572,7 @@ def test_performance_floors_are_asserted_by_the_product_from_one_source(
 def test_no_evidence_is_written_for_passing_cases(
     reference_report: tuple[Path, dict[str, Any], int],
 ) -> None:
-    """Catch a run that files evidence for what passed, or records an absolute path.
-
-    AAP §0.3.4 fixes the persistence policy: evidence is written for failing, errored and
-    skipped-with-reason cases only, and a passing case records ``evidence_dir = null``, so a
-    240-by-21 run does not create tens of thousands of files. The evidence tree's absence is
-    therefore the correct outcome of a clean run, and a test that expected files on disk would
-    be asserting the opposite of the contract.
-
-    The absolute-path scan enforces AAP §0.5.5 over the whole document: evidence locations are
-    relative to ``report_dir``, and a request records a path as the configuration gave it, so no
-    field may name the clone or the machine the run happened in. ``CL-ARTIFACTS``'s record of the
-    platform descriptor directory it enumerated is the one exempt value, because that is a fixed
-    operating-system interface rather than a location on this disk.
-    """
+    """Catch a run that files evidence for what passed, or records an absolute path."""
     report_root, summary, _exit_code = reference_report
     results = _results(summary)
 
@@ -802,18 +606,7 @@ def test_no_evidence_is_written_for_passing_cases(
 def test_the_three_report_artefacts_exist_and_parse(
     reference_report: tuple[Path, dict[str, Any], int],
 ) -> None:
-    """Catch a missing or malformed report: the three artefacts a run owes its consumers.
-
-    AAP §0.6.1 #6 makes JUnit the CI view, JSON the tooling view and HTML the human view, so the
-    three must agree with the result model they were written from. ``junit.xml`` is parsed and
-    its counts are compared with ``summary.json``'s, and the two attributes AAP §0.3.4 omits on
-    purpose -- ``hostname`` and ``timestamp`` -- are asserted absent, because their presence is
-    what would make the file irreproducible. For ``index.html`` only the self-containment
-    invariants are asserted here: no script and no reference to an external origin. The escaping
-    and per-failure-image assertions belong to ``tests/unit/test_html_writer.py``; the overlap
-    with that module is deliberate, because §0.6.1 #6 lists both the writer tests and the real
-    run's artefacts as its evidence.
-    """
+    """Catch a missing or malformed ``summary.json``, ``junit.xml`` or ``index.html``."""
     report_root, summary, _exit_code = reference_report
     counts = summary["counts"]
     results = _results(summary)
@@ -887,19 +680,7 @@ def test_summary_schema_is_exact(
     reference_report: tuple[Path, dict[str, Any], int],
     repo_root: Path,
 ) -> None:
-    """Catch a summary that drifted off its schema, lost its ordering, or breached the ceiling.
-
-    AAP §0.3.4 fixes the nine top-level fields, the four tallies and the ten fields of every
-    result as a stable public surface that machine consumers key on, and §0.5.3 fixes
-    ``results[]`` order as ``(check_id, case_id)``. Both are asserted exactly -- not as subsets --
-    because a renamed or dropped field breaks every consumer while an added one does not.
-
-    ``loc_count`` is checked against the committed ceiling, which is AAP §0.6.1 #11's line
-    budget reported by the run itself. What is deliberately *not* asserted here is masked
-    equality between two serializations: that needs a second run and belongs to
-    ``tests/unit/test_json_writer.py``. The timestamps are checked for shape only, never
-    compared -- only the ``PF-*`` checks may assert on a time (AAP §0.5.5).
-    """
+    """Catch a summary that drifted off its schema, lost its ordering, or breached the ceiling."""
     _report_root, summary, _exit_code = reference_report
 
     assert set(summary) == set(SUMMARY_KEYS), (

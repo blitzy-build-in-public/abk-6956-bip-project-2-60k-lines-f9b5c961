@@ -1,49 +1,29 @@
 """The framework's single image boundary.
 
-Every image byte the framework reads or emits passes through this module: Pillow is
-imported here, and so are the open, encode, base64 and data-URI primitives, so no other
-part of ``qrcheck`` needs to know how an image is opened or how it reaches a report.  The
-consumers are:
+Every image byte the framework reads or emits passes through this module: Pillow is imported here,
+and so are the open, encode, base64 and data-URI primitives, so no other part of ``qrcheck`` needs
+to know how an image is opened or how it reaches a report. ``qrcheck.report.html`` embeds evidence
+images with :func:`to_data_uri`, the only route an image takes into ``index.html`` (AAP §0.3.4,
+§0.8.4: every evidence image is an inline ``data:`` URI, so the report opens with no network
+access), and ``qrcheck.targets.reference`` composites the logo overlay a request carries through
+:func:`composite_overlay`, because ``logo_overlay`` is a capability the built-in target declares and
+a declared capability must have behaviour behind it (AAP §0.3.4).
 
-* ``qrcheck.report.html`` — embeds evidence images with :func:`to_data_uri`, the only
-  route an image takes into ``index.html`` (AAP §0.3.4, §0.8.4: every evidence image is
-  an inline ``data:`` URI, so the report opens with no network access).
-* ``qrcheck.report.evidence`` and the checks — open artefact files through
-  :func:`open_image` and turn a target's ``image_bytes`` into an image through
-  :func:`decode_image`.
-* ``CL-ARTIFACTS`` in ``qrcheck.checks.cleanup`` — reads :func:`open_images` to attribute
-  an unclosed handle to the case that leaked it (AAP §0.8.1).
-* ``qrcheck.targets.reference`` — composites the logo overlay a request carries onto the
-  symbol it rendered, through :func:`composite_overlay` (AAP §0.3.4: ``logo_overlay`` is a
-  capability the built-in target declares, so the declaration must have behaviour).
+Scope: this module *opens* and *encodes* images and owns exactly one composite, because Pillow is
+reachable only through here. Every other transformation stays with the owner it already has --
+resize, rotate, perspective warp, blur, JPEG re-encode and noise synthesis in
+``qrcheck.checks.damage``, module-grid sampling in ``qrcheck.decode.matrix`` -- and a second
+transform API must not be added here (AAP §0.7.1, §0.8.1).
 
-Scope: this module *opens* and *encodes* images, and owns exactly one composite.  The
-built-in target must composite the overlay it is handed and no other part of the framework
-may touch an image, so :func:`composite_overlay` lives here beside :func:`open_image` and
-:func:`encode_png` rather than in the target.  Every other transformation stays with the
-owner it already has: resize, rotate, perspective warp, blur, JPEG re-encode and noise
-synthesis belong to ``qrcheck.checks.damage``, and module-grid sampling belongs to
-``qrcheck.decode.matrix``; both open their inputs through :func:`open_image`.  A second
-transform API must not be added here: it would duplicate a named owner (AAP §0.7.1,
-§0.8.1).
-
-Invariants this module keeps:
-
-* Determinism — :func:`encode_png` writes no ancillary chunk (no ``tIME``, no
-  ``dpi``/``text`` metadata), so equal images encode to equal bytes and
-  :func:`to_data_uri` is a pure function of its input (AAP §0.5.4).
-* No policy and no I/O of its own — nothing here creates a directory, writes a file,
-  reads configuration or decides whether evidence is persisted; that decision belongs to
-  ``qrcheck.report.evidence``.
-* No volatility — :class:`OpenImage` keeps the path exactly as given, and no hostname,
-  user name, process id or timestamp is ever recorded (AAP §0.5.5).
-* No adapter vocabulary — :func:`decode_image` and :func:`decode_base64` let Pillow's
-  ``UnidentifiedImageError``/``OSError`` and ``binascii.Error`` propagate unchanged.  The
-  adapters translate them into the framework's error types (AAP §0.3.4, §0.14.1); this
-  module must not know those exist.
-
-The only mutable module state is the registry of images that are open right now, and the
-framework is single-process and sequential (AAP §0.3.6), so it needs no lock.
+Invariants: determinism, since :func:`encode_png` writes no ancillary chunk (no ``tIME``, no
+``dpi``/``text`` metadata), so equal images encode to equal bytes and :func:`to_data_uri` is a pure
+function (AAP §0.5.4); no policy and no I/O of its own, because whether evidence is persisted
+belongs to ``qrcheck.report.evidence``; no volatility, since :class:`OpenImage` keeps the path
+exactly as given and no hostname, user name, process id or timestamp is recorded (AAP §0.5.5); and
+no adapter vocabulary, since :func:`decode_image` and :func:`decode_base64` let Pillow's
+``UnidentifiedImageError``/``OSError`` and ``binascii.Error`` propagate unchanged for the adapters
+to translate (AAP §0.3.4, §0.14.1). The only mutable module state is the registry of images open
+right now, and the framework is single-process and sequential (AAP §0.3.6), so it needs no lock.
 """
 
 import base64
@@ -55,10 +35,10 @@ from pathlib import Path
 
 from PIL import Image
 
-# The three byte signatures this product ever sees: PNG, JPEG and SVG.  A target's bytes
-# are sniffed, never trusted, so mime_type() answers application/octet-stream for
-# anything else and the adapter layer decides what that means (AAP §0.3.4
-# TargetContractError) — this module raises nothing for garbage.
+# The three byte signatures this product ever sees: PNG, JPEG and SVG.  A target's bytes are
+# sniffed, never trusted, so mime_type() answers application/octet-stream for anything else and
+# the adapter layer decides what that means (AAP §0.3.4 TargetContractError) — this module raises
+# nothing for garbage.
 PNG_MAGIC: bytes = b"\x89PNG\r\n\x1a\n"
 JPEG_MAGIC: bytes = b"\xff\xd8\xff"
 # SVG is text, so it is recognised by a leading declaration or root element after leading
@@ -70,9 +50,9 @@ MIME_JPEG: str = "image/jpeg"
 MIME_SVG: str = "image/svg+xml"
 MIME_OCTET_STREAM: str = "application/octet-stream"
 
-# mime type -> every prefix that identifies it.  A caller that sniffs SVG for itself must
-# strip leading whitespace and a byte-order mark first; _looks_like_svg does exactly that,
-# and mime_type() falls through to it for those forms.
+# mime type -> every prefix that identifies it.  A caller that sniffs SVG for itself must strip
+# leading whitespace and a byte-order mark first; _looks_like_svg does exactly that, and
+# mime_type() falls through to it for those forms.
 MAGIC: dict[str, tuple[bytes, ...]] = {
     MIME_PNG: (PNG_MAGIC,),
     MIME_JPEG: (JPEG_MAGIC,),
@@ -87,33 +67,28 @@ _WHITESPACE: bytes = b" \t\r\n\v\f"
 class OpenImage:
     """One image that is open right now, as reported by :func:`open_images`.
 
-    Frozen, so records compare by value: two opens of the same path for the same case
-    compare equal, which is what lets ``CL-ARTIFACTS`` report a leak as a plain equality
-    against an expected snapshot.
-
-    Attributes:
-        path: The path exactly as the caller gave it.  It is never resolved, because an
-            absolute path must not reach a report or an artefact (AAP §0.5.5).
-        case_id: The case that opened the image, or ``None`` when the open is not
-            attributable to one case.
+    Frozen, so records compare by value: two opens of the same path for the same case compare equal,
+    which is what lets ``CL-ARTIFACTS`` report a leak as a plain equality against an expected
+    snapshot. ``path`` is the path exactly as the caller gave it, never resolved, because an
+    absolute path must not reach a report or an artefact (AAP §0.5.5); ``case_id`` is the case that
+    opened the image, or ``None`` when not attributable.
     """
 
     path: str
     case_id: str | None = None
 
 
-# Images that are open right now, each keyed by an opaque token created per open, so
-# removing an entry removes exactly the one its context created even when two identical
-# paths are open at once.  Discovery order never leaks: open_images() sorts.
+# Images that are open right now, each keyed by an opaque token created per open, so removing an
+# entry removes exactly the one its context created even when two identical paths are open at
+# once.  Discovery order never leaks: open_images() sorts.
 _OPEN_IMAGES: dict[object, OpenImage] = {}
 
 
 def _looks_like_svg(data: bytes) -> bool:
     """Return whether ``data`` starts with an SVG declaration or root element.
 
-    Strips an optional UTF-8 byte-order mark and then any leading whitespace before
-    testing the prefixes in :data:`SVG_PREFIXES`, because a vendor-written SVG file may
-    begin with either.
+    Strips an optional UTF-8 byte-order mark and then any leading whitespace before testing the
+    prefixes in :data:`SVG_PREFIXES`, because a vendor-written SVG file may begin with either.
     """
     if data.startswith(_UTF8_BOM):
         data = data[len(_UTF8_BOM) :]
@@ -123,29 +98,17 @@ def _looks_like_svg(data: bytes) -> bool:
 def mime_type(data: bytes) -> str:
     """Return the MIME type implied by the leading bytes of ``data``.
 
-    Answers ``image/png``, ``image/jpeg``, ``image/svg+xml``, or
-    ``application/octet-stream`` when nothing matches.  Sniffing never raises on arbitrary
-    bytes: a target may return garbage, and calling that a contract failure is the
-    adapter's decision (AAP §0.3.4), not this module's.
-
-    Args:
-        data: The bytes to sniff; typically a target's response body or an artefact's
-            content.
-
-    Returns:
-        One of :data:`MIME_PNG`, :data:`MIME_JPEG`, :data:`MIME_SVG`,
-        :data:`MIME_OCTET_STREAM`.
-
-    Raises:
-        ValueError: if ``data`` is not bytes-like.  Image data is bytes everywhere in
-            the product, so any other type is a programming error rather than a finding.
+    Answers :data:`MIME_PNG`, :data:`MIME_JPEG`, :data:`MIME_SVG`, or :data:`MIME_OCTET_STREAM` when
+    nothing matches. Sniffing never raises on arbitrary bytes: a target may return garbage, and
+    calling that a contract failure is the adapter's decision (AAP §0.3.4), not this module's. Only
+    a non-bytes-like ``data`` raises :exc:`ValueError`, a programming error rather than a finding.
     """
     if not isinstance(data, (bytes, bytearray, memoryview)):
         raise ValueError(f"mime_type expects bytes, got {type(data).__name__}")
     head = bytes(data)
-    # A signature beginning at byte 0 is answered by the table; the SVG forms that carry
-    # a byte-order mark or leading whitespace need the strip _looks_like_svg performs, so
-    # they fall through to it.
+    # A signature beginning at byte 0 is answered by the table; the SVG forms that carry a
+    # byte-order mark or leading whitespace need the strip _looks_like_svg performs, so they
+    # fall through to it.
     for mime, prefixes in MAGIC.items():
         if head.startswith(prefixes):
             return mime
@@ -157,20 +120,11 @@ def mime_type(data: bytes) -> str:
 def encode_png(image: Image.Image) -> bytes:
     """Encode ``image`` as PNG bytes and return them.
 
-    The encoding is reproducible: no ancillary chunk is written (no ``tIME``, no
-    ``dpi``/``text`` metadata), so two calls on equal images return identical bytes and,
-    inside the pinned Pillow/zlib build, so does a call in another process (AAP §0.5.4).
-    That reproducibility is what makes a damage artefact regenerable from its seed.
-    Nothing is written to disk — the image is serialised into an in-memory buffer.
-
-    Args:
-        image: The image to encode.
-
-    Returns:
-        The complete PNG file content.
-
-    Raises:
-        ValueError: if ``image`` is not a :class:`PIL.Image.Image`.
+    The encoding is reproducible: no ancillary chunk is written (no ``tIME``, no ``dpi``/``text``
+    metadata), so two calls on equal images return identical bytes and, inside the pinned
+    Pillow/zlib build, so does a call in another process (AAP §0.5.4) -- which is what makes a
+    damage artefact regenerable from its seed. Nothing is written to disk, and a non-image ``image``
+    raises :exc:`ValueError`.
     """
     if not isinstance(image, Image.Image):
         raise ValueError(f"encode_png expects a PIL.Image.Image, got {type(image).__name__}")
@@ -182,25 +136,13 @@ def encode_png(image: Image.Image) -> bytes:
 def decode_image(data: bytes) -> Image.Image:
     """Open image bytes and return a fully loaded :class:`PIL.Image.Image`.
 
-    This is how a target's ``GeneratedSymbol.image_bytes`` become an image.  The pixels
-    are read eagerly, so the returned image keeps no file handle alive and the
-    open-handle snapshot ``CL-ARTIFACTS`` takes stays meaningful (AAP §0.8.1).
-
-    Pillow's own exceptions propagate unchanged: the adapter maps them to
-    ``TargetContractError`` (AAP §0.14.1), and this module deliberately does not know
-    that type exists.
-
-    Args:
-        data: The image file content, as received from a target or read from an artefact.
-
-    Returns:
-        The decoded image.
-
-    Raises:
-        ValueError: if ``data`` is empty or is not bytes-like.
-        PIL.UnidentifiedImageError: if Pillow cannot recognise the content; it is an
-            ``OSError`` subclass, so the adapter's conversion covers it.
-        OSError: for truncated or otherwise broken image data.
+    This is how a target's ``GeneratedSymbol.image_bytes`` become an image. The pixels are read
+    eagerly, so the returned image keeps no file handle alive and the open-handle snapshot
+    ``CL-ARTIFACTS`` takes stays meaningful (AAP §0.8.1). Pillow's own exceptions propagate
+    unchanged -- the adapter maps them to ``TargetContractError`` (AAP §0.14.1), and this module
+    deliberately does not know that type exists. Raises :exc:`ValueError` when ``data`` is empty or
+    not bytes-like, :exc:`PIL.UnidentifiedImageError` when Pillow cannot recognise the content, and
+    :exc:`OSError` for truncated or otherwise broken image data.
     """
     if not isinstance(data, (bytes, bytearray, memoryview)):
         raise ValueError(f"decode_image expects bytes, got {type(data).__name__}")
@@ -215,32 +157,16 @@ def decode_image(data: bytes) -> Image.Image:
 def composite_overlay(symbol: Image.Image, overlay: Image.Image) -> Image.Image:
     """Return a new RGBA image with ``overlay`` composited centred on ``symbol``.
 
-    The one transform this module performs, and the reason it exists is a capability
-    contract: ``logo_overlay`` is a member the built-in target declares, so a request that
-    carries an overlay must reach a symbol carrying it -- a declared capability with no
-    behaviour behind it is indistinguishable from an ignored one (AAP §0.3.4).  It lives
-    here because Pillow is reachable only through this module.
-
-    The overlay keeps its own pixel size, is centred on both axes, and is clipped when it
-    is larger than the symbol in a dimension; its alpha channel is honoured, so a
-    semi-transparent overlay blends with the modules under it instead of replacing them.
-    Neither argument is mutated and no file is read or written: the symbol is converted
-    into a fresh image first, and that copy is the canvas the overlay is pasted onto.  The
-    result carries no text chunk and no timestamp, so equal inputs composite to equal
-    pixels and :func:`encode_png` stays byte-deterministic (AAP §0.5.4).
-
-    Args:
-        symbol: The rendered symbol to composite onto.  Any Pillow mode is accepted; it is
-            converted to ``RGBA``.
-        overlay: The overlay bitmap.  It is pasted with its own alpha channel as the mask,
-            so a transparent pixel leaves the symbol unchanged.
-
-    Returns:
-        A new ``RGBA`` image the size of ``symbol``.
-
-    Raises:
-        ValueError: Either argument is not a :class:`PIL.Image.Image`.  A programming
-            error rather than a finding, like this module's other type refusals.
+    The one transform this module performs, and it exists because of a capability contract:
+    ``logo_overlay`` is a member the built-in target declares, so a request that carries an overlay
+    must reach a symbol carrying it -- a declared capability with no behaviour behind it is
+    indistinguishable from an ignored one (AAP §0.3.4). The overlay keeps its own pixel size, is
+    centred on both axes and is clipped when it is larger than the symbol in a dimension; its alpha
+    channel is honoured, so a semi-transparent overlay blends with the modules under it. Neither
+    argument is mutated and no file is read or written: the symbol is converted into a fresh image
+    that becomes the canvas, and the result carries no text chunk or timestamp, so equal inputs
+    composite to equal pixels (AAP §0.5.4). Raises :exc:`ValueError` when either argument is not a
+    :class:`PIL.Image.Image`.
     """
     if not isinstance(symbol, Image.Image):
         raise ValueError(
@@ -252,8 +178,8 @@ def composite_overlay(symbol: Image.Image, overlay: Image.Image) -> Image.Image:
             f"composite_overlay expects a PIL.Image.Image overlay, got "
             f"{type(overlay).__name__}"
         )
-    # ``convert`` returns a new image even when the mode already matches, so the canvas
-    # below can be pasted onto without touching either argument.
+    # ``convert`` returns a new image even when the mode already matches, so the canvas below
+    # can be pasted onto without touching either argument.
     base = symbol.convert("RGBA")
     patch = overlay.convert("RGBA")
     offset = ((base.width - patch.width) // 2, (base.height - patch.height) // 2)
@@ -266,14 +192,8 @@ def composite_overlay(symbol: Image.Image, overlay: Image.Image) -> Image.Image:
 def encode_base64(data: bytes) -> str:
     """Return ``data`` base64-encoded as ASCII text, unwrapped.
 
-    No newlines and no line wrapping: the data URI built by :func:`to_data_uri` and the
-    corpus' ``payload_b64`` field both require the single-line form.
-
-    Args:
-        data: The bytes to encode.
-
-    Returns:
-        The base64 text, without line breaks.
+    No newlines and no line wrapping: the data URI built by :func:`to_data_uri` and the corpus'
+    ``payload_b64`` field both require the single-line form.
     """
     return base64.b64encode(bytes(data)).decode("ascii")
 
@@ -281,20 +201,10 @@ def encode_base64(data: bytes) -> str:
 def decode_base64(text: str) -> bytes:
     """Decode base64 ``text`` to bytes, rejecting malformed input.
 
-    Decoding is strict, so a malformed body raises ``binascii.Error`` instead of quietly
-    decoding a prefix of it.  The adapter converts that into ``TargetContractError``
-    (AAP §0.14.1); this module lets it propagate unchanged.
-
-    Args:
-        text: The base64 text to decode.
-
-    Returns:
-        The decoded bytes; ``b""`` for an empty string.
-
-    Raises:
-        binascii.Error: if ``text`` is not valid base64 (bad padding, illegal character or
-            incorrect length).
-        ValueError: if ``text`` contains non-ASCII characters.
+    Decoding is strict, so a malformed body raises :exc:`binascii.Error` instead of quietly decoding
+    a prefix of it; the adapter converts that into ``TargetContractError`` (AAP §0.14.1) and this
+    module lets it propagate unchanged. ``b""`` decodes to ``b""``, and non-ASCII text raises
+    :exc:`ValueError`.
     """
     return base64.b64decode(text, validate=True)
 
@@ -302,17 +212,11 @@ def decode_base64(text: str) -> bytes:
 def to_data_uri(data: bytes) -> str:
     """Return ``data`` as an inline ``data:`` URI.
 
-    This is the only way an image reaches ``index.html``: the report embeds images
-    inline, so it holds no ``link`` or ``img`` pointing at an external origin and opens
-    without network access (AAP §0.3.4, §0.8.4).  The result is a pure function of
-    ``data`` — no whitespace, no quoting, no origin beyond the ``data:`` scheme.
-
-    Args:
-        data: The image file content, usually :func:`encode_png` output.
-
-    Returns:
-        ``data:<mime>;base64,<payload>``, where ``<mime>`` comes from
-        :func:`mime_type`.
+    The only way an image reaches ``index.html``: the report embeds images inline, so it holds no
+    ``link`` or ``img`` pointing at an external origin and opens without network access (AAP
+    §0.3.4, §0.8.4). The result is a pure function of ``data`` --
+    ``data:<mime>;base64,<payload>``, with ``<mime>`` from :func:`mime_type` and no whitespace,
+    quoting or origin beyond the ``data:`` scheme.
     """
     return f"data:{mime_type(data)};base64,{encode_base64(data)}"
 
@@ -321,26 +225,14 @@ def to_data_uri(data: bytes) -> str:
 def open_image(path: str | Path, *, case_id: str | None = None) -> Iterator[Image.Image]:
     """Open the image at ``path`` and register it as open for the life of the context.
 
-    The image is registered before it is yielded, so :func:`open_images` reports it while
-    the ``with`` body runs and no longer reports it afterwards — whether the body
-    returned or raised.  ``CL-ARTIFACTS`` reads that snapshot to attribute an unclosed
-    handle to the case that leaked it (AAP §0.8.1), so every image the framework touches
-    is opened through here.
-
-    The registration keeps ``path`` exactly as given and is dropped in a ``finally``
-    block, together with closing the image, so a handle cannot outlive the context.
-
-    Args:
-        path: Path of the image file, as given; it is stored unresolved.
-        case_id: Identifier of the case opening the image, or ``None`` when the open is
-            not attributable to a case.
-
-    Yields:
-        The opened image, still holding its file handle for the caller to read.
-
-    Raises:
-        PIL.UnidentifiedImageError: if Pillow cannot recognise the file's content.
-        OSError: if the file cannot be opened or read.
+    The image is registered before it is yielded, so :func:`open_images` reports it while the
+    ``with`` body runs and no longer afterwards, whether the body returned or raised:
+    ``CL-ARTIFACTS`` reads that snapshot to attribute an unclosed handle to the case that leaked it
+    (AAP §0.8.1), so every image the framework touches is opened through here. ``path`` is kept
+    exactly as given, the registration is dropped in a ``finally`` block together with closing the
+    image, so a handle cannot outlive the context, and ``case_id`` names the case that opened it or
+    ``None`` when the open is not attributable. Raises :exc:`PIL.UnidentifiedImageError` when Pillow
+    cannot recognise the content, and :exc:`OSError` when the file cannot be opened or read.
     """
     image = Image.open(path)
     token = object()

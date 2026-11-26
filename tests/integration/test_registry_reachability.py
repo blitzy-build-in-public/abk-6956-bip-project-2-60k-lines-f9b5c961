@@ -1,24 +1,19 @@
 """Registry reachability: the checks that exist are the checks a real run executes.
 
-The product's MUST is that every check implements one contract, is discoverable from the
-registry, and is never importable-only or callable solely from a test (AAP §0.1.2, §0.3.4).
-``qrcheck/registry/check.py`` owns check identity, ``qrcheck list`` publishes it and
-``summary.json`` records what executed; the three are held against each other, so a check
-registered but never run, one run but never registered, a listing that omits one, or an
-identifier renamed, dropped or doubled fails here by name (AAP §0.4.1, §0.6.1 #8). The
-registry must hold exactly the twenty-one identifiers, asserted on non-emptiness and count
-before any set comparison so an empty registry cannot satisfy an equality vacuously; the nine
-families must partition them; a fresh interpreter importing ``qrcheck.checks`` must register all
-twenty-one, which no test-only import path can fake; and each built-in target's expected failing
-set must validate against the registry (AAP §0.4.3).
+The product's MUST is that every check implements the same contract and is discoverable from
+the registry, and that no check is importable-only or callable solely from a test (AAP
+§0.1.2, §0.3.4). ``qrcheck/registry/check.py`` owns check identity, ``qrcheck list``
+publishes it and a run's ``summary.json`` records what executed; this module holds all three
+against each other (AAP §0.4.1, §0.6.1 #8), so a check registered but never run, run but
+never registered, omitted from the listing, renamed, dropped or doubled fails here by name --
+including the registry's exact twenty-one identifiers, the family partition, each entry's
+``CheckContract`` fields, registration on package import alone, and the built-in targets'
+expected failing sets.
 
-The executed half reads the session-scoped ``reference_report`` fixture, paid for once per
-session (AAP §0.6.1 #9) and the reason the marker is ``e2e`` (AAP §0.6.4); the listing half
-invokes ``qrcheck list --json``, which registers and prints without running a check. Nothing
-here skips, xfails, retries or mocks (AAP §0.4.3, §0.5.6), no assertion reads a clock, and the
-only file written is the listing's configuration under ``tmp_path`` -- never the repository's
-own ``reports/`` (AAP §0.11.1).
-"""
+The executed-set half reads the session-scoped ``reference_report`` fixture, so the suite is
+paid for once per session (AAP §0.6.1 #9). The marker is ``e2e`` because of that suite,
+nothing here skips, retries or mocks, and the only file written is a configuration under
+``tmp_path`` (AAP §0.11.1)."""
 
 from __future__ import annotations
 
@@ -36,15 +31,12 @@ from qrcheck.registry.check import REGISTRY, CheckContract, iter_checks
 from qrcheck.registry.expectations import SELF_CHECK_TARGETS, validate_against_registry
 from qrcheck.targets.base import Capability
 
-# The end-to-end half of the reachability gate reads the report a full `--adapter reference` run
-# left behind, so the module is deselected by `-m "not e2e"` in the fast job and runs once in
-# the e2e job (AAP §0.6.4). The `list --json` call it also makes runs no suite.
+# The end-to-end half reads a full reference run's report, so ``-m "not e2e"`` deselects it in
+# the fast job (AAP §0.6.4); the ``list --json`` call it also makes runs no suite.
 pytestmark = pytest.mark.e2e
 
-# The twenty-one check identifiers of AAP §0.3.4, written out literally on purpose: comparing
-# the registry against qrcheck.registry.check.CHECK_IDS would be the registry agreeing with
-# itself, and this is the gate that has to catch a renamed, dropped or doubled identifier. A
-# change to this set is a change to the acceptance criteria, not to a test.
+# The twenty-one identifiers of AAP §0.3.4, literal on purpose: comparing the registry against
+# ``CHECK_IDS`` would be the registry agreeing with itself, and this gate must catch a rename.
 _EXPECTED_CHECK_IDS: Final[frozenset[str]] = frozenset(
     {
         "CL-ARTIFACTS",
@@ -71,15 +63,12 @@ _EXPECTED_CHECK_IDS: Final[frozenset[str]] = frozenset(
     }
 )
 
-# Declared separately from the set above rather than derived from it: a mistyped identifier that
-# collapsed two entries into one would keep len(_EXPECTED_CHECK_IDS) constant, and the count is
-# the acceptance criterion the case matrix is written for.
+# Declared separately rather than derived: a mistyped identifier collapsing two entries would keep
+# the count constant, and the count is the acceptance criterion.
 _EXPECTED_CHECK_COUNT: Final[int] = 21
 
-# The nine families of AAP §0.8.1's component-to-check-family table, as a partition of the
-# twenty-one identifiers: one set per family module. Compared as a set of sets rather than by
-# family name, because the partition is what the one-module-per-family rule fixes -- a different
-# naming vocabulary in the product is cosmetic, a split or merged family is structural.
+# The nine families of AAP §0.8.1's table as a partition of the twenty-one identifiers, compared
+# set of sets: a different naming vocabulary is cosmetic, a split or merged family is structural.
 _EXPECTED_FAMILY_PARTITION: Final[frozenset[frozenset[str]]] = frozenset(
     {
         frozenset({"RT-ROUNDTRIP"}),
@@ -94,31 +83,25 @@ _EXPECTED_FAMILY_PARTITION: Final[frozenset[frozenset[str]]] = frozenset(
     }
 )
 
-# The five keys AAP §0.8.3 fixes for one `--json` row, and no others: a renamed key, a wrapping
-# object or an extra nesting level would make a tooling consumer mis-parse a correct run.
+# The five keys AAP §0.8.3 fixes for one ``--json`` row, and no others.
 _LIST_JSON_KEYS: Final[frozenset[str]] = frozenset(
     {"id", "title", "family", "requires", "dependencies"}
 )
 
-# The closed capability vocabulary, taken from the port's own StrEnum so that a member added,
-# renamed or removed there is what the listing is validated against here.
+# The closed capability vocabulary, taken from the port's own StrEnum.
 _CAPABILITY_VALUES: Final[frozenset[str]] = frozenset(member.value for member in Capability)
 
-# The child process that proves registration needs no test-only import path: it imports the
-# family package exactly as an entry point does, then prints the size of the registry it found.
+# The child that proves registration needs no test-only import path: it imports the family package.
 _REGISTRATION_SCRIPT: Final[str] = (
     "import qrcheck.checks; from qrcheck.registry.check import REGISTRY; "
     "print(len(REGISTRY))"
 )
 
-# A harness guard, not a product threshold: no check reads it, no configuration declares it, and
-# it bounds a hang rather than measuring anything.
+# A harness guard, not a product threshold: no check reads it, no configuration declares it.
 _SUBPROCESS_TIMEOUT_S: Final[float] = 300.0
 
-# What the listing is invoked with. `qrcheck list` reads no configuration at all -- a listing has
-# to answer "which checks does this installation have?" before a target is configured -- so these
-# values exist only to satisfy the group's `--config` option. The adapter named is one both
-# built-in target tables declare, so the document write_config produces is schema-valid.
+# What the listing is invoked with: ``qrcheck list`` reads no configuration at all, so these values
+# exist only to satisfy the group's ``--config`` option; the adapter named is one both declare.
 _CONFIG_FILE_NAME: Final[str] = "qrcheck.toml"
 _CONFIG_ADAPTER: Final[str] = "reference"
 _CONFIG_REPORT_DIR: Final[str] = "reports-list"
@@ -126,15 +109,7 @@ _CONFIG_REPORT_DIR: Final[str] = "reports-list"
 
 @pytest.fixture(name="registry")
 def _registry() -> Mapping[str, CheckContract]:
-    """Return the populated registry, imported the way the product's entry points import it.
-
-    Registration is import-time (AAP §0.3.4): ``qrcheck run`` and ``qrcheck list`` both import
-    :mod:`qrcheck.checks` before they read the registry, and this fixture does the same. It is
-    deliberately *not* autouse and not a module-level import, so the first test below remains the
-    only thing between a broken import path and an empty registry: an autouse import would make an
-    empty registry impossible to observe and the gate unable to fail. The view is live, so it holds
-    the entries the import registered rather than a snapshot taken before it ran.
-    """
+    """Return the populated registry, imported the way the product's entry points import it."""
     import qrcheck.checks  # noqa: F401 -- registration is this import's side effect
     return REGISTRY
 
@@ -144,12 +119,8 @@ def _list_rows(
     write_config: Callable[..., Path],
     tmp_path: Path,
 ) -> list[dict[str, Any]]:
-    """Run ``qrcheck list --json`` as a real process and return its parsed rows, in printed
-    order.
-
-    A non-zero status, or a stdout that is not an object array, fails the test: a listing
-    neither inspects nor writes a report, so that is a defect in the command rather than a
-    verdict on a target. """
+    """Run ``qrcheck list --json`` as a real process
+    and return its parsed rows, in printed order."""
     config_path = write_config(
         tmp_path / _CONFIG_FILE_NAME,
         default_adapter=_CONFIG_ADAPTER,
@@ -168,12 +139,7 @@ def _list_rows(
 
 
 def test_registry_is_populated_and_exactly_twenty_one() -> None:
-    """Importing the checks registers the twenty-one declared ones, and nothing else happens.
-
-    Catches a family module that stopped registering, a registration that became conditional
-    and a check that was dropped or doubled. The non-emptiness assertion comes first, before
-    any set comparison, because an empty registry would satisfy the next test's executed-set
-    equality vacuously -- the one way this gate could pass while proving nothing. """
+    """Importing the checks registers the twenty-one declared ones, and nothing else."""
     import qrcheck.checks  # noqa: F401 -- registration is this import's side effect
 
     registered = sorted(REGISTRY)
@@ -195,14 +161,7 @@ def test_every_registered_check_executed_in_the_reference_run(
     reference_report: tuple[Path, dict[str, Any], int],
     registry: Mapping[str, CheckContract],
 ) -> None:
-    """Every registered check produced results in a real run, and at least one of them passed.
-
-    AAP §0.4.1, verbatim: ``set(REGISTRY) == {r["check_id"] for r in summary["results"]}``. A
-    check listed but never executed is one CI cannot trend; a check executed but never listed
-    is one a consumer cannot name, so the two directions are reported separately. The
-    reference run's own exit code is deliberately not asserted here --
-    ``test_reference_run.py`` owns that gate -- so this module reports the same failure
-    whichever of the two noticed it first. """
+    """Every registered check produced results in a real run, and at least one passed."""
     _report_root, summary, exit_code = reference_report
     registered = set(registry)
     executed = {result["check_id"] for result in summary["results"]}
@@ -230,14 +189,7 @@ def test_every_registered_check_executed_in_the_reference_run(
 
 
 def test_registry_ids_are_the_literal_set(registry: Mapping[str, CheckContract]) -> None:
-    """The registry holds the literal twenty-one identifiers, in an ascending iteration order.
-
-    Catches a renamed, dropped or silently duplicated identifier, which a comparison against
-    ``CHECK_IDS`` could not: that tuple is the registry's own declaration. One entry per
-    identifier and an iteration order that ignores import order (AAP §0.5.3) are asserted on
-    :func:`qrcheck.registry.check.iter_checks`, the surface every consumer iterates; the
-    dict's own order is the family modules' import order and is not a contract, so it is not
-    asserted here. """
+    """The registry holds the literal twenty-one identifiers, in an ascending iteration order."""
     assert set(registry) == _EXPECTED_CHECK_IDS, (
         f"the registry holds {sorted(set(registry) - _EXPECTED_CHECK_IDS)} beyond the declared "
         f"checks and lacks {sorted(_EXPECTED_CHECK_IDS - set(registry))}"
@@ -261,14 +213,7 @@ def test_every_registry_entry_appears_in_list_json(
     tmp_path: Path,
     registry: Mapping[str, CheckContract],
 ) -> None:
-    """``qrcheck list --json`` publishes every registered check, declaring what it requires.
-
-    The machine-readable half of AAP §0.6.1 #8. A check reachable only from an import would be
-    absent from the listing a CI consumer reads, and a listing whose requirement lists disagreed
-    with the registry would tell a target author to declare capabilities the product never asks for.
-    Sortedness is asserted on the emitted order (AAP §0.5.3), and the row count separately from the
-    identifier set, because a duplicated row would satisfy both the set comparison and the order.
-    """
+    """``qrcheck list --json`` publishes every registered check, declaring what it requires."""
     rows = _list_rows(run_cli, write_config, tmp_path)
     listed = [row["id"] for row in rows]
     assert set(listed) == set(registry), (
@@ -328,14 +273,7 @@ def test_family_partition_matches_the_plan(
     write_config: Callable[..., Path],
     tmp_path: Path,
 ) -> None:
-    """The nine families partition the twenty-one checks exactly as the plan's table does.
-
-    AAP §0.8.1's one-module-per-family rule is what the partition encodes, so a family that
-    split in two, merged with another or lost a check fails here, and the JUnit ``classname``
-    and report section that follow from the family stay meaningful. Compared as a set of sets:
-    the family names are the product's vocabulary and may be spelled differently without
-    breaking this case, whereas a structural change cannot pass.
-    """
+    """The nine families partition the twenty-one checks exactly as the plan's table does."""
     rows = _list_rows(run_cli, write_config, tmp_path)
     grouped: dict[str, set[str]] = {}
     for row in rows:
@@ -357,19 +295,11 @@ def test_family_partition_matches_the_plan(
 def test_each_entry_satisfies_the_check_contract(
     registry: Mapping[str, CheckContract],
 ) -> None:
-    """Every registry entry carries the six fields of ``CheckContract`` with their types.
-
-    The per-check capability and dependency *tables* belong to
-    ``tests/unit/test_registry_contract.py`` and are deliberately not restated here, so
-    retuning AAP §0.3.4's requirement table leaves one place to edit. What this case holds is
-    the shape every consumer reads -- identity, title, family, requirement types and a
-    callable case generator -- so a field that changed type or lost its value fails once,
-    naming the check. """
+    """Every registry entry carries the six fields of ``CheckContract`` with their types."""
     assert registry, "the registry is empty, so there is no entry to inspect"
     for check_id in sorted(registry):
         entry = registry[check_id]
-        # ``CheckContract`` is a frozen dataclass, not a Protocol, so this is a real check of the
-        # object the registry holds rather than a structural one.
+        # ``CheckContract`` is a frozen dataclass, not a Protocol, so this checks the real object.
         assert isinstance(entry, CheckContract), (
             f"{check_id}: the registry holds a {type(entry).__name__}, not a CheckContract"
         )
@@ -404,14 +334,7 @@ def test_each_entry_satisfies_the_check_contract(
 
 
 def test_registration_happens_on_package_import_alone(repo_root: Path) -> None:
-    """A fresh interpreter that imports ``qrcheck.checks`` finds all twenty-one checks.
-
-    The clause no test-only import path can satisfy: the child inherits nothing from this
-    process's ``sys.modules``, so it proves registration belongs to importing the package --
-    which is exactly what ``qrcheck run`` and ``qrcheck list`` do -- rather than to a test
-    importing one family module by name. ``cwd`` is the repository root so the child resolves
-    the same checkout this session runs from, and ``PYTHONHASHSEED`` is fixed so the child's
-    registry order cannot vary in a way that would mask a duplicate registration. """
+    """A fresh interpreter that imports ``qrcheck.checks`` finds all twenty-one checks."""
     completed = subprocess.run(
         [sys.executable, "-c", _REGISTRATION_SCRIPT],
         cwd=str(repo_root),
@@ -431,13 +354,7 @@ def test_registration_happens_on_package_import_alone(repo_root: Path) -> None:
 
 
 def test_expectations_agree_with_the_registry(registry: Mapping[str, CheckContract]) -> None:
-    """The self-check targets' expected failing sets name only registered checks.
-
-    ``validate_against_registry`` raises for an expected identifier that is declared but not
-    registered, so deleting a check without deleting its expectation -- or the reverse --
-    breaks a test rather than silently shrinking the set the defective run's acceptance
-    criterion compares (AAP §0.4.3). ``reference`` must expect nothing to fail; its zero-skip
-    requirement is the reference-run gate's, not this one's. """
+    """The self-check targets' expected failing sets name only registered checks."""
     validate_against_registry(registry)
 
     conforming = SELF_CHECK_TARGETS["reference"]

@@ -1,23 +1,17 @@
 """Contract test: the adapter factory covers every target type the configuration declares.
 
-``qrcheck/targets/__init__.py`` is the product's single extension point (AAP §0.3.4, "Extension
-boundary"), so this module proves mechanically that the table's keys are exactly
-``models.ADAPTER_TYPE_NAMES``; that each entry is the class the extension model names, compared
-by **identity** rather than by name string; that every entry given a record of its own dataclass
-type returns an object satisfying the :class:`~qrcheck.targets.base.Adapter` protocol --
-``isinstance`` and never ``issubclass``, because the protocol has non-method members (``name``,
-``capabilities``) and CPython 3.11 refuses ``issubclass`` for those; that an undeclared type
-raises ``KeyError`` rather than resolving to ``None``, and that the table cannot be mutated into
-redirecting a run; and that the capability vocabulary is the same on both sides of the
-configuration seam. The capability half is load-bearing beyond this module: the three
-configurable adapters declare exactly the capabilities their resolved record carries and the two
-built-in self-check targets declare all thirteen themselves, which is what lets the clean-run
-gate demand zero skips (AAP §0.4.1) and stops an expected failure of the ``defective`` target
-from being turned into a skip (AAP §0.4.2).
+``qrcheck/targets/__init__.py`` is the product's single extension point, so the table's keys must
+be exactly ``models.ADAPTER_TYPE_NAMES``, each entry must be the class the extension model names
+(compared by **identity**), every entry given a record of its own dataclass type must return an
+object satisfying the :class:`~qrcheck.targets.base.Adapter` protocol (``isinstance``, never
+``issubclass``: the protocol has non-method members and CPython 3.11 refuses that), an undeclared
+type must raise ``KeyError`` rather than resolve to ``None``, and the capability vocabulary must
+match on both sides of the configuration seam.
 
-Construction only: nothing here calls ``generate``, spawns a subprocess, opens a socket, encodes
-a symbol or writes a file, because the subject is the factory and the port; no case is skipped,
-marked, xfailed or retried.
+The capability half is load-bearing beyond this module: the three configurable adapters declare
+exactly what their record carries and the two built-in self-check targets declare all thirteen
+themselves, which is what lets the clean-run gate demand zero skips (AAP §0.4.1) and keeps an
+expected failure of the ``defective`` target from being answered with a skip (AAP §0.4.2).
 """
 
 from __future__ import annotations
@@ -37,11 +31,9 @@ from qrcheck.targets.http import HttpAdapter
 from qrcheck.targets.library import LibraryAdapter
 from qrcheck.targets.reference import ReferenceAdapter
 
-# The five classes the extension model names, keyed by the ``type`` value that must resolve to
-# each. Compared by identity, so a factory entry returning a subclass or a wrapper from elsewhere
-# fails even though its name would match. These keys are the only place this module writes the
-# five type names, and :func:`test_the_factory_table_covers_every_configured_type` holds them
-# against ``models.ADAPTER_TYPE_NAMES``, which is what closes the loop in both directions.
+# The five classes the extension model names, keyed by the ``type`` value that must resolve to each.
+# Compared by identity, so a factory entry returning a subclass or a wrapper fails even though its
+# name would match; these keys are the only place this module writes the five type names.
 _EXPECTED_CLASSES: Final[Mapping[str, type]] = MappingProxyType(
     {
         "cli": CliAdapter,
@@ -52,32 +44,26 @@ _EXPECTED_CLASSES: Final[Mapping[str, type]] = MappingProxyType(
     }
 )
 
-# The capability declaration the three configurable adapters are configured with. The declaration
-# is data, not a class attribute: it rides in the resolved record and is what
-# ``qrcheck.targets.base.require_capabilities`` gates on, so an adapter must declare exactly what
-# its configuration says and never a built-in superset.
+# The capability declaration the three configurable adapters are configured with. It is data, not a
+# class attribute: it rides in the resolved record and is what ``require_capabilities`` gates on, so
+# an adapter declares exactly what its configuration says, never a built-in superset.
 _CONFIGURED_CAPABILITIES: Final[frozenset[str]] = frozenset({"png", "svg"})
 
 # The three configurable adapter kinds, which declare only what their record carries, and the two
-# built-in self-check targets, which declare the full capability set themselves. Sorted, unique
-# and exhaustive: :func:`test_the_capability_groups_partition_the_declared_types` asserts that the
-# two groups partition ``models.ADAPTER_TYPE_NAMES``.
+# built-in self-check targets, which declare the full set themselves. Sorted, unique and exhaustive:
+# the two groups partition ``models.ADAPTER_TYPE_NAMES``.
 _CONFIGURABLE_TYPES: Final[tuple[str, ...]] = ("cli", "http", "library")
 _BUILT_IN_TYPES: Final[tuple[str, ...]] = ("defective", "reference")
 
 # A loopback URL on a fixed, non-ephemeral port. Nothing here binds or dials it: the address only
-# has to pass the loopback rule that both the configuration schema and the HTTP adapter enforce,
-# and a fixed port keeps the record byte-stable across runs.
+# has to pass the loopback rule the schema and the HTTP adapter enforce, and a fixed port keeps the
+# record byte-stable across runs.
 _LOOPBACK_URL: Final[str] = "http://127.0.0.1:18100/generate"
 
 
 def _record(kind: str) -> models.TargetConfig:
-    """Return a minimal valid resolved record for `kind`, building nothing runnable. Every value
-    is one the adapter's own constructor validates, and none is a value the adapter resolves,
-    dials or spawns: the ``library`` callable's import path is deliberately never imported here
-    (``LibraryAdapter`` resolves it on the first ``generate``), the ``cli`` command is never
-    spawned, the ``http`` URL is never dialled, and the two built-in records carry no metadata
-    beyond their name and type.
+    """Return a minimal valid resolved record for `kind`: every value is one the adapter's own
+    constructor validates, and nothing here is imported, spawned or dialled.
     """
     if kind == "library":
         return models.LibraryTarget(
@@ -120,9 +106,7 @@ def _record(kind: str) -> models.TargetConfig:
 
 
 def _adapter(kind: str, record: models.TargetConfig) -> Adapter:
-    """Build the adapter `kind` resolves to, exactly as a run builds one. It performs no I/O, so
-    the caller owns the lifetime and closes what it builds.
-    """
+    """Build the adapter `kind` resolves to, as a run builds one, performing no I/O."""
     return ADAPTER_TYPES[kind](record, name=record.name)
 
 
@@ -130,9 +114,8 @@ def _adapter(kind: str, record: models.TargetConfig) -> Adapter:
 def target_records(
     config_factory: Callable[..., models.Config],
 ) -> Mapping[str, models.TargetConfig]:
-    """Return one minimal valid target record per declared type, read back from a ``Config``. The
-    iteration is over ``models.ADAPTER_TYPE_NAMES``, so a sixth declared type reaches
-    :func:`_record` and fails there by name instead of being silently uncovered.
+    """Return one minimal valid target record per declared type: a sixth declared type fails in
+    :func:`_record` by name.
     """
     records = {kind: _record(kind) for kind in sorted(models.ADAPTER_TYPE_NAMES)}
     config = config_factory(targets=MappingProxyType(records))
@@ -182,11 +165,10 @@ def test_each_factory_entry_returns_a_protocol_conforming_adapter(
 
     adapter = _adapter(adapter_type, record)
     try:
-        # ``Adapter`` is a runtime-checkable Protocol, so ``isinstance`` checks only that the
-        # four members are present -- on CPython 3.11 ``issubclass`` raises for a protocol with
-        # non-method members. Attribute presence is exactly the contract here; the types of
-        # ``name`` and ``capabilities`` are asserted separately below, because an object holding a
-        # ``list`` of capability strings would satisfy ``isinstance`` and break every consumer.
+        # ``Adapter`` is a runtime-checkable Protocol, so ``isinstance`` checks presence of the four
+        # members only -- on CPython 3.11 ``issubclass`` raises for a protocol with non-method
+        # members. The types of ``name`` and ``capabilities`` are asserted separately, since a
+        # ``list`` would pass as well.
         assert isinstance(adapter, Adapter), (
             f"the {adapter_type!r} factory returned {adapter!r}, which does not satisfy the "
             "Adapter protocol"
@@ -213,9 +195,9 @@ def test_each_factory_entry_returns_a_protocol_conforming_adapter(
         assert callable(adapter.close), (
             f"the {adapter_type!r} adapter's close attribute is not callable"
         )
-        # Closing twice must not raise: the runner closes every adapter once the run ends,
-        # including after a failure, so a close that raised on an already-released client or an
-        # already-exited child would turn a completed run into an error result.
+        # Closing twice must not raise: the runner closes every adapter once the run ends, including
+        # after a failure, so a raise on an already-released client would turn a completed run into
+        # an error.
         adapter.close()
         adapter.close()
     finally:
@@ -333,10 +315,10 @@ def test_the_capability_vocabulary_matches_the_configuration() -> None:
         "the configuration's capability vocabulary and the adapter layer's enum disagree on "
         f"{sorted(set(models.CAPABILITY_NAMES) ^ set(member_names))}"
     )
-    # A StrEnum member *is* its value, so the configuration's frozenset[str] and the adapter
-    # layer's frozenset[Capability] compare and hash equal across the seam without either side
-    # importing the other. Were that to stop holding, capability intersection would quietly stop
-    # matching and every capability-gated check would resolve as skipped.
+    # A StrEnum member *is* its value, so the configuration's frozenset[str] and the adapter layer's
+    # frozenset[Capability] compare and hash equal across the seam without either side importing the
+    # other; otherwise capability intersection would quietly stop matching and every gated check
+    # skip.
     assert frozenset(Capability) == frozenset(models.CAPABILITY_NAMES), (
         "Capability members no longer compare equal to their configured names: "
         f"{sorted(frozenset(Capability) ^ frozenset(models.CAPABILITY_NAMES), key=str)}"

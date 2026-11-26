@@ -1,49 +1,22 @@
 """The declarative configuration schema: every key, its type, default and rule.
 
-This module holds the single declaration of what ``qrcheck.toml`` may contain and
-of the value each key accepts.  ``qrcheck.config.load`` reads the TOML document,
-calls :func:`validate`, then :func:`apply_defaults`, and only then builds the
-frozen records of :mod:`qrcheck.config.models`; no other module in the product
-enumerates a configuration key, and no validator of an individual key lives
-anywhere else.
+The single declaration of what ``qrcheck.toml`` may contain and of the value each key accepts.
+``qrcheck.config.load`` reads the document, calls :func:`validate`, then :func:`apply_defaults`, and
+only then builds the frozen records of :mod:`qrcheck.config.models`; no other module enumerates a
+configuration key, and no individual key validator lives anywhere else.
 
-Two rules shape the code below:
+Every fallback *value* is declared once as a ``models.DEFAULT_*`` constant and every entry of
+:data:`SCHEMA` references that name rather than restating a number, so this module owns the *table*
+-- which key, which type, which validator, which default constant -- never a copy of a value. The
+document's structure is derived from the group paths of :data:`SCHEMA` instead of being listed
+twice.
 
-* Every fallback *value* is declared once, as a ``models.DEFAULT_*`` constant, and
-  every entry of :data:`SCHEMA` references that name rather than restating a
-  number.  This module owns the *table* -- which key, which type, which
-  validator, which default constant -- never a copy of a value.  The value a run
-  uses is the committed ``qrcheck.toml``'s whenever that document supplies the
-  key, and the ``models.DEFAULT_*`` fallback only when it omits it, so a
-  threshold is retuned in ``qrcheck.toml`` plus the criterion that reads it.
-* The document's structure is derived from the group paths of :data:`SCHEMA`
-  instead of being listed a second time.  A top-level table exists because some
-  group path starts with its name, and a child of ``[checks]`` exists because a
-  group path names it, so there is no second list to forget a key in when a
-  table gains one.
-
-Neither function performs I/O and neither raises anything but
-:class:`ConfigError`:
-
-* No path is touched.  ``corpus_path`` existence is selection-dependent ("must
-  exist when a corpus-driven check is selected"), so the runner raises it as its
-  run-prerequisite error; ``report_dir`` creation and its writability probe are
-  ``load.py``'s work and surface as ``OSError``/``PermissionError``, which the CLI
-  maps to exit 3 rather than to a configuration error.
-* No exit code, no printing, no ``sys.exit``: exit decisions belong solely to
-  ``qrcheck.cli.exit``, which builds its message from ``str(exc)``.
-* No capability *shortfall* validation.  Whether a declared capability set can
-  satisfy a check depends on the run-time ``--checks`` selection, so the same
-  document would be invalid for one selection and correct for the next; that
-  condition is a ``skipped`` result with reason ``unsupported_capability``.  An
-  unknown capability *member* is a configuration error, because it is wrong
-  whoever selects what.
-
-Determinism is a contract here too: the schema is walked in its declared order
-and unknown keys are reported over ``sorted()``, so the first diagnostic raised
-for a given document is always the same one, on every machine and every run.
-No clock, locale, ``hash()``, ``id()`` or filesystem order reaches a message, and
-neither public function mutates its argument.
+Neither public function performs I/O and neither raises anything but :class:`ConfigError`: no path
+is touched, no exit code is decided and nothing is printed. No capability *shortfall* is validated,
+because that condition depends on the run-time ``--checks`` selection and is a ``skipped`` result
+with reason ``unsupported_capability``, while an unknown capability *member* is a configuration
+error whoever selects what. Unknown keys are reported over ``sorted()``, so the first diagnostic for
+a document is always the same one.
 """
 
 from __future__ import annotations
@@ -78,15 +51,11 @@ __all__ = [
 class ConfigError(Exception):
     """A configuration fault, attributed to the dotted path of the offending key.
 
-    Raised by :func:`validate` for anything the document gets wrong on its own
-    terms, and by ``qrcheck.config.load`` for the whole-file faults of an
-    unreadable file or a TOML syntax error.  ``key`` is the dotted path a reader
-    has to edit -- ``targets.foo.returns``, ``checks.damage.jpeg_quality`` -- so
-    the exit-2 diagnostic built from ``str(exc)`` names exactly what to fix,
-    which is the entire point of the exit-2 contract.
-
-    ``key`` is empty only for a fault that belongs to no single key: a document
-    whose root is not a table, or a file that cannot be read or parsed.
+    Raised by :func:`validate` for anything the document gets wrong on its own terms, and by
+    ``qrcheck.config.load`` for the whole-file faults of an unreadable file or a TOML syntax error.
+    ``key`` is the dotted path a reader has to edit -- ``targets.foo.returns``,
+    ``checks.damage.jpeg_quality`` -- so the exit-2 diagnostic built from ``str(exc)`` names exactly
+    what to fix; it is empty only for a fault that belongs to no single key.
     """
 
     def __init__(self, key: str, message: str) -> None:
@@ -119,19 +88,13 @@ _REQUIRED: Final[_RequiredSentinel] = _RequiredSentinel()
 class KeySpec:
     """Declared type, default and rule for one configuration key.
 
-    ``kinds`` are the value types accepted *after* TOML parsing, so an integer
-    is written ``(int,)``, a number that may be written either way ``(float,
-    int)`` -- TOML spells ``timeout_s = 30`` as an integer -- and a table
-    ``(dict,)``.  ``default`` is either a ``models.DEFAULT_*`` constant, whose
-    value this module never restates, or :data:`_REQUIRED`.
-
-    ``check`` receives the value alone and returns the error fragment that
-    :class:`ConfigError` attaches to the key, or ``None`` when the value is
-    valid.  Every fragment is a self-contained sentence fragment naming the
-    offending value, and type checking happens before it (compare
-    :func:`_validate_value`), so a ``check`` may assume its declared ``kinds``.
-    The one check that has to name a *nested* leaf -- ``request_template`` --
-    raises :class:`_LeafError` to do so; see :func:`_check_request_template`.
+    ``kinds`` are the value types accepted *after* TOML parsing, so an integer is ``(int,)``, a
+    number written either way ``(float, int)`` -- TOML spells ``timeout_s = 30`` as an integer --
+    and a table ``(dict,)``. ``default`` is either a ``models.DEFAULT_*`` constant, whose value is
+    never restated here, or :data:`_REQUIRED`. ``check`` returns the error fragment
+    :class:`ConfigError` attaches to the key, or ``None``; type checking happens first (see
+    :func:`_validate_value`), so a ``check`` may assume its declared ``kinds``, and the one that
+    must name a *nested* leaf raises :class:`_LeafError`.
     """
 
     key: str
@@ -180,11 +143,9 @@ def _kind(value: object) -> str:
 def _label_for(kind: type) -> str:
     """Name one declared type in the reader's vocabulary, not the parser's.
 
-    A declared type the map spells out is answered directly.  A table key is
-    declared ``(dict,)`` -- the type TOML actually produces -- and ``dict`` is not a
-    key of the map, so a declared type absent from it is matched to the first label
-    it is a subclass of and still reads as ``table``; only a type that matches no
-    label at all falls back to its own name.
+    A table key is declared ``(dict,)``, and ``dict`` is not a key of the map, so a declared type
+    absent from it is matched to the first label it is a subclass of and still reads as ``table``;
+    only a type that matches no label at all falls back to its own name.
     """
     label = _KIND_LABEL_BY_TYPE.get(kind)
     if label is not None:
@@ -227,10 +188,10 @@ def _dotted(prefix: str, key: str) -> str:
 def _type_fragment(kinds: tuple[type, ...], value: Any) -> str | None:
     """Return the type diagnostic for ``value``, or ``None`` when it fits ``kinds``.
 
-    ``bool`` is rejected for every key even where an integer is accepted: TOML
-    ``true`` parses to ``bool``, which is an ``int`` subclass, so without this
-    ``warmup = true`` would silently pass as ``1``.  A float must also be finite,
-    because TOML can express ``inf`` and ``nan`` and neither is a usable bound.
+    ``bool`` is rejected for every key even where an integer is accepted, because TOML ``true``
+    parses to ``bool``, which is an ``int`` subclass, so ``warmup = true`` would otherwise silently
+    pass as ``1``. A float must also be finite, because TOML can express ``inf`` and ``nan`` and
+    neither is a usable bound.
     """
     if isinstance(value, bool):
         return f"expected {_expected_label(kinds)}, got boolean"
@@ -300,13 +261,10 @@ def _check_non_empty_str(value: str) -> str | None:
 def _check_path(value: str) -> str | None:
     """Require a non-empty path that a filesystem call can actually use.
 
-    A POSIX file name may hold any byte except ``/`` and NUL, so the other control
-    characters are legal in a path and are deliberately not rejected here.  A NUL is
-    not: no filesystem call accepts one, and ``pathlib`` answers it with a
-    ``ValueError`` -- which is not the ``OSError`` the exit-3 contract covers -- so
-    an operator's ``report_dir = "rep\\u0000orts"`` would surface as an internal
-    error instead of a diagnostic naming the key.  Rejecting it here keeps the fault
-    on the key it belongs to.
+    A POSIX file name may hold any byte except ``/`` and NUL, so the other control characters are
+    legal and deliberately not rejected. A NUL is not: no filesystem call accepts one and
+    ``pathlib`` answers it with a ``ValueError``, which is not the ``OSError`` the exit-3 contract
+    covers, so rejecting it here keeps the fault on the key it belongs to.
     """
     fragment = _check_non_empty_str(value)
     if fragment is not None:
@@ -331,10 +289,10 @@ def _check_seed(value: int) -> str | None:
 def _check_capabilities(value: list) -> str | None:
     """Require every declared capability to be one of the 13 member names.
 
-    Only membership is checked.  Whether the declared set can satisfy a selected
-    check is not decidable here -- it depends on ``--checks`` -- and is a
-    ``skipped`` result with reason ``unsupported_capability`` instead.  A repeated
-    member is accepted because ``TargetConfig`` stores a ``frozenset``.
+    Only membership is checked. Whether the declared set can satisfy a selected check is not
+    decidable here -- it depends on ``--checks`` -- and is a ``skipped`` result with reason
+    ``unsupported_capability`` instead. A repeated member is accepted because ``TargetConfig``
+    stores a ``frozenset``.
     """
     permitted = sorted(models.CAPABILITY_NAMES)
     for member in value:
@@ -348,10 +306,9 @@ def _check_capabilities(value: list) -> str | None:
 def _check_callable(value: str) -> str | None:
     """Require a syntactically valid ``module:function`` import path.
 
-    Syntax only: whether the module and attribute exist is answered by
-    ``qrcheck doctor`` and, at run time, by ``TargetUnavailable`` -- a missing
-    module must not fail configuration loading, because the same document is
-    valid on a machine where the target is installed.
+    Syntax only: whether the module and attribute exist is answered by ``qrcheck doctor`` and, at
+    run time, by ``TargetUnavailable``. A missing module must not fail configuration loading,
+    because the same document is valid on a machine where the target is installed.
     """
     if value.count(":") != 1:
         return f"expected exactly one ':' as 'module:function', got {value!r}"
@@ -379,9 +336,8 @@ def _check_command(value: list) -> str | None:
 def _check_arg_template(value: str) -> str | None:
     """Require an argument template that carries a payload or names a flag.
 
-    The rule is the contract's own: a template either contains ``{}`` for the
-    value or starts with ``-`` and is passed as a flag.  The substitution itself
-    belongs to the CLI adapter.
+    The rule is the contract's own: a template either contains ``{}`` for the value or starts with
+    ``-`` and is passed as a flag. The substitution itself belongs to the CLI adapter.
     """
     if "{}" in value or value.startswith("-"):
         return None
@@ -391,12 +347,10 @@ def _check_arg_template(value: str) -> str | None:
 def _check_str_map(value: Mapping[str, str]) -> str | None:
     """Require a table of non-empty strings to non-empty strings.
 
-    Shape and nothing else: this is the whole rule for a mapping whose keys are
-    genuinely free form, and its remaining user is ``kwargs_map``, which names
-    whatever keyword arguments the configured callable takes.  A mapping whose
-    keys are a closed vocabulary gets :func:`_check_metadata_map` instead, and
-    interpreting either mapping is the shared resolution in
-    ``qrcheck.targets.base``, so no vocabulary is invented here.
+    Shape and nothing else, for a mapping whose keys are genuinely free form; its remaining user is
+    ``kwargs_map``. A mapping whose keys are a closed vocabulary gets :func:`_check_metadata_names`
+    instead, and interpreting either is the shared resolution in ``qrcheck.targets.base``, so no
+    vocabulary is invented here.
     """
     for key, mapped in value.items():
         if not isinstance(key, str) or not key.strip():
@@ -409,13 +363,11 @@ def _check_str_map(value: Mapping[str, str]) -> str | None:
 def _check_metadata_names(value: Mapping[str, str]) -> str | None:
     """Require every ``metadata_map`` key to be one of the four framework fields.
 
-    ``metadata_map`` is the one configured mapping whose keys are not free form: a
-    symbol's metadata is reported under ``version``, ``ec``, ``mask`` and ``mode``
-    and the framework has nowhere to put a field it does not know, so a mapping
-    naming anything else cannot be honoured by any adapter.  The vocabulary is
-    declared once, as ``models.METADATA_FIELD_NAMES``, and enforced here so the
-    fault is the exit-2 configuration error the contract promises rather than a
-    later adapter construction failure.
+    A symbol's metadata is reported under ``version``, ``ec``, ``mask`` and ``mode`` and the
+    framework has nowhere to put a field it does not know, so a mapping naming anything else cannot
+    be honoured by any adapter. The vocabulary is declared once as ``models.METADATA_FIELD_NAMES``
+    and enforced here, so the fault is the exit-2 configuration error the contract promises rather
+    than a later adapter construction failure.
     """
     unknown = sorted(set(value) - set(models.METADATA_FIELD_NAMES))
     if not unknown:
@@ -438,8 +390,7 @@ _check_metadata_map: Final[Callable[[Any], str | None]] = _all_of(
 def _check_image_field(value: str) -> str | None:
     """Require ``_body`` or a dotted path of non-empty, whitespace-free segments.
 
-    Shape only, like :func:`_check_str_map`: following the path through a decoded
-    response is the HTTP adapter's work.
+    Shape only: following the path through a decoded response is the HTTP adapter's work.
     """
     if value == "_body":
         return None
@@ -459,15 +410,11 @@ def _check_image_field(value: str) -> str | None:
 def _check_url(value: str) -> str | None:
     """Require a loopback ``http``/``https`` URL that carries no userinfo.
 
-    Two security controls, both enforced at configuration time:
-
-    * The host must be ``127.0.0.1``, ``localhost`` or ``::1``, so the framework
-      cannot be aimed at a remote host and stays fully offline.  ``urlsplit``
-      lower-cases the host and strips the brackets of an IPv6 literal, so
-      ``http://[::1]:8000/`` is accepted and ``http://example.com/gen`` is not.
-    * A ``user:password@`` prefix is rejected, because a credential in a
-      configuration file is outside the product's no-credential boundary; there
-      is nothing to authenticate to on loopback.
+    Two security controls, both enforced at configuration time: the host must be ``127.0.0.1``,
+    ``localhost`` or ``::1``, so the framework cannot be aimed at a remote host and stays fully
+    offline (``urlsplit`` lower-cases the host and strips an IPv6 literal's brackets); and a
+    ``user:password@`` prefix is rejected, because a credential in a configuration file is outside
+    the product's no-credential boundary and there is nothing to authenticate to on loopback.
     """
     try:
         parts = urllib.parse.urlsplit(value)
@@ -489,10 +436,9 @@ def _check_url(value: str) -> str | None:
 class _LeafError(Exception):
     """A fault at one nested leaf of ``request_template``.
 
-    ``suffix`` is appended to the key's dotted path (``.image``,
-    ``.emitted[0].name``) so the diagnostic names the leaf rather than the whole
-    table, and ``fragment`` is the message :class:`ConfigError` carries.  It is
-    the one exception :func:`validate` catches other than its own.
+    ``suffix`` is appended to the key's dotted path (``.image``, ``.emitted[0].name``) so the
+    diagnostic names the leaf rather than the whole table, and ``fragment`` is the message
+    :class:`ConfigError` carries. It is the one exception :func:`validate` catches besides its own.
     """
 
     def __init__(self, suffix: str, fragment: str) -> None:
@@ -504,36 +450,17 @@ class _LeafError(Exception):
 def request_template_object(value: Mapping[str, Any] | str) -> dict[str, Any]:
     """Return an HTTP ``request_template`` as the JSON object it describes.
 
-    A template is sent as a JSON body, so its documented shape is a JSON object
-    and the contract accepts that object written either way: as a parsed TOML
-    table, which is copied, or as a string holding the object's JSON text, which
-    is parsed.  Both forms resolve to the same plain ``dict``, so
-    ``qrcheck.config.load`` builds one record shape for the HTTP adapter and the
-    adapter never has to tell the two apart.  This is the one parse the schema's
-    validator and the loader share, so a template accepted at configuration time
-    cannot be refused when the adapter is constructed.  Keys and nested values are
-    kept exactly as written and nothing is rewritten; the returned top-level mapping
-    is a new ``dict``, while a nested table or array it holds is the same object as
-    the argument's -- a shallow copy, not a deep one -- so a caller that needs
-    private nested structure has to copy it.  The product relies on nothing mutating
-    a resolved template, which ``qrcheck.config.load`` states in its
-    ``_per_type_options`` paragraph on ``request_template``.  Interpreting a string
-    leaf as a placeholder belongs to :func:`_walk_template`, which runs over this
-    result.
-
-    Args:
-        value: The configured template, a table or a JSON-object string.
-
-    Returns:
-        A new ``dict`` holding the template's JSON object.
+    A template is sent as a JSON body, so the contract accepts it written either way: as a parsed
+    TOML table, which is copied, or as a string holding the object's JSON text, which is parsed --
+    both resolving to the same plain ``dict``, so ``load`` builds one record shape and the adapter
+    never has to tell the two apart. This is the one parse the schema's validator and the loader
+    share, so a template accepted at configuration time cannot be refused when the adapter is
+    constructed.
 
     Raises:
-        _LeafError: ``value`` is neither a table nor a string, the string is not
-            valid JSON, or the JSON text is not an object.  :func:`validate`
-            attaches it to the key's dotted path, so the exit-2 diagnostic reads
-            ``targets.<name>.request_template: is not valid JSON: ...`` and names
-            the line to fix.  No adapter error is raised or produced here: this is
-            a configuration fault, decided before any target is constructed.
+        _LeafError: ``value`` is neither a table nor a string, the string is not valid JSON, or
+            the text is not an object; :func:`validate` attaches it to the key's dotted path, so the
+            exit-2 diagnostic reads ``targets.<name>.request_template: is not valid JSON: ...``.
     """
     if isinstance(value, Mapping):
         return dict(value)
@@ -551,22 +478,13 @@ def request_template_object(value: Mapping[str, Any] | str) -> dict[str, Any]:
 def _check_request_template(value: Mapping[str, Any] | str) -> str | None:
     """Require every string leaf of the template to name a known placeholder.
 
-    The template arrives as a table or as a JSON-object string, and both are
-    resolved by :func:`request_template_object` before the walk below, so a text
-    template is held to exactly the rule a table is: an unknown placeholder inside
-    one is reported at its own leaf (``targets.<name>.request_template.payload``)
-    rather than at the whole value, and a non-finite number is refused there too.
-
-    The template is sent as JSON, so the walk accepts exactly what JSON carries:
-    tables, arrays, strings, numbers, booleans and null.  A TOML datetime is
-    rejected by name, an infinite or NaN number is rejected, and any other value
-    type is named and refused.
-
-    A field may carry a conversion or a format spec -- ``{size:d}`` and
-    ``{payload_utf8!s}`` are accepted -- because ``string.Formatter.parse``
-    reports the field name alone; only the name is checked against
-    ``models.TEMPLATE_FIELDS``.  Escaped braces (``{{``/``}}``) yield no field and
-    are literal text.
+    Both forms are resolved by :func:`request_template_object` first, so a text template is held to
+    exactly the rule a table is, an unknown placeholder inside one being reported at its own leaf
+    (``targets.<name>.request_template.payload``) rather than at the whole value. The walk accepts
+    what JSON carries -- tables, arrays, strings, numbers, booleans and null -- rejecting a TOML
+    datetime by name, an infinite or NaN number and any other type. A field may carry a conversion
+    or format spec (``{size:d}``), because ``string.Formatter.parse`` reports the field name alone,
+    and escaped braces are literal text.
     """
     _walk_template(request_template_object(value), "")
     return None
@@ -834,10 +752,9 @@ _CHECK_TABLES: Final[tuple[str, ...]] = tuple(
 def _require_table(dotted: str, value: Any) -> Mapping[str, Any]:
     """Return ``value`` as a table, or raise naming ``dotted`` and what arrived.
 
-    A TOML array-of-tables written where a table belongs (``[[targets]]``) parses
-    to a list and is reported as ``expected table, got array``.  Keys of a table
-    are always strings once TOML has parsed them, and requiring that here is what
-    lets every later walk sort them.
+    A TOML array-of-tables written where a table belongs (``[[targets]]``) parses to a list and is
+    reported as ``expected table, got array``. Keys of a table are always strings once TOML has
+    parsed them, and requiring that here is what lets every later walk sort them.
     """
     if not isinstance(value, Mapping):
         raise ConfigError(dotted, f"expected table, got {_kind(value)}")
@@ -878,8 +795,8 @@ def _reject_missing_required(
 ) -> None:
     """Raise on the first required key ``table`` does not supply, in declared order.
 
-    Declared order -- never the document's order or a set -- is what keeps the first
-    diagnostic for a given document identical on every run and machine.
+    Declared order -- never the document's order or a set -- is what keeps the first diagnostic for
+    a given document identical on every run and machine.
     """
     for key, spec in declared.items():
         if spec.is_required and key not in table:
@@ -900,12 +817,11 @@ def _validate_table(
 def _validate_target(dotted: str, table: Mapping[str, Any]) -> None:
     """Validate one ``[targets.<name>]`` table against its ``type``.
 
-    ``type`` is read first because it selects the per-type keys, so a key that
-    belongs to another adapter kind -- ``command`` on a ``library`` target -- is
-    an unknown key rather than a silently inert one.  The table's own keys are then
-    rejected when unknown, its required per-type keys are rejected when absent --
-    ``callable`` for a ``library`` target, ``command`` for a ``cli`` target, ``url``
-    for an ``http`` target -- and only then are the values present validated.
+    ``type`` is read first because it selects the per-type keys, so a key that belongs to another
+    adapter kind -- ``command`` on a ``library`` target -- is an unknown key rather than a silently
+    inert one. The table's own keys are then rejected when unknown, its required per-type keys are
+    rejected when absent -- ``callable`` for a ``library`` target, ``command`` for a ``cli`` target,
+    ``url`` for an ``http`` target -- and only then are the values present validated.
     """
     if "type" not in table:
         raise ConfigError(f"{dotted}.type", "missing required key 'type'")
@@ -922,28 +838,16 @@ def _validate_target(dotted: str, table: Mapping[str, Any]) -> None:
 def validate(raw: Mapping[str, Any]) -> None:
     """Validate a parsed ``qrcheck.toml`` document, raising :class:`ConfigError`.
 
-    The document is checked against :data:`SCHEMA` and nothing else.  A missing
-    key is not an error unless it is required: every other key has a declared
-    default, so an empty document is structurally valid right up to the cross-key
-    rule below.
-
-    The order of work is fixed so the first diagnostic is stable: unknown
-    top-level keys, then the top-level values in declared order, then
-    ``[render]``, then ``[checks]`` and its children, then ``[targets]``, and
-    last the cross-key rule.  Unknown keys are reported over ``sorted()``.
-
-    The cross-key rule is that ``default_adapter`` must name a declared target.
-    Its consequence is deliberate: a document with no ``[targets.*]`` table
-    cannot satisfy it, because the fallback ``default_adapter`` names nothing, so
-    a usable configuration declares at least one target -- ``qrcheck.toml``
-    declares both built-in ones.
+    The document is checked against :data:`SCHEMA` and nothing else; a missing key is not an error
+    unless it is required. Unknown top-level keys, the top-level values in declared order,
+    ``[render]``, ``[checks]`` and its children, ``[targets]`` and last the cross-key rule that
+    ``default_adapter`` must name a declared target are checked in that fixed order, so the first
+    diagnostic is stable.
 
     Raises:
-        ConfigError: for any key that is unknown, missing when required, of the
-            wrong type, outside its enum or range, syntactically invalid, on a
-            non-loopback URL, or naming an undeclared adapter.  Nothing else is
-            raised: no file is opened, no directory is probed and no exit code is
-            decided here.
+        ConfigError: for any key that is unknown, missing when required, of the wrong type,
+            outside its enum or range, syntactically invalid, on a non-loopback URL, or naming an
+            undeclared adapter.
     """
     document = _require_table("", raw)
 
@@ -997,14 +901,9 @@ def validate(raw: Mapping[str, Any]) -> None:
 def _materialise(default: object) -> object:
     """Return a private copy of a declared default, so no two results alias one value.
 
-    A collection default reaches this function only when the table that declares it
-    is one :func:`apply_defaults` fills, and the only such key today is
-    ``capabilities``: declared as an empty tuple and resolved to a list per target.
-    ``metadata_map`` is declared the same way -- a read-only empty mapping that
-    would resolve to a plain dict -- but it is an optional per-type key, so no table
-    filled here holds it and its default is its record's in
-    ``qrcheck.config.models``.  Scalars are immutable and are returned unchanged,
-    and no value is ever coerced to another type.
+    A collection default reaches here only from a table :func:`apply_defaults` fills, and the only
+    such key today is ``capabilities``, declared as an empty tuple and resolved to a list per
+    target. Scalars are returned unchanged and no value is coerced.
     """
     if isinstance(default, tuple):
         return list(default)
@@ -1021,8 +920,8 @@ def _table_or_empty(value: Any) -> Mapping[str, Any]:
 def _apply_group(values: Mapping[str, Any], declared: Mapping[str, KeySpec]) -> dict[str, Any]:
     """Return one table with every declared default filled in, supplied values kept.
 
-    Supplied keys keep their order and a key that has no default -- a required one
-    -- stays exactly as supplied.
+    Supplied keys keep their order and a key that has no default -- a required one -- stays exactly
+    as supplied.
     """
     completed: dict[str, Any] = dict(values)
     for key, spec in declared.items():
@@ -1034,36 +933,15 @@ def _apply_group(values: Mapping[str, Any], declared: Mapping[str, KeySpec]) -> 
 def apply_defaults(raw: Mapping[str, Any]) -> dict[str, Any]:
     """Return a new document with every declared default filled in.
 
-    The result is a fresh nested ``dict`` holding the five top-level keys, a
-    complete ``[render]`` table, complete ``[checks.performance]`` and
-    ``[checks.damage]`` tables, and, in :data:`SCHEMA`'s declared order, one
-    ``[targets.<name>]`` table per declared target carrying every key of
-    :data:`TARGET_COMMON`.  Required keys -- a target's ``type`` and its per-type
-    inputs -- are carried over as supplied and are never defaulted.
+    The result is a fresh nested ``dict`` holding the five top-level keys, a complete ``[render]``
+    table, complete ``[checks.performance]`` and ``[checks.damage]`` tables, and, in
+    :data:`SCHEMA`'s declared order, one ``[targets.<name>]`` table per declared target carrying
+    every key of :data:`TARGET_COMMON`; a target's optional ``metadata_map`` is left to its record
+    in :mod:`qrcheck.config.models` rather than defaulted twice.
 
-    A per-type *optional* default is deliberately not filled in: the contract's
-    only one, a ``library``/``cli``/``http`` target's ``metadata_map``, is owned by
-    each record of ``qrcheck.config.models``, which declares its own empty mapping,
-    and ``load.py`` passes the key on to that record only when the document supplies
-    it.  Filling it in here would declare one default in two places.
-
-    Pre-condition: :func:`validate` has already accepted ``raw``.  This function
-    therefore validates nothing, raises nothing and fills no required key: a
-    document it is handed that skipped validation resolves to whatever it holds
-    plus the defaults, which keeps it total for a caller that composes the two
-    in the wrong order rather than failing late with a different error type.
-    ``load.py`` is its only caller.
-
-    ``raw`` is never mutated and no value is coerced, so the loader alone decides
-    that ``timeout_s`` becomes a ``float`` and ``capabilities`` a ``frozenset``.
-
-    Args:
-        raw: The parsed TOML document, already accepted by :func:`validate`.
-
-    Returns:
-        A new document: every table it builds is a new ``dict``, while a value the
-        document supplies is carried over as it stands, so a supplied list or table
-        (``capabilities``, ``request_template``) is one object shared with ``raw``.
+    Pre-condition: :func:`validate` has already accepted ``raw``, so this function validates nothing
+    and raises nothing; ``raw`` is never mutated and no value is coerced, so the loader alone
+    decides that ``timeout_s`` becomes a ``float`` and ``capabilities`` a ``frozenset``.
     """
     document = _table_or_empty(raw)
     resolved: dict[str, Any] = {}

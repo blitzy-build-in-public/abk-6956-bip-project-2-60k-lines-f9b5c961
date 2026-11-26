@@ -1,28 +1,21 @@
 """The HTML page's substance: its panels, its verdicts, its images, its escapes.
 
-AAP §0.9.1 names this module as the place the writer's contract is held and AAP §0.8.4 fixes
+AAP §0.9.1 names this module as the place the writer's contract is held, and AAP §0.8.4 fixes
 what the page promises its reader: a failing case's block shows the ``request.json`` the
-evidence store wrote, and no page state may let a run that did not pass read as a pass. Every
-case renders through the product's own writers -- :func:`qrcheck.report.html.write_html` for the
-page, :meth:`qrcheck.report.evidence.EvidenceStore.record` for the artefact it is compared
-against -- so nothing here re-implements the markup it asserts on. Pinned: a run with no result
-states that no case ran, keeps its four zero tallies, replaces the results table with the
-empty-state paragraph and offers no row that does not exist; the ``request.json`` panel parses
-to the recorded artefact with its identity envelope, which wins a collision with the request
-projection; the two verdicts that already worked keep their precedence (AAP §0.3.4); and the
-page's own obligations are read back out of the document -- header identity, duration and four
-separate tallies, one row per result in ``(check_id, case_id)`` order with its status word and
-machine-readable reason, a skip listed under its reason rather than among the failures, the
-failing case's images decoded back out of their ``data:`` URIs and compared with the bytes the
-store wrote, a degradation banner only when the results themselves prove one, the errored case's
-traceback in its block, and a second write byte-identical to the first.
+evidence store wrote, and no page state may let a reader read a run that did not pass as a pass.
 
-Self-containment and escaping are held here too, because these panels are the writer's widest
-sink of target-supplied text: the page reaches no external origin and embeds every image as a
-``data:`` URI, and a case identifier, request, decoded outcome or adapter name a target could
-have supplied stays escaped text that carries its non-ASCII characters literally and still
-parses back out of the panel. Every run is built in this module and written under ``tmp_path``.
-"""
+Pinned: a run that recorded no result states that no case ran, keeps its four zero tallies and
+replaces the results table with the empty-state paragraph; the ``request.json`` panel parses to
+the recorded artefact with its identity envelope; the two verdicts that already worked stay as
+they were, so the empty-state branch cannot reorder the precedence AAP §0.3.4 fixes; and the
+page's obligations are read back out of the document it wrote -- the header's identity, duration
+and four tallies, one row per result in ``(check_id, case_id)`` order, a skip in the skip block,
+the failing case's images decoded out of their ``data:`` URIs, a banner only where the results
+prove a degradation, the errored case's traceback, and a second write byte-identical to the
+first.
+
+Self-containment and escaping are held here too: the page reaches no external origin, and
+escaped text keeps its non-ASCII characters literally and still parses back out of the panel."""
 
 import dataclasses
 import io
@@ -314,11 +307,8 @@ def _figures(document: str) -> list[tuple[str, bytes]]:
 
 
 class _DocumentParser(HTMLParser):
-    """Collect what a hostile fragment would change had the writer stopped escaping it.
-    ``convert_charrefs`` is on, so escaped text comes back as the characters it stands for: if
-    a case identifier reached the document unescaped, this parser would find a ``script`` start
-    tag instead of the text, which is the difference the assertion reads.
-    """
+    """Collect what a hostile fragment would change had the writer stopped escaping it:
+    ``convert_charrefs`` is on, so an unescaped identifier shows up as a ``script`` start tag."""
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)

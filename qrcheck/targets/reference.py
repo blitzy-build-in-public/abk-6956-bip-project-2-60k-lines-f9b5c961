@@ -1,66 +1,23 @@
 """The conforming self-check target: a segno-backed generator that must come back clean.
 
-This target exists to prove the suite is not vacuous.  ``qrcheck run --adapter reference`` must
-report zero failed, zero errored and zero skipped results, with at least one ``passed`` result for
-every one of the twenty-one checks; the contrast pair is :mod:`qrcheck.targets.defective`, which
-must fail exactly the nine checks its five injections target.  Nothing here is the product under
-test -- it is the yardstick the product is measured against, and a change that makes a check pass
-against this target by weakening the check is forbidden.
+This target proves the suite is not vacuous: ``qrcheck run --adapter reference`` must report zero
+failed, zero errored and zero skipped results with at least one ``passed`` result for every one of
+the twenty-one checks, while :mod:`qrcheck.targets.defective` must fail exactly its nine. Weakening
+a check to make it pass here is forbidden.
 
-Two segno disciplines are mandatory at the call site.  ``boost_error=False``, because the default
-spends spare capacity on a *higher* error-correction level without changing the version, so an
-oracle built with defaults would expect a different EC level than the target was asked for.  Model
-2 only, because an M-series symbol has no ``4V+17`` module count, no Version 1-40 number and a
-different format-information layout, so the module count, the version-from-dimension mapping, the
-mask/EC extraction and every capacity lookup would be wrong on exactly the short payloads the
-corpus is full of; ``segno.make()`` returns Micro QR for short content, so this module calls
-``segno.make_qr()`` and never bare ``segno.make()``.  Recorded discrepancy: the plan writes the
-call as ``segno.make_qr(..., micro=False)``, but in segno 1.6.6 ``make_qr`` has no ``micro``
-parameter -- it is Model 2 by construction and forwards ``micro=False`` to ``make`` internally --
-so the outcome the plan requires is obtained by the function choice, and passing ``micro=False``
-would be a ``TypeError``.
+Two segno disciplines are mandatory at the call site. ``boost_error=False``: segno's default spends
+spare capacity on a *higher* error-correction level without changing the version. Model 2
+only: Micro QR has no ``4V+17`` module count and a different format-information layout, so every
+capacity and version computation would be wrong -- hence ``segno.make_qr()`` and never bare
+``segno.make()``, which returns Micro QR for short content (``make_qr`` takes no ``micro`` argument
+in segno 1.6.6).
 
-``capabilities`` is a gate, not documentation: the runner resolves a check whose requirements an
-adapter does not declare to ``skipped``.  This target declares all thirteen
-:class:`~qrcheck.targets.base.Capability` members unconditionally -- not intersected with the
-configured set -- because its whole job is the zero-skip clean-run gate.
-
-``logo_overlay_path`` is applied here: the ``logo_overlay`` capability this target declares would
-otherwise be a claim with no behaviour behind it, and a target that declares a capability and
-ignores it is indistinguishable from one that honours it (AAP §0.3.4).  ``RN-LOGO`` in
-``qrcheck/checks/render.py`` owns the other half -- it generates the bitmap, writes it as
-``logo.png`` evidence and measures the area it covers -- while this target composites it, centred
-and at its own pixel size, through :func:`qrcheck.evidence.mux.composite_overlay`, the product's
-single image boundary, so no adapter opens an image with Pillow directly and every image keeps one
-pipeline and one owner.  Only a raster artefact can carry a composite, so a request that asks for
-an overlay on a vector artefact is refused with :class:`~qrcheck.targets.base.TargetUnsupported`
-before anything is encoded or rendered.
-
-``timeout_s`` is not read by this adapter: the encode is a local segno call inside this
-interpreter, with no process, socket or pipe to bound.  The framework's per-call watchdog is what
-lets the ``library`` adapter bound an in-process call, and the out-of-process adapters bound their
-own work -- ``subprocess.run(timeout=...)`` for ``cli``, ``httpx.Timeout`` for ``http``.
-
-Documented limitation, stated here so nobody mistakes it for independence: this target is
-segno-backed and segno is also the oracle, so ``SY-MATRIX-EQUIV`` against this target compares the
-oracle to itself in the encoder dimension.  What that check still proves is the render -> sample ->
-decode path end to end, and the tautology is broken by :mod:`qrcheck.targets.defective`, whose
-module matrix at pinned parameters differs from the oracle's.  The genuinely independent evidence
-is the decoder-derived set (``RT-ROUNDTRIP``, ``MD-CHARSET``, the decoder-side EC level of
-``SY-EC-MATCH``, the format-information mask of ``SY-MASK``) plus decoder-versus-decoder agreement.
-No second encoder is added: the pinned dependency set names none.
-
-Layering: ``io``, ``time``, :mod:`pathlib` and :mod:`typing` from the standard library, ``segno``,
-and at module scope :mod:`qrcheck.targets.base`, :mod:`qrcheck.corpus.capacity`,
-:mod:`qrcheck.corpus.payloads` (for :func:`~qrcheck.corpus.payloads.mode_of`, the product's single
-payload-mode classifier) and :mod:`qrcheck.config.models`.  A fifth,
-:mod:`qrcheck.evidence.mux`, is imported at the point of use by the one method that composites an
-overlay, which keeps Pillow out of the import graph of anything that merely lists or registers
-checks -- ``qrcheck.registry.check`` imports this package's port for ``Capability`` and ``qrcheck
-list`` pays for every module that graph reaches -- and no cycle is possible because ``mux`` imports
-nothing from ``qrcheck``.  No image library of its own, no decoder, no transport client and none of
-``qrcheck.checks``, ``qrcheck.report``, ``qrcheck.decode`` or ``qrcheck.registry``, which
-``tests/unit/test_layering.py`` holds by scanning source.
+All thirteen capabilities are declared unconditionally, because ``capabilities`` is a gate and
+narrowing it would let a check skip. ``logo_overlay_path`` is applied through
+:func:`qrcheck.evidence.mux.composite_overlay`, the product's single image boundary, and an overlay
+on a vector artefact is refused with ``TargetUnsupported`` before anything is encoded. Documented
+limitation: segno is also the oracle, so ``SY-MATRIX-EQUIV`` compares it with itself in the encoder
+dimension; the independent evidence is the decoder-derived set.
 """
 
 from __future__ import annotations
@@ -92,15 +49,12 @@ __all__ = [
     "ReferenceAdapter",
 ]
 
-# This adapter's defaults for the two geometry fields a request may leave unset.  They
-# only fill in a value the request did not ask for, so no check asserts a number it did
-# not request; four modules of quiet zone is the ISO/IEC 18004 minimum, and four pixels
-# per module keeps a Version 40 symbol inside a manageable bitmap.
+# This adapter's defaults for the two geometry fields a request may leave unset: four
+# modules of quiet zone, the ISO/IEC 18004 minimum, and four pixels per module.
 DEFAULT_MODULE_SIZE_PX: Final[int] = 4
 DEFAULT_QUIET_ZONE_MODULES: Final[int] = 4
 
-# ISO/IEC 18004 Model 2 bounds.  A pinned value outside these is outside the standard,
-# not merely outside this product.
+# ISO/IEC 18004 Model 2 bounds; outside these is outside the standard.
 _MIN_VERSION: Final[int] = 1
 _MAX_VERSION: Final[int] = 40
 _MIN_MASK: Final[int] = 0
@@ -113,7 +67,7 @@ _MAX_CHANNEL: Final[int] = 255
 # The two artefact kinds segno renders for us, and the segno `kind` name of each.
 _RENDER_KINDS: Final[tuple[str, ...]] = ("png", "svg")
 
-# WCAG 2.1 sRGB relative-luminance constants.  A channel is linearised piecewise -- a
+# WCAG 2.1 sRGB relative-luminance constants. A channel is linearised piecewise -- a
 # straight division below the knee, a gamma expansion above it -- and the luminance is
 # the weighted sum, which is what makes the ratio below order-independent and therefore
 # equally lawful for an inverted (light-on-dark) request.
@@ -124,16 +78,15 @@ _SRGB_SCALE: Final[float] = 1.055
 _SRGB_GAMMA: Final[float] = 2.4
 _LUMINANCE_WEIGHTS: Final[tuple[float, float, float]] = (0.2126, 0.7152, 0.0722)
 
-# The additive term of the WCAG contrast formula, so the ratio of two identical colours
-# is exactly 1.0 rather than a division by zero.
+# The additive term of the WCAG formula, so two identical colours give exactly 1.0.
 _CONTRAST_OFFSET: Final[float] = 0.05
 
 
 def _linear_channel(channel: int) -> float:
     """Return one 0..255 sRGB channel as a linearised luminance component.
 
-    ``channel`` has already been validated as an integer in 0..255 by the caller, so
-    this function raises nothing.
+    ``channel`` has already been validated as an integer in 0..255 by the caller, so this function
+    raises nothing.
     """
     value = channel / 255.0
     if value <= _SRGB_KNEE:
@@ -144,8 +97,8 @@ def _linear_channel(channel: int) -> float:
 def _relative_luminance(colour: tuple[int, int, int]) -> float:
     """Return the WCAG 2.1 relative luminance of a three-channel ``0..255`` colour.
 
-    The result is in 0.0..1.0, with black at 0.0 and white at 1.0.  Raises nothing for
-    a validated colour.
+    The result is in 0.0..1.0, black at 0.0 and white at 1.0, and raises nothing for a validated
+    colour.
     """
     red, green, blue = (_linear_channel(channel) for channel in colour)
     weight_red, weight_green, weight_blue = _LUMINANCE_WEIGHTS
@@ -158,11 +111,9 @@ def _contrast_ratio(
 ) -> float:
     """Return the WCAG 2.1 contrast ratio between two ``0..255`` colours, from 1.0 up.
 
-    The lighter colour is placed over the darker one, so the ratio is
-    order-independent: an inverted request is measured exactly as a normal one is, and
-    a colour pair is never rejected merely for being light-on-dark.  The formula is
-    ``(lighter + 0.05) / (darker + 0.05)``, which spans 1.0 (identical colours) to 21.0
-    (black on white).
+    The lighter colour is placed over the darker one, so the ratio is order-independent and an
+    inverted request is measured exactly as a normal one is: ``(lighter + 0.05) / (darker + 0.05)``,
+    spanning 1.0 (identical colours) to 21.0 (black on white).
     """
     first = _relative_luminance(foreground)
     second = _relative_luminance(background)
@@ -173,8 +124,8 @@ def _contrast_ratio(
 def _colour_hex(colour: tuple[int, int, int]) -> str:
     """Return a validated ``0..255`` colour as the ``#rrggbb`` string segno renders.
 
-    Both the PNG and the SVG writer accept this form, which is what keeps one colour
-    representation for the two artefact kinds.  Raises nothing for a validated colour.
+    Both writers accept this form, which keeps one colour representation for the two artefact kinds;
+    it raises nothing for a validated colour.
     """
     red, green, blue = colour
     return f"#{red:02x}{green:02x}{blue:02x}"
@@ -183,44 +134,23 @@ def _colour_hex(colour: tuple[int, int, int]) -> str:
 class ReferenceAdapter:
     """A conforming generator: segno with the two expectation-corrupting defaults fixed.
 
-    The adapter is stateless -- it holds the configured target name, its declared
-    capabilities and the contrast floor it enforces, and nothing that a call mutates --
-    so two identical requests produce identical bytes and identical declared metadata.
-    That determinism is what ``DT-DETERMINISTIC`` compares across two invocations and
-    what the zero-failure clean run depends on.
-
-    Every request is validated before segno sees it.  segno is a general-purpose
-    encoder, not a conformance target: it encodes an empty payload without complaint,
-    raises a bare ``ValueError`` for an illegal error level and reports nothing but
-    ``DataOverflowError`` for capacity.  The ``IV-*`` checks assert a *declared*
-    contract, so the messages this class raises are public API and are quoted verbatim
-    in ``docs/configuration.md`` and ``docs/targets.md``.
-
-    Which of the five adapter errors this class can raise: :class:`TargetRejected` for
-    a request the target's own contract refuses, :class:`TargetContractError` when
-    segno, the stream writer or an image operation fails for a reason that is not the
-    request's fault, and :class:`TargetUnsupported` from the capability gate and from a
-    request that asks for an overlay on a vector artefact.  :class:`TargetUnavailable`
-    and :class:`TargetTimeout` are deliberately never raised: there is no process to
-    spawn and this adapter runs no watchdog, so no ceiling is applied to its encode.
+    The adapter is stateless, so two identical requests produce identical bytes and identical
+    declared metadata, which is what ``DT-DETERMINISTIC`` compares. Every request is validated
+    before segno sees it, because segno is a general-purpose encoder: it encodes an empty payload
+    without complaint and reports only ``DataOverflowError`` for capacity. The ``IV-*`` checks
+    assert a *declared* contract, so these messages are public API. Of the five adapter errors this
+    class raises :class:`TargetRejected`, :class:`TargetContractError` and
+    :class:`TargetUnsupported`, and never :class:`TargetUnavailable` or :class:`TargetTimeout`.
     """
 
     def __init__(self, config: TargetConfig, *, name: str | None = None) -> None:
         """Bind the adapter to its resolved ``[targets.<name>]`` record.
 
-        Args:
-            config: The resolved target record.  Only ``contrast_floor`` is read: the
-                declared capability set is deliberately ignored (this target always
-                declares all thirteen) and ``timeout_s`` is not read, because the encode
-                here is a local segno call with no boundary to bound.
-            name: The configured target name, used by every diagnostic.  Defaults to
-                ``config.type`` so a caller that holds only the record can still
-                construct the adapter.
+        Only ``contrast_floor`` is read: all thirteen capabilities are declared, and ``timeout_s``
+        is not read because the encode has no boundary to bound.
 
         Raises:
-            TypeError: ``config.contrast_floor`` is not a real number.  The
-                configuration schema rejects that at load time, so it means the record
-                was hand-built.
+        TypeError: ``contrast_floor`` is not a real number -- the record was built by hand.
         """
         self.name: str = config.type if name is None else name
         self.capabilities: frozenset[Capability] = frozenset(Capability)
@@ -237,48 +167,27 @@ class ReferenceAdapter:
     def generate(self, request: GenerateRequest) -> GeneratedSymbol:
         """Produce one symbol for `request`, or raise exactly one adapter error.
 
-        The order is fixed: the capability gate first (it performs no I/O), then the
-        validation chain, then the artefact kind and the vector-overlay refusal, then the
-        encode and the render inside one timing window.  The four ``declared_*`` fields
-        carry what segno reports about the symbol it built; they are the target's claim
-        and are evidence only -- the checks read the version from the sampled module
-        grid, the EC level from the decoder and the format information, and the mask from
-        the format information.
-
-        Args:
-            request: The request to satisfy, built by ``build_request`` (or, for the
-                ``IV-*`` probes, its documented out-of-contract bypass).
-
-        Returns:
-            The artefact as segno rendered it, with the requested logo overlay
-            composited when the kind is raster, its declared metadata and the encode
-            duration in milliseconds.
+        The order is fixed: the capability gate first, then the validation chain, then the artefact
+        kind and the vector-overlay refusal, then the encode and the render inside one timing
+        window. The four ``declared_*`` fields are the target's claim, evidence only.
 
         Raises:
-            TargetUnsupported: The request needs a capability this adapter did not
-                declare, or it asks for a ``logo_overlay`` on a vector artefact: a
-                composite needs a pixel grid, so an ``svg`` symbol cannot carry one.
-                Both are decided before anything is encoded or rendered.  The first form
-                is unreachable for this target, which declares all thirteen, and is kept
-                as the belt-and-braces path the port requires.
-            TargetRejected: The request breaks the target's own contract -- an error
-                level outside L/M/Q/H, a version or mask outside its range, a
-                non-positive module size, a negative quiet zone, a malformed colour, an
-                empty payload, a payload that does not fit the pinned version, or a
-                contrast ratio below the declared floor.  The message is the contract.
-            TargetContractError: segno or the stream writer failed for a reason the
-                request does not explain, the rendered bytes are not the artefact the
-                request asked for, or the overlay the request names cannot be read.  All
-                three are framework-side defects rather than target verdicts.
+        TargetUnsupported: An undeclared capability, or a ``logo_overlay`` on a vector artefact.
+        TargetRejected: The request breaks the target's own contract: an error level outside
+        L/M/Q/H, a version or mask out of range, a non-positive module size, a negative quiet zone,
+        a malformed colour, an empty payload, a payload that does not fit the pinned version, or a
+        contrast ratio below the declared floor.
+        TargetContractError: segno or the writer failed for a reason the request does not explain,
+        the bytes are not the artefact requested, or the named overlay is unreadable.
         """
         require_capabilities(self, self._required_capabilities(request))
         self._validate(request)
 
         output_format = self._effective_output_format(request)
         if request.logo_overlay_path is not None and output_format != "png":
-            # A composite needs a pixel grid, which a vector artefact does not have.  The
-            # refusal precedes the encode so an unsupported request never reaches work it
-            # cannot be given (AAP §0.3.4).
+            # A composite needs a pixel grid, so the refusal precedes the encode and an unsupported
+            # request
+            # never reaches work it cannot be given.
             raise TargetUnsupported(
                 f"adapter {self.name!r} cannot composite a 'logo_overlay' onto a "
                 f"{output_format!r} artefact: only a raster symbol has a pixel grid to "
@@ -302,23 +211,17 @@ class ReferenceAdapter:
     def close(self) -> None:
         """Release what this adapter holds -- nothing -- and stay safe to call twice.
 
-        The runner closes every adapter once a run ends, including after a failure, so
-        this must never raise.  There is no process, socket or file to release: the
-        adapter is stateless and each call renders into a fresh in-memory stream.
+        The runner closes every adapter once a run ends, so this must never raise. There is no
+        process, socket or file to release: each call renders into a fresh in-memory stream.
         """
 
     def _required_capabilities(self, request: GenerateRequest) -> frozenset[Capability]:
         """Return the capabilities `request` needs, for the gate before any work.
 
-        Only the request is inspected: the artefact format, the error level and the
-        colours are always applied, and each pinned or optional field adds its own
-        capability.  Metadata capabilities are not derived from a request, because a
-        request never asks for metadata -- this target reports it unconditionally.
-
-        The gate can never refuse for this adapter, which declares all thirteen
-        members.  It is still called, because the port requires every implementation to
-        refuse an undeclared operation before any I/O, and because the day a target
-        stops declaring something is not the day to discover that the gate was missing.
+        Only the request is inspected: the format, the error level and the colours are always
+        applied, and each pinned or optional field adds its own capability. The gate can never
+        refuse for this adapter, which declares all thirteen, but it is still called: the port
+        requires every implementation to refuse an undeclared operation before any I/O.
         """
         needed: set[Capability] = {Capability.ec_level, Capability.color}
         if request.output_format in _RENDER_KINDS:
@@ -335,21 +238,17 @@ class ReferenceAdapter:
             needed.add(Capability.mask_pin)
         return frozenset(needed)
 
-    # ------------------------------------------------------------------
     # Validation: the target's declared contract, checked before segno
-    # ------------------------------------------------------------------
 
     def _validate(self, request: GenerateRequest) -> None:
-        """Run the three validation steps in their fixed order.
+        """Run the three validation steps in their fixed order: shape, payload, contrast.
 
-        The order is deliberately stable -- shape, then payload, then contrast -- so the
-        message a probe receives never depends on the order rules happen to be written
-        in.  Each ``IV-*`` probe breaks exactly one rule, so the order is unobservable
-        across the gate while still being a contract.
+        The order is deliberately stable, so the message a probe receives never depends on the order
+        rules happen to be written in.
 
         Raises:
-            TargetRejected: The request breaks one of the target's own rules; the
-                message names the offending field and is public API.
+        TargetRejected: The request breaks one of the target's own rules; the message names the
+        field and is public API.
         """
         self._validate_shape(request)
         self._check_payload(request)
@@ -358,12 +257,11 @@ class ReferenceAdapter:
     def _validate_shape(self, request: GenerateRequest) -> None:
         """Refuse a request whose parameters are outside the target's contract.
 
-        The six checks run in the order the contract lists them: error level, version
-        pin, mask pin, module size, quiet zone, colours.
+        The six checks run in the order the contract lists them: error level, version pin, mask pin,
+        module size, quiet zone and colours.
 
         Raises:
-            TargetRejected: One parameter is outside its documented range.  The message
-                names the offending field and, for a range, the accepted bounds.
+        TargetRejected: One parameter is outside its documented range.
         """
         ec_level = request.ec_level
         if ec_level not in EC_LEVELS:
@@ -393,12 +291,11 @@ class ReferenceAdapter:
     def _checked_colour(self, field: str, value: object) -> tuple[int, int, int]:
         """Return `value` as a three-channel ``0..255`` colour, or refuse it.
 
-        ``bool`` is refused even though it is an ``int`` subclass, because ``True`` as a
-        channel would silently render as 1 rather than fail.
+        ``bool`` is refused even though it is an ``int`` subclass, because ``True`` would silently
+        render as 1.
 
         Raises:
-            TargetRejected: `value` is not three integers in 0..255; the message names
-                `field`.
+        TargetRejected: `value` is not three integers in 0..255; the message names `field`.
         """
         expected = (
             f"{field} must be a 3-tuple of integers in "
@@ -420,21 +317,13 @@ class ReferenceAdapter:
     def _check_payload(self, request: GenerateRequest) -> None:
         """Refuse an empty payload, then a payload the pinned version cannot hold.
 
-        Both bounds are measured against the payload and the error level this adapter is
-        about to encode, which for this conforming target are the request's own values.
-        The capacity bound is the table row for the mode the payload's own bytes are
-        limited to -- numeric, alphanumeric or byte -- because a conforming encoder
-        spends the smallest charset that holds the payload; the byte row alone would
-        refuse a request that lawfully fits the pinned version in a smaller charset.  An
-        unpinned request needs no capacity rule here: Version 40 is the largest Model 2
-        symbol, and ``segno.DataOverflowError`` beyond it is converted to the same
-        rejection by :meth:`_encode`.  The capacity figure comes from
-        :func:`qrcheck.corpus.capacity.max_payload_bytes` and is never transcribed, and
-        the message is :meth:`_overflow_message`'s single definition of it.
+        The capacity bound is the table row for the mode the payload's own bytes are limited to,
+        because a conforming encoder spends the smallest charset that holds the payload; an unpinned
+        request needs no rule here, since ``segno.DataOverflowError`` beyond Version 40 becomes the
+        same rejection.
 
         Raises:
-            TargetRejected: The payload is empty, or it does not fit the pinned version
-                in the payload's own mode.
+        TargetRejected: The payload is empty, or it does not fit the pinned version.
         """
         payload = self._effective_payload(request)
         if not payload:
@@ -450,16 +339,11 @@ class ReferenceAdapter:
     def _check_contrast(self, request: GenerateRequest) -> None:
         """Refuse a colour pair whose contrast is below the target's declared floor.
 
-        The ratio is the WCAG 2.1 relative-luminance ratio, order-independent, so an
-        inverted (light-on-dark) request is measured exactly like a normal one and is
-        never refused merely for its polarity.  The floor is the configured
-        ``contrast_floor`` for this target, which is also the value ``RN-CONTRAST``
-        asserts at or above, so a target that declares nothing is still held to the
-        documented 7:1.
+        The ratio is the WCAG 2.1 relative-luminance ratio, order-independent, so an inverted
+        request is measured like a normal one, and the floor is the configured ``contrast_floor``.
 
         Raises:
-            TargetRejected: The measured ratio is below the floor.  The message reports
-                both values to one decimal place.
+        TargetRejected: The measured ratio is below the floor; both values are reported.
         """
         ratio = _contrast_ratio(request.foreground_rgb, request.background_rgb)
         if ratio < self._contrast_floor:
@@ -468,34 +352,29 @@ class ReferenceAdapter:
                 f"{self._contrast_floor:.1f}"
             )
 
-    # ------------------------------------------------------------------
     # Effective values: the seams a derived target changes one at a time
-    # ------------------------------------------------------------------
 
     def _effective_ec(self, request: GenerateRequest) -> str:
         """Return the error-correction level to encode at: the requested one.
 
-        This is the seam a target that quietly encodes at a lower level uses; for this
-        target the encoded level and the requested level are the same value.
+        This is the seam a target that quietly encodes at a lower level uses.
         """
         return request.ec_level
 
     def _effective_payload(self, request: GenerateRequest) -> bytes:
         """Return the bytes to encode: the requested payload, unmodified.
 
-        Every payload decision in this class is expressed through this method, so a
-        target that alters the payload alters it in one place and the capacity check in
-        :meth:`_check_payload` measures the bytes actually encoded rather than a
-        different quantity.
+        Every payload decision in this class goes through this method, so a target that alters the
+        payload alters it in one place and :meth:`_check_payload` measures the bytes actually
+        encoded.
         """
         return request.payload
 
     def _effective_quiet_zone(self, request: GenerateRequest) -> int:
         """Return the quiet zone to render, in modules: the requested one or the default.
 
-        The rendered image is sized from exactly this value, so the dimension contract
-        ``(modules + 2 * quiet_zone) * module_size`` holds for whatever a subclass
-        returns here and never drifts from the zone actually drawn.
+        The image is sized from exactly this value, so ``(modules + 2 * quiet_zone) * module_size``
+        holds for whatever a subclass returns here and never drifts from the zone drawn.
         """
         quiet_zone = request.quiet_zone_modules
         return DEFAULT_QUIET_ZONE_MODULES if quiet_zone is None else quiet_zone
@@ -508,20 +387,17 @@ class ReferenceAdapter:
     def _effective_mask(self, request: GenerateRequest) -> int | None:
         """Return the mask to encode with: the pinned one, or ``None`` to let segno choose.
 
-        A pin is honoured exactly, which is what keeps ``SY-MATRIX-EQUIV`` comparable at
-        pinned parameters and what makes an unpinned request's mask an encoder choice
-        rather than a framework expectation.
+        A pin is honoured exactly, which keeps ``SY-MATRIX-EQUIV`` comparable at pinned parameters
+        and leaves an unpinned request's mask an encoder choice.
         """
         return request.mask
 
     def _declared_ec(self, request: GenerateRequest) -> str:
         """Return the error-correction level this target *claims* it encoded at.
 
-        For this target the claim is true, so it is the requested level; it is also the
-        level segno actually used.  It is a separate seam from :meth:`_effective_ec`
-        because a target may encode at one level and declare another, and the claim is
-        evidence only -- ``SY-EC-MATCH`` reads the decoder and the format information,
-        never this value.
+        For this target the claim is true and is the level segno used. It is a seam separate from
+        :meth:`_effective_ec` because a target may encode at one level and declare another, and the
+        claim is evidence only -- ``SY-EC-MATCH`` never reads it.
         """
         return request.ec_level
 
@@ -529,9 +405,8 @@ class ReferenceAdapter:
         """Return the normalised artefact kind to render.
 
         Raises:
-            TargetRejected: The request asks for neither ``png`` nor ``svg``.  This
-                cannot happen through ``build_request``, which refuses any other value;
-                it is the belt-and-braces path for an out-of-contract request.
+        TargetRejected: The request asks for neither ``png`` nor ``svg`` -- the belt-and-braces path
+        for an out-of-contract request.
         """
         requested = request.output_format
         normalised = requested.strip().lower() if isinstance(requested, str) else ""
@@ -544,31 +419,20 @@ class ReferenceAdapter:
             f"{', '.join(_RENDER_KINDS)}"
         )
 
-    # ------------------------------------------------------------------
     # Encode and render
-    # ------------------------------------------------------------------
 
     def _encode(self, request: GenerateRequest) -> segno.QRCode:
         """Encode the request with segno, always Model 2 and never boosting the level.
 
-        ``boost_error=False`` and ``make_qr`` are the two disciplines this method exists
-        to hold: see the module docstring for why each one changes the outcome.
-
-        Args:
-            request: The validated request to encode.
-
-        Returns:
-            The segno symbol, whose ``version``, ``error``, ``mask`` and ``mode`` are the
-            target's declared metadata.
+        ``boost_error=False`` and ``make_qr`` are the two disciplines this method exists to hold,
+        and the returned symbol's ``version``, ``error``, ``mask`` and ``mode`` are the declared
+        metadata.
 
         Raises:
-            TargetRejected: segno reports that the content does not fit, or that a
-                parameter is illegal.  Every ``ValueError`` from segno in the pinned
-                release is a complaint about the content or the parameters -- an illegal
-                error level, an unsupported version, an invalid mask, an illegal mode --
-                so it is a request the target should itself have refused first.
-            TargetContractError: segno failed for a reason the request does not explain.
-                A framework-side defect, reported rather than allowed to escape.
+        TargetRejected: segno reports that the content does not fit or a parameter is illegal -- in
+        the pinned release every such complaint is a plain ``ValueError``, so it is a request the
+        target should itself have refused first.
+        TargetContractError: segno failed for a reason the request does not explain.
         """
         payload = self._effective_payload(request)
         ec_level = self._effective_ec(request)
@@ -582,11 +446,12 @@ class ReferenceAdapter:
             )
         except segno.DataOverflowError:
             raise TargetRejected(self._overflow_message(request, payload, ec_level)) from None
-        # segno 1.6.6 defines exactly one dedicated exception, ``DataOverflowError``
-        # above, and reports an illegal error level, an unsupported version, an invalid
-        # mask and an illegal mode as plain ``ValueError``.  The ``VersionError``,
-        # ``ErrorLevelError``, ``ModeError`` and ``MaskError`` the specification names do
-        # not exist in the pinned release and would each be a ``ValueError`` subclass, so
+        # segno 1.6.6 defines exactly one dedicated exception, ``DataOverflowError`` above, and
+        # reports an
+        # illegal level, version or mask as plain ``ValueError`` -- the ``VersionError``,
+        # ``ErrorLevelError``,
+        # ``ModeError`` and ``MaskError`` the specification names do not exist in the pinned
+        # release, so
         # this one clause converts them all to the rejection they are.
         except ValueError as exc:
             raise TargetRejected(str(exc)) from None
@@ -604,13 +469,10 @@ class ReferenceAdapter:
     ) -> str:
         """Return the capacity rejection message for an over-capacity `payload`.
 
-        The version named is the pinned one, or Version 40 for an unpinned request --
-        the largest Model 2 symbol, which is the bound an unpinned request actually
-        broke.  The capacity, and the unit it is reported in, follow the mode the
-        payload's own bytes are limited to: characters in numeric and alphanumeric mode,
-        bytes in byte mode.  Both numbers are computed from the tables rather than read
-        out of segno's own exception text, so the message is the same shape whichever
-        version overflowed.
+        The version named is the pinned one, or Version 40 for an unpinned request -- the bound it
+        actually broke. The capacity and its unit follow the mode the payload's own bytes are
+        limited to: characters in numeric and alphanumeric mode, bytes in byte mode. Both numbers
+        come from the tables rather than from segno's exception text.
         """
         version = _MAX_VERSION if request.version is None else request.version
         mode = mode_of(payload)
@@ -624,38 +486,26 @@ class ReferenceAdapter:
     def _render(self, code: segno.QRCode, request: GenerateRequest) -> bytes:
         """Render the symbol to the artefact kind the request asked for.
 
-        Both kinds go into an :class:`io.BytesIO`.  segno's SVG writer wraps the stream
-        in a UTF-8 codec writer, so it needs a *byte* stream and raises ``TypeError`` on
-        a text stream -- verified against segno 1.6.6 rather than assumed.  Colours are
-        passed as ``#rrggbb`` strings, the one form both writers accept.
-
-        ``logo_overlay_path`` is applied here for a ``png`` artefact: the rendered bytes
-        are decoded, the overlay is opened through
-        :func:`~qrcheck.evidence.mux.open_image`, composited centred and unscaled by
-        :func:`~qrcheck.evidence.mux.composite_overlay`, and the result is re-encoded by
-        :func:`~qrcheck.evidence.mux.encode_png`, which writes no ancillary chunk and so
-        keeps the artefact byte-identical across runs.  A vector artefact cannot carry a
-        composite, and :meth:`generate` has already refused a request that asks for one.
-
-        Args:
-            code: The encoded symbol.
-            request: The validated request, read for format, geometry and colours.
-
-        Returns:
-            The artefact bytes, non-empty.
+        Both kinds go into an :class:`io.BytesIO`: segno's SVG writer wraps the stream in a UTF-8
+        codec writer, so it needs a *byte* stream and raises ``TypeError`` on a text stream. Colours
+        are passed as ``#rrggbb``, the one form both writers accept, and a ``png`` artefact with a
+        ``logo_overlay_path`` is composited by :meth:`_composite_overlay`.
 
         Raises:
-            TargetContractError: The writer failed, produced an empty body, or the
-                overlay the request names could not be read.  All three are framework-side
-                defects rather than target verdicts.
+        TargetContractError: The writer failed, produced an empty body, or the overlay is
+        unreadable.
         """
         kind = self._effective_output_format(request)
         scale = self._effective_module_size(request)
         border = self._effective_quiet_zone(request)
-        # The colours are converted outside the guard: they come from fields the
-        # validation chain has already proved, so a failure here is a framework defect
-        # that must surface as an errored case with its traceback rather than be masked
-        # as a target verdict.  The guard covers segno's writer, which is the library.
+        # The colours are converted outside the guard: the validation chain proved them, so a
+        # failure
+        # here is a framework defect that must surface as an errored case. The guard covers segno's
+        # writer, which is the library.
+        # so a
+        # failure here is a framework defect that must surface as an errored case rather than a
+        # target
+        # verdict. The guard covers segno's writer, which is the library.
         dark = _colour_hex(request.foreground_rgb)
         light = _colour_hex(request.background_rgb)
         stream = io.BytesIO()
@@ -683,31 +533,13 @@ class ReferenceAdapter:
     def _composite_overlay(self, data: bytes, overlay_path: Path) -> bytes:
         """Composite the request's logo overlay onto the rendered symbol.
 
-        The overlay keeps the pixel size it was drawn at and lands centred on the symbol,
-        with its alpha channel honoured, so a semi-transparent bitmap blends with the
-        modules under it.  The transform and the open both belong to
-        :mod:`qrcheck.evidence.mux`, which is the one place the framework imports Pillow;
-        this method only sequences them, and it reaches that module here rather than at
-        module scope so that importing this package for anything else never loads Pillow.
-        The overlay's pixels are converted to RGBA inside the context manager, so the
-        result holds no file handle once the block ends and ``CL-ARTIFACTS`` never sees one
-        leaked.
-
-        Args:
-            data: The rendered PNG bytes to composite onto.
-            overlay_path: Path of the overlay bitmap the request names.
-
-        Returns:
-            The composited artefact, re-encoded as PNG bytes, non-empty.
+        The overlay keeps its pixel size, lands centred and has its alpha channel honoured. The
+        transform and the open both belong to :mod:`qrcheck.evidence.mux`, reached at the point of
+        use so importing this package never loads Pillow.
 
         Raises:
-            TargetContractError: The path cannot be read, does not hold an image Pillow
-                can open, or the rendered bytes no longer decode.  The message names the
-                path and the underlying failure.  Pillow's ``UnidentifiedImageError`` is
-                an ``OSError``, so one clause covers an unrecognised file, a truncated
-                one, a missing path and a path this process may not read; any other
-                exception type is a framework defect that must reach the runner as an
-                errored case rather than be reported as a target verdict.
+        TargetContractError: The path cannot be read, does not hold an image Pillow can open, or the
+        rendered bytes no longer decode.
         """
         from qrcheck.evidence.mux import composite_overlay, decode_image, encode_png, open_image
 

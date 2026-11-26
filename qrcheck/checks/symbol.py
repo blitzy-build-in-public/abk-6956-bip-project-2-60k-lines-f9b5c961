@@ -1,56 +1,25 @@
-"""The four ``SY-*`` checks: what the symbol itself says about version, level and mask.
+"""SY-* checks: what the symbol itself carries about its version, level and mask.
 
-``SY-VERSION-MIN`` reads the version off the sampled grid (``N = 4V + 17``) and compares it
-with the smallest version that holds the payload at the requested level -- an oracle minimum
-for an unpinned request, the pin when one is given.  ``SY-EC-MATCH`` requires the primary
-decoder's ``ec_level`` and the level decoded from the symbol's own format information to
-agree with each other and with the request.  ``SY-MASK`` requires the format information's
-mask to be legal, ``0..7``, and to equal a pinned mask.  ``SY-MATRIX-EQUIV`` compares the
-sampled grid module for module with the oracle at a pinned version, level and mask, and
-requires its dimension to be exactly ``4V + 17``.  AAP §0.8.1 fixes the case matrix: the
-three corpus-wide checks over all 240 records and eight synthetic pinned cases, 728 encodes
-and 728 primary decodes in total, one adapter call and one decode per case, which is the
-count :data:`EXPECTED_ENCODES` declares for the invocation-count gate.
+``SY-VERSION-MIN`` reads the version off the sampled grid, ``SY-EC-MATCH`` the level from two
+independent sources, ``SY-MASK`` the mask out of the format information, and
+``SY-MATRIX-EQUIV`` compares the whole grid with the golden encoder at pinned parameters. A
+target's ``declared_*`` metadata is evidence only and never reaches a verdict.
 
-Reasons emitted: ``sampling_failed`` when no grid or format information could be recovered (an
-absent reading is a failure, never a pass), ``value_mismatch`` when a measurement contradicts
-the request, and ``format_info_disagreement`` when the two EC readings disagree with each
-other.  The target's ``declared_version``, ``declared_ec`` and ``declared_mask`` are evidence
-only and never reach a status: a target that lies about its metadata is recorded as having
-lied rather than believed.
+Counts: 240 corpus cases for each of the first three checks, 8 synthetic pinned cases for the
+fourth -- 728 cases, 728 adapter invocations and 728 primary decodes, which is what
+:data:`EXPECTED_ENCODES` declares.
 
-The golden encoder is used strictly as an oracle (AAP §0.3.5): every call passes
-``boost_error=False``, because segno's default spends spare capacity on a higher level than
-the request names and would fail a conforming target (IM-2), and every call uses
-``segno.make_qr`` rather than ``segno.make``, which would return a Micro QR symbol with no
-``4V + 17`` dimension on exactly the short payloads a corpus is full of.  Nothing here asserts
-matrix equality, a mask or a version for an unpinned request, since mask selection is
-encoder-defined; no duration, which is ``PF-*``'s business; and no payload bytes, which
-``RT-ROUNDTRIP`` owns.
+Reasons this family emits: ``sampling_failed`` when no grid, level or mask could be read;
+``value_mismatch`` when a version, level, mask or module differs from the expectation;
+``format_info_disagreement`` when the decoder's level and the format information disagree.
+Rejection, unusable response and unsupported request are translated by
+:func:`qrcheck.checks.support.case_status_for_error`; ``TargetUnavailable`` and
+``TargetTimeout`` propagate so the runner owns the one-error-result-per-check policy.
 
-Against the ``defective`` target (AAP §0.4.2) three checks of this family fail --
-``SY-EC-MATCH``, ``SY-VERSION-MIN`` and ``SY-MATRIX-EQUIV`` -- and ``SY-MASK`` keeps passing,
-because D4 honours an explicit pin and an unpinned mask is legal whatever it is.  No assertion
-here is weakened, skipped, retried or relaxed to accommodate that target.
-
-Imports: :mod:`qrcheck.checks.support`, the registry and result-model vocabulary, the
-decoded-evidence types, and from ``qrcheck.targets`` only :mod:`qrcheck.targets.base` -- no
-concrete adapter, decoder, image library, transport client or configuration reader, which
-``tests/unit/test_layering.py`` holds for every module under ``qrcheck/checks/``.  The only
-third-party import is ``segno``: grids are compared and hashed through
-:func:`~qrcheck.decode.matrix_sha256`, so no name from the array stack appears here.
-
-Determinism: nothing reads a clock, a random source, ``hash()``, ``id()`` or the filesystem;
-corpus cases arrive in record-``id`` order and the synthetic cases are sorted by ``case_id``
-before they are yielded, so the eight matrix cases are the same eight on every machine.
-
-Evidence goes through :func:`qrcheck.checks.support.record_evidence` only, with the artefact's
-bytes so a failing case keeps ``symbol.png``; the matrix set adds the oracle digest and the
-expected module count to ``request.json`` through ``request_extra``, and ``decoded.json``
-receives the whole :meth:`qrcheck.decode.DecodeResult.as_dict` projection plus this family's
-measurements -- ``ec_level_decoder``, ``ec_level_format`` and ``request_ec_level`` side by
-side, the evidence AAP §0.4.5 requires for the ``wrong_ec_level`` defect.  No file is written
-here.
+Layering: :mod:`qrcheck.checks.support`, the registry and result-model vocabulary, the
+decoded-evidence package, the module-count arithmetic and :mod:`qrcheck.targets.base` only.
+Nothing here reads a random source, ``hash()``, ``id()`` or the filesystem, or asserts a
+duration; cases are yielded in record-``id`` order and the matrix set by ``case_id``.
 """
 
 from __future__ import annotations
@@ -86,10 +55,9 @@ __all__ = [
     "SY_VERSION_MIN",
 ]
 
-# The four stable identifiers, spelled once here and derived from nowhere.  The registry
-# owns the literal tuple of all twenty-one (``CHECK_IDS``) and validates these against it,
-# so a typo fails the import rather than producing a plausible-looking report; these names
-# exist so the decorator, the case identifiers and EXPECTED_ENCODES cannot disagree.
+# The four stable identifiers, spelled once and derived from nowhere: the registry owns the
+# literal tuple of all twenty-one (``CHECK_IDS``) and validates these, so a typo fails the import
+# and the decorator, the case identifiers and EXPECTED_ENCODES cannot disagree.
 _VERSION_MIN_ID: Final[str] = "SY-VERSION-MIN"
 _EC_MATCH_ID: Final[str] = "SY-EC-MATCH"
 _MASK_ID: Final[str] = "SY-MASK"
@@ -100,10 +68,8 @@ _MATRIX_EQUIV_ID: Final[str] = "SY-MATRIX-EQUIV"
 _FAMILY: Final[str] = "symbol"
 
 # Case-identifier prefixes.  AAP §0.3.4 fixes both: a corpus-driven case is named after its
-# record, a constructed one carries the name this family gave it.  The corpus form is
-# repeated here because a case's callable is not handed its own identifier, and the two
-# spellings must agree or one case would be one name in the registry and another in a
-# result.
+# record, a constructed one after the name its family gave it.  The corpus form is repeated here
+# because a case's callable is not handed its own identifier.
 _CORPUS_PREFIX: Final[str] = "corpus:"
 _SYNTHETIC_PREFIX: Final[str] = "synthetic:"
 
@@ -113,24 +79,22 @@ _SYNTHETIC_PREFIX: Final[str] = "synthetic:"
 _MASK_MINIMUM: Final[int] = 0
 _MASK_MAXIMUM: Final[int] = 7
 
-# The eight synthetic matrix cases: four versions × two payloads, each paired with one of
-# two distinct legal masks.  Pinning the version, the error level and the mask is what makes
-# module-by-module equality a legitimate assertion (AAP §0.3.5); nothing else in the product
-# compares matrices.  The payloads are two to five bytes so they fit Version 1 at every
-# error level -- at EC H, Version 1 holds seven bytes in byte mode and ten characters in
-# alphanumeric mode -- and so they are shorter than the 64-byte window of the defective
-# target's truncation injection, which therefore can never reach them.
+# The eight synthetic matrix cases: four versions x two payloads, each paired with one of two
+# distinct legal masks.  Pinning the version, the error level and the mask is what makes
+# module-by-module equality legitimate (AAP §0.3.5); nothing else in the product compares matrices.
+# The payloads are two to five bytes so they fit Version 1 at every error level -- at EC H,
+# Version 1 holds seven bytes in byte mode and ten characters in alphanumeric mode -- and stay
+# clear of the 64-byte window of the defective target's truncation injection.
 _MATRIX_VERSIONS: Final[tuple[int, ...]] = (1, 2, 7, 10)
 _MATRIX_PAYLOADS: Final[tuple[tuple[str, bytes], ...]] = (("a", b"QR7"), ("b", b"1A2-B"))
 _MATRIX_MASKS: Final[tuple[int, int]] = (2, 5)
 
 
 class _MatrixCase(NamedTuple):
-    """One pinned matrix case: the pins it sends, the payload it sends them with, and its name.
+    """One pinned matrix case: the pins it sends, its payload and its name.
 
-    A record rather than a loop body so the case count, the identifiers and the expectations
-    are all read off one table: :data:`_MATRIX_CASES` is built from the three tables above,
-    and :data:`EXPECTED_ENCODES` counts it rather than restating ``8``.
+    A record rather than a loop body, so the case count, the identifiers and the expectations are
+    all read off one table.
     """
 
     version: int
@@ -151,20 +115,17 @@ _MATRIX_CASES: Final[tuple[_MatrixCase, ...]] = tuple(
 )
 
 # The corpus's record total: the fixed workload AAP §0.8.1 defines for every corpus-driven
-# check, and one of the two numbers EXPECTED_ENCODES is made of.  ``CorpusError``-guarded
-# ``qrcheck.corpus.builder.TOTAL_RECORDS`` is the owner of this count, and this is the same
-# 240 rather than a second definition of it: it is declared here as a case count because
-# importing the builder would reach the numpy-bearing payload generators, and a check module
-# has no business pulling the payload corpus into the import graph of ``qrcheck list``.  The
-# integration gate compares the executed case count against EXPECTED_ENCODES, so a corpus
-# that changed size would fail there rather than silently here.
+# check, and one of the two numbers EXPECTED_ENCODES is made of.
+# :data:`qrcheck.corpus.builder.TOTAL_RECORDS` owns this count, and this is the same 240 rather
+# than a second definition: importing
+# the builder would pull its numpy-bearing payload generators into ``qrcheck list``.  The
+# integration gate compares the executed case count against EXPECTED_ENCODES.
 _CORPUS_RECORDS: Final[int] = 240
 
 # The adapter-invocation count each check is expected to make in one full run, read by the
-# invocation-count gate through a counting stub: a retry registers as one more than this and
-# fails the gate, which is how "retry until green" cannot be introduced quietly (AAP §0.4.3,
-# §0.5.6).  The corpus-driven counts are that record total and the matrix count is the size of
-# the case table above, so neither number is typed twice.
+# invocation-count gate through a counting stub: a retry registers as one more and fails it (AAP
+# §0.4.3, §0.5.6).  The corpus counts are that record total, the matrix count the case table's
+# size, so neither number is typed twice.
 EXPECTED_ENCODES: Final[Mapping[str, int]] = MappingProxyType(
     {
         _EC_MATCH_ID: _CORPUS_RECORDS,
@@ -175,10 +136,9 @@ EXPECTED_ENCODES: Final[Mapping[str, int]] = MappingProxyType(
 )
 
 
-# A judge reads one decoded symbol and returns the reason the case failed for (``None`` for
-# a pass) together with the measurements the family adds to the decoded evidence.  Kept
-# separate from result construction so each assertion reads as the assertion it is, and so
-# no judge can decide a duration, an evidence path or a status the model does not own.
+# A judge reads one decoded symbol and returns the failure reason (``None`` for a pass) with the
+# measurements the family adds to the evidence -- kept apart from result construction so no judge
+# decides a duration, an evidence path or a status the model does not own.
 _Judge = Callable[[DecodeResult, GenerateRequest], tuple[Reason | None, dict[str, Any]]]
 
 # What a case does with the context and the argument its `cases` generator bound to it.
@@ -194,31 +154,14 @@ def _oracle(
 ) -> segno.QRCode:
     """Return the golden-encoder symbol an expectation is read from.
 
-    The oracle is independent of the target under test and is never used to produce an
-    artefact: it decides what a conforming target should have emitted.  ``boost_error`` is
-    always ``False`` -- see the module docstring for why a boosted level would fail a
-    conforming target -- and the call is always ``make_qr``, which is Model 2 by
-    construction, so no Micro QR symbol can ever reach a geometry assertion.
-
-    ``version`` and ``mask`` default to ``None``, which asks segno to choose them: that is
-    what an unpinned request's expectation is made of.  When a case pins them, the pin is
-    passed through, so the oracle matrix describes the symbol the request asked for.
-
-    Args:
-        payload: The payload bytes the request carried.
-        ec_level: The requested error-correction level.
-        version: The pinned version, or ``None`` to let segno choose the smallest fitting one.
-        mask: The pinned mask, or ``None`` to let segno choose one.
-
-    Returns:
-        The oracle symbol, whose ``version``, ``error``, ``mask`` and ``matrix`` the
-        expectations are read from.
+    The oracle decides what a conforming target should have emitted and never produces an artefact:
+    ``boost_error`` is always ``False`` (a boosted level would fail a conforming target) and the
+    call is always ``make_qr``, Model 2 by construction, so no Micro QR symbol can reach a geometry
+    assertion. ``version`` and ``mask`` are the case's pins, or ``None`` for segno's own choice.
 
     Raises:
-        ValueError: segno refuses the payload or a parameter -- a payload that does not fit
-            the pinned version at the level, for instance.  That is a case-definition defect
-            in this module rather than a target's fault, so the runner turns it into an
-            ``error`` result carrying the traceback instead of a plausible-looking verdict.
+        ValueError: segno refuses the payload or a parameter -- a case-definition defect here rather
+            than a target's fault.
     """
     return segno.make_qr(
         payload,
@@ -232,17 +175,8 @@ def _oracle(
 def _oracle_version(payload: bytes, ec_level: str) -> int:
     """Return the smallest Model 2 version that holds `payload` at `ec_level`.
 
-    The expectation ``SY-VERSION-MIN`` is built on: segno's own ascending version search,
-    which is the same arithmetic the corpus's capacity tables carry and which
-    ``tests/unit/test_capacity_oracle.py`` holds equal to ``segno.consts`` for Versions
-    1-40.
-
-    Args:
-        payload: The payload bytes the request carried.
-        ec_level: The requested error-correction level.
-
-    Returns:
-        The version in 1-40.
+    segno's ascending version search, which ``tests/unit/test_capacity_oracle.py`` holds equal to
+    ``segno.consts`` for Versions 1-40.
 
     Raises:
         ValueError: Exactly as :func:`_oracle`.
@@ -253,15 +187,8 @@ def _oracle_version(payload: bytes, ec_level: str) -> int:
 def _oracle_grid(symbol: segno.QRCode) -> tuple[tuple[bool, ...], ...]:
     """Return the oracle symbol's module matrix as immutable rows of booleans.
 
-    The same shape :func:`_grid` gives a sampled matrix, so the two grids compare module for
-    module in plain Python; a dark module is ``True``, matching
-    :data:`qrcheck.decode.base.Matrix`.
-
-    Args:
-        symbol: The oracle symbol.
-
-    Returns:
-        ``N`` rows of ``N`` booleans, ``N = 4V + 17``.
+    The same shape :func:`_grid` gives a sampled grid -- ``N`` rows of ``N`` booleans,
+    ``N = 4V + 17``, a dark module being ``True`` -- so the two compare in plain Python.
     """
     return _grid(symbol.matrix)
 
@@ -269,17 +196,9 @@ def _oracle_grid(symbol: segno.QRCode) -> tuple[tuple[bool, ...], ...]:
 def _grid(matrix: Matrix | Sequence[Sequence[int]]) -> tuple[tuple[bool, ...], ...]:
     """Return `matrix` as immutable rows of booleans.
 
-    Accepts either a sampled grid (a numpy array of ``bool_``) or an oracle matrix (a tuple
-    of ``bytearray`` rows of ``0``/``1``), and normalises both to the same plain-Python
-    shape: truthiness becomes ``True``, so a decoder-independent comparison never depends on
-    which integer a producer used for "dark".  Normalising here instead of importing numpy
-    keeps this module's import graph free of the image stack.
-
-    Args:
-        matrix: The grid to normalise, in either producer's representation.
-
-    Returns:
-        The rows of the grid as tuples of booleans.
+    Accepts a sampled grid (numpy ``bool_``) or an oracle matrix (rows of ``0``/``1``) and
+    normalises both by truthiness, so the comparison never depends on which integer a producer
+    used for "dark"; normalising here also keeps the array stack out of this module.
     """
     return tuple(tuple(bool(module) for module in row) for row in matrix)
 
@@ -290,16 +209,8 @@ def _difference(
 ) -> tuple[int, tuple[int, int] | None]:
     """Return how many modules differ and where the first difference is.
 
-    Both grids must have the same dimensions; every caller checks that first, because a
-    difference in dimension is a different verdict from a difference in a module.
-
-    Args:
-        sampled: The sampled grid, from :func:`_grid`.
-        oracle: The oracle grid, from :func:`_oracle_grid`.
-
-    Returns:
-        The number of differing modules -- ``0`` when the grids are equal -- and the first
-        differing ``(row, column)`` coordinate, or ``None`` when nothing differs.
+    Both grids must have the same dimensions; every caller checks that first, because a difference
+    in dimension is a different verdict from a difference in a module.
     """
     differing = 0
     first: tuple[int, int] | None = None
@@ -317,16 +228,8 @@ def _difference(
 def _bound(handler: _CaseHandler, argument: Any) -> Callable[[RunContext], CaseResult]:
     """Return the case callable that runs `handler` with `argument` bound to it.
 
-    A case's callable receives only the run's context, so a family closes over what the case
-    is about -- a corpus record, or one row of the matrix case table -- through this one
-    helper rather than through a nested closure per check.
-
-    Args:
-        handler: The function that produces the case's result.
-        argument: The case's own subject: a corpus record or a :class:`_MatrixCase`.
-
-    Returns:
-        The callable a :class:`~qrcheck.registry.check.Case` holds.
+    A case's callable receives only the run's context, so a family closes over its subject here
+    rather than through a nested closure per check.
     """
 
     def execute(ctx: RunContext) -> CaseResult:
@@ -337,36 +240,21 @@ def _bound(handler: _CaseHandler, argument: Any) -> Callable[[RunContext], CaseR
 
 
 def _elapsed_ms(started: float) -> float:
-    """Return milliseconds elapsed since `started`, rounded to the report's precision.
+    """Return milliseconds elapsed since `started`, to three decimals.
 
-    Recorded on every result and asserted by nothing in this module: AAP §0.5.5 excludes
-    durations from every correctness assertion, and ``PF-*`` alone reads time.
-
-    Args:
-        started: The ``time.perf_counter()`` reading taken before the case began.
-
-    Returns:
-        A non-negative duration in milliseconds, to the millisecond.
+    Recorded on every result and asserted by nothing here: AAP §0.5.5 excludes durations from
+    every correctness assertion, and ``PF-*`` alone reads time.
     """
     return round((time.perf_counter() - started) * 1000.0, 3)
 
 
 def _evidence(decoded: DecodeResult, **measurements: Any) -> dict[str, Any]:
-    """Return the decoded-evidence mapping this family records: the projection plus findings.
+    """Return the decoded-evidence mapping: the projection plus this check's findings.
 
-    ``decoded.json`` receives the result's own ``decoded`` mapping verbatim, so every entry
-    here has to be JSON-safe; :meth:`qrcheck.decode.DecodeResult.as_dict` guarantees that
-    for the projection, and the measurements added on top are scalars, lists or ``None``.
-    The projection always carries ``per_decoder``, ``polarity_applied``, ``agreement``,
-    ``ec_level_decoder``, ``ec_level_format``, ``version``, ``mask`` and ``matrix_sha256``,
-    which is the evidence table AAP §0.4.5 requires.
-
-    Args:
-        decoded: The decoded evidence for the case.
-        **measurements: The check's own findings, added beside the projection.
-
-    Returns:
-        A plain, JSON-serialisable mapping.
+    ``decoded.json`` receives it verbatim, so every entry is JSON-safe: the projection carries
+    ``per_decoder``, ``polarity_applied``, ``agreement``, ``ec_level_decoder``, ``ec_level_format``,
+    ``version``, ``mask`` and ``matrix_sha256`` -- the evidence table AAP §0.4.5 requires -- and
+    the measurements on top are scalars, lists or ``None``.
     """
     evidence = decoded.as_dict()
     evidence.update(measurements)
@@ -383,38 +271,26 @@ def _run_case(
     judge: _Judge,
     request_extra: Mapping[str, Any] | None = None,
 ) -> CaseResult:
-    """Generate one symbol, decode it, judge it and persist the evidence if it did not pass.
+    """Generate one symbol, decode it, judge it and persist evidence if it did not pass.
 
-    The single path every check in this module takes, so "one invocation, one decode" is a
-    property of one function rather than a convention four checks are trusted to follow.
-
-    Three adapter errors are per-case outcomes and are translated by
-    :func:`qrcheck.checks.support.case_status_for_error`: a declared rejection, an unusable
-    response and an unsupported request each become the failed or skipped result the
-    translation table prescribes.  :class:`~qrcheck.targets.base.TargetUnavailable` and
-    :class:`~qrcheck.targets.base.TargetTimeout` are deliberately **not** caught: the runner
-    owns the one-error-result-per-check policy on target loss, and it can only apply it if it
-    sees the error, so converting them here would let a dead target look like a defective
-    one.
+    The single path every check here takes, so "one invocation, one decode" is a property of one
+    function. A declared rejection, an unusable response and an unsupported request are translated
+    by :func:`qrcheck.checks.support.case_status_for_error`; ``TargetUnavailable`` and
+    ``TargetTimeout`` are deliberately not caught, because the runner owns the one-error-result-per-
+    check policy.
 
     Args:
         ctx: The run's context.
-        check_id: The check's stable identifier.
-        case_id: The case's stable identifier.
+        check_id, case_id: The check's and the case's stable identifiers.
         request: The request to send, built through :func:`qrcheck.checks.support.build`.
         expected: What the case asserted, recorded beside the outcome.
         judge: The assertion, returning a failure reason or ``None`` plus its measurements.
-        request_extra: Further identity-adjacent facts to record in ``request.json``, such as
-            the oracle digest a matrix comparison used.
-
-    Returns:
-        The case's result, carrying its evidence directory when anything was persisted.
+        request_extra: Further facts for ``request.json``, such as the oracle digest used.
 
     Raises:
         TargetUnavailable: The target could not be reached at all; propagates unchanged.
         TargetTimeout: No response within the configured timeout; propagates unchanged.
-        ValueError: A field of the result is outside its documented range, which means a case
-            definition in this module is wrong.
+        ValueError: A field of the result is outside its documented range.
     """
     started = time.perf_counter()
     try:
@@ -462,9 +338,8 @@ def _run_case(
 def _corpus_case_id(record: CorpusRecord) -> str:
     """Return the ``corpus:<record-id>`` identifier AAP §0.3.4 fixes for this case.
 
-    The registry's case carries the same name, built by
-    :func:`qrcheck.checks.support.corpus_cases`; a case's callable is not handed its own
-    identifier, so the one spelling is repeated here rather than guessed at.
+    A case's callable is not handed its own identifier, so the one spelling the registry also
+    uses is repeated here rather than guessed at.
     """
     return f"{_CORPUS_PREFIX}{record.id}"
 
@@ -472,24 +347,10 @@ def _corpus_case_id(record: CorpusRecord) -> str:
 def _expected_version(request: GenerateRequest, oracle_version: int) -> int:
     """Return the version the symbol is required to have.
 
-    Two cases, stated explicitly because the difference is the whole point of the check:
-
-    * an **unpinned** request is held to the oracle's smallest fitting version -- the
-      assertion that the generator chose the smallest symbol rather than a larger legal
-      one;
-    * a **pinned** request is held to the pin, because a target that declares the
-      ``version_pin`` capability is expected to honour it.  The oracle minimum is then
-      irrelevant: a generator legitimately encodes a short payload into a pinned larger
-      version by padding it.
-
-    The 240 corpus cases carry no pin, so the oracle minimum governs all of them.
-
-    Args:
-        request: The request about to be sent.
-        oracle_version: The smallest version that holds the payload at the requested level.
-
-    Returns:
-        The version the sampled grid must show.
+    An **unpinned** request is held to the oracle's smallest fitting version -- the assertion that
+    the generator chose the smallest symbol rather than a larger legal one. A **pinned** request is
+    held to the pin, because a target declaring ``version_pin`` is expected to honour it. The 240
+    corpus cases carry no pin, so the oracle minimum governs all of them.
     """
     return oracle_version if request.version is None else request.version
 
@@ -504,17 +365,10 @@ def _expected_version(request: GenerateRequest, oracle_version: int) -> int:
 def SY_VERSION_MIN(ctx: RunContext) -> Iterator[Case]:
     """Yield one case per corpus record: the symbol is the smallest version that fits.
 
-    ``ec_level`` is required because the smallest fitting version depends on the level: a
-    payload that fits Version 5 at EC L needs Version 6 at EC M, so a target that cannot be
-    asked for a level cannot be held to a version.  The version itself is never taken from
-    the target or from a decoder -- no pinned decoder reports one -- but from the sampled
-    grid's dimension, which is the product's only version source (AAP IM-1).
-
-    Args:
-        ctx: The run's context; its corpus is already filtered and sorted by the runner.
-
-    Returns:
-        The cases, ascending by record ``id``.
+    ``ec_level`` is required because the smallest fitting version depends on the level: a payload
+    that fits Version 5 at EC L needs Version 6 at EC M. The version is never taken from the
+    target or a decoder -- none reports one -- but from the sampled grid's dimension, the
+    product's only version source (AAP IM-1). Cases are ascending by record ``id``.
     """
     return support.corpus_cases(
         ctx,
@@ -527,18 +381,13 @@ def SY_VERSION_MIN(ctx: RunContext) -> Iterator[Case]:
 def _version_min_case(ctx: RunContext, record: CorpusRecord) -> CaseResult:
     """Assert that one corpus record's symbol is the smallest version that fits it.
 
-    Args:
-        ctx: The run's context.
-        record: The corpus record this case is about.
-
-    Returns:
-        The case's result: ``value_mismatch`` when the sampled version differs from the
-        expectation, ``sampling_failed`` when no grid could be recovered, a pass otherwise.
+    Returns ``value_mismatch`` when the sampled version differs from the expectation,
+    ``sampling_failed`` when no grid could be recovered, and a pass otherwise.
 
     Raises:
         TargetUnavailable, TargetTimeout: Exactly as :func:`_run_case`.
-        ValueError: The payload does not fit even Version 40 at the run's level, which would
-            be a corpus defect rather than a target's.
+        ValueError: The payload does not fit even Version 40 at the run's level, which would be a
+            corpus defect rather than a target's.
     """
     case_id = _corpus_case_id(record)
     payload = record.payload_bytes
@@ -588,16 +437,10 @@ def _version_min_case(ctx: RunContext, record: CorpusRecord) -> CaseResult:
 def SY_EC_MATCH(ctx: RunContext) -> Iterator[Case]:
     """Yield one case per corpus record: the symbol carries the level that was requested.
 
-    Both independent readings are asserted.  The primary decoder reports the level from the
-    format information it read, and the framework reads the same 15-bit field itself
-    (:mod:`qrcheck.decode.format_info`); a symbol whose level is wrong shows it in both, and
-    a symbol the decoder mis-reports shows the disagreement rather than a wrong verdict.
-
-    Args:
-        ctx: The run's context; its corpus is already filtered and sorted by the runner.
-
-    Returns:
-        The cases, ascending by record ``id``.
+    Both independent readings are asserted: the primary decoder's ``ec_level`` metadata and the
+    15-bit format-information field the framework reads itself
+    (:mod:`qrcheck.decode.format_info`). A symbol whose level is wrong shows it in both; one the
+    decoder mis-reports shows the disagreement instead of a wrong verdict.
     """
     return support.corpus_cases(
         ctx,
@@ -610,20 +453,10 @@ def SY_EC_MATCH(ctx: RunContext) -> Iterator[Case]:
 def _ec_match_case(ctx: RunContext, record: CorpusRecord) -> CaseResult:
     """Assert the error-correction level of one corpus record's symbol.
 
-    The reason order is the one AAP §0.4.5 needs: the two sources are compared **with each
-    other** first, so a symbol whose decoder and format information disagree is reported as
-    ``format_info_disagreement`` rather than as a mismatch against the request, and only
-    then is the agreed level compared with the request.  A missing reading is a failure on
-    its own (``sampling_failed``): an absent source can never be read as agreement.
-
-    Args:
-        ctx: The run's context.
-        record: The corpus record this case is about.
-
-    Returns:
-        The case's result: ``format_info_disagreement`` when the two readings differ,
-        ``value_mismatch`` when they agree on a level other than the requested one,
-        ``sampling_failed`` when either reading is absent, a pass otherwise.
+    The two sources are compared **with each other** first, so a disagreement is
+    ``format_info_disagreement`` rather than a mismatch against the request (AAP §0.4.5's reason
+    order), and only then is the agreed level compared with the request. A missing reading is a
+    failure of its own: an absent source can never be read as agreement.
 
     Raises:
         TargetUnavailable, TargetTimeout: Exactly as :func:`_run_case`.
@@ -667,21 +500,10 @@ def _ec_match_case(ctx: RunContext, record: CorpusRecord) -> CaseResult:
 def SY_MASK(ctx: RunContext) -> Iterator[Case]:
     """Yield one case per corpus record: the mask in the symbol is a legal mask.
 
-    No decoder in the pinned set reports a mask, so it is read from the format information
-    alone.  Mask *selection* is encoder-defined (AAP §0.3.5), so an unpinned request is held
-    only to the legal range ``0..7`` -- asserting one value would fail a conforming target
-    that scored its eight patterns differently.  A request that pins a mask is held to the
-    pin, because a target declaring ``mask_pin`` is expected to honour it.  The 240 corpus
-    cases pin nothing, so that branch is a guard rather than a path this case set takes: it
-    keeps the pin rule in the same expression as the range rule, so a future case that pins a
-    mask cannot bypass it.  ``SY-MATRIX-EQUIV`` is where a pin is actually observed on a
-    symbol.
-
-    Args:
-        ctx: The run's context; its corpus is already filtered and sorted by the runner.
-
-    Returns:
-        The cases, ascending by record ``id``.
+    No decoder in the pinned set reports a mask, so it is read from the format information alone.
+    Mask *selection* is encoder-defined (AAP §0.3.5), so an unpinned request is held only to the
+    legal range ``0..7``; a request that pins a mask is held to the pin. The 240 corpus cases pin
+    nothing, so the pin branch is a guard, and ``SY-MATRIX-EQUIV`` is where a pin is observed.
     """
     return support.corpus_cases(
         ctx,
@@ -694,17 +516,9 @@ def SY_MASK(ctx: RunContext) -> Iterator[Case]:
 def _mask_case(ctx: RunContext, record: CorpusRecord) -> CaseResult:
     """Assert the mask pattern of one corpus record's symbol.
 
-    The mask is only ever the format information's reading: it comes from the framework's
-    own sampling of the symbol, never from a decoder and never from the target's metadata.
-
-    Args:
-        ctx: The run's context.
-        record: The corpus record this case is about.
-
-    Returns:
-        The case's result: ``sampling_failed`` when the format information could not be
-        read, ``value_mismatch`` when the mask is outside ``0..7`` or contradicts a pin, a
-        pass otherwise.
+    The mask is only ever the format information's reading: the framework's own sampling, never a
+    decoder and never the target's metadata. Reasons: ``sampling_failed`` when it could not be read,
+    ``value_mismatch`` when the mask is outside ``0..7`` or contradicts a pin, a pass otherwise.
 
     Raises:
         TargetUnavailable, TargetTimeout: Exactly as :func:`_run_case`.
@@ -753,18 +567,10 @@ def _mask_case(ctx: RunContext, record: CorpusRecord) -> CaseResult:
 def SY_MATRIX_EQUIV(ctx: RunContext) -> Iterator[Case]:
     """Yield the eight synthetic cases that compare a whole module matrix with the oracle.
 
-    This is the product's **only** matrix comparison, and it is legitimate only because every
-    request pins the version, the error level and the mask: at pinned parameters the standard
-    fixes the symbol completely, whereas at unpinned ones the mask is the encoder's choice and
-    two conforming encoders may legitimately differ (AAP §0.3.5).  A target that declares
-    ``version_pin`` and ``mask_pin`` cannot honour either without emitting exactly the
-    matrix the oracle emits.
-
-    Args:
-        ctx: The run's context; only its error level and seed are read when a case runs.
-
-    Returns:
-        The eight cases, ascending by ``case_id``.
+    The product's **only** matrix comparison, legitimate only because every request pins the
+    version, the error level and the mask: at pinned parameters the standard fixes the symbol
+    completely, whereas an unpinned mask is the encoder's choice and two conforming encoders may
+    legitimately differ (AAP §0.3.5). Ascending by ``case_id``.
     """
     cases = [
         support.synthetic_case(_MATRIX_EQUIV_ID, spec.case_id, _bound(_matrix_case, spec))
@@ -776,26 +582,15 @@ def SY_MATRIX_EQUIV(ctx: RunContext) -> Iterator[Case]:
 def _matrix_case(ctx: RunContext, spec: _MatrixCase) -> CaseResult:
     """Compare one pinned symbol's sampled grid with the oracle's matrix, module by module.
 
-    Three assertions, in order, because each answers a different question and a reader of the
-    evidence must be able to tell them apart: the sampled grid's dimension is exactly
-    ``4V + 17``; ``version_from_dimension`` reads the pinned version back off that dimension;
-    and every one of the ``N x N`` modules equals the oracle's.  The first differing
-    ``(row, column)`` and the number of differing modules are recorded, so a reader sees the
-    defect rather than being told a matrix inequality exists.
-
-    Args:
-        ctx: The run's context; the request carries the run's error level with the pins.
-        spec: The pinned case this case is about.
-
-    Returns:
-        The case's result: ``sampling_failed`` when no grid could be recovered,
-        ``value_mismatch`` when a dimension, the version read off it, or a module differs, a
-        pass otherwise.
+    Three assertions, in order: the grid's dimension is exactly ``4V + 17``;
+    ``version_from_dimension`` reads the pinned version back off it; and every one of the ``N x N``
+    modules equals the oracle's. The first differing ``(row, column)`` and the differing module
+    count are recorded. Reasons: ``sampling_failed`` when no grid could be recovered,
+    ``value_mismatch`` otherwise.
 
     Raises:
         TargetUnavailable, TargetTimeout: Exactly as :func:`_run_case`.
-        ValueError: The payload does not fit the pinned version at the run's level, which
-            would be a case-definition defect in this module.
+        ValueError: The payload does not fit the pinned version at the run's level.
     """
     payload = spec.payload
     request = support.build(payload, ctx.ec_level, version=spec.version, mask=spec.mask)

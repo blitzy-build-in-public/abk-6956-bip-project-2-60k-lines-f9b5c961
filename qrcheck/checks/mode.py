@@ -1,63 +1,36 @@
 """Mode-family checks: ``MD-MODE-OPTIMAL`` and ``MD-CHARSET``.
 
-AAP §0.8.1's check-family table and its case-matrix rows of 60 and 74 cases, and §0.8.2's
-``MD-CHARSET`` coverage mapping.
+Plan item served: the check-family table of AAP §0.8.1 (``checks/mode.py`` owns ``MD-MODE-OPTIMAL``
+and ``MD-CHARSET``), that section's case-matrix rows of 60 and 74 cases, and the ``MD-CHARSET``
+coverage mapping of §0.8.2.
 
-Neither pinned decoder reports an encoding mode: zxing-cpp 2.2.0 exposes the error level and no
-segment metadata, and OpenCV exposes nothing beyond the payload and the corner quadrangle.  A
-check that claimed to observe the mode would be reporting a guess, and the target's own
-``declared_mode`` is evidence only.  Mode optimality is proven indirectly, through the version the
-payload forces: a payload that fits the numeric charset occupies a strictly smaller symbol in
-numeric mode than in byte mode at the same level, so an encoder that used the wider mode is
-visible as a version above the payload's own-charset minimum, which is what this family asserts.
+Why mode optimality is proven through the version: neither pinned decoder reports an encoding mode
+-- zxing-cpp 2.2.0 exposes the error level and no segment metadata, OpenCV nothing beyond the
+payload and the corner quadrangle -- so a check claiming to observe the mode would report a guess,
+and the target's own ``declared_mode`` is evidence only. Optimality is proven indirectly: a numeric
+payload occupies a strictly smaller symbol in numeric mode than in byte mode at the same level, so a
+wider mode shows up as a version above the payload's own-charset minimum.
 
-``MD-MODE-OPTIMAL`` runs 60 cases, one encode and one decode each: the 24 discriminating boundary
-records (all 12 ``boundary-numeric`` and all 12 ``boundary-alphanumeric``, in ``id`` order), whose
-payloads sit at a capacity boundary where the numeric or alphanumeric minimum is strictly below
-the byte-mode minimum, plus a byte-mode sample of :data:`MODE_OPTIMAL_BYTE_SAMPLE_SIZE` records
-that states the complementary property -- no larger symbol than the payload's byte-mode minimum
-was used.  The assertion is an upper bound on the decoded version rather than equality with the
-mode minimum; the inline comment at :func:`execute_mode_optimal` states why, and
-:data:`EXPECTED_ENCODES` records the case count the counting-stub test holds this check to.
+``MD-MODE-OPTIMAL``: 60 cases, one encode and one decode each -- the 24 discriminating boundary
+records (all 12 ``boundary-numeric`` and all 12 ``boundary-alphanumeric``, in ``id`` order) plus a
+36-record byte-mode sample chosen by :data:`MODE_OPTIMAL_BYTE_SAMPLE_SIZE`. The assertion is an
+upper bound on the decoded version rather than equality with the mode minimum; the inline comment at
+:func:`execute_mode_optimal` states why.
 
-``MD-CHARSET`` runs 74 cases, one encode and one decode each, from the six coverage groups of
-AAP §0.8.2 resolved through :data:`CHARSET_COVERAGE_CLASSES`: ``ascii`` from
-``boundary-alphanumeric`` and ``otp``, ``utf8-multibyte``, ``emoji``, ``right-to-left`` from
-``rtl``, ``embedded-nul`` from ``nul-byte``, and ``four-byte-code-points`` from ``emoji`` plus
-the ``utf8-multibyte`` records whose code points are U+10000 and above -- the predicate, not the
-class, decides (see :func:`coverages_for_record`).  That resolves to ``boundary-alphanumeric``
-12, ``emoji`` 12, ``nul-byte`` 6, ``otp`` 12, ``rtl`` 8 and ``utf8-multibyte`` 24.
-:func:`qrcheck.checks.support.records_by_class` validates every class name against
-``qrcheck.corpus.builder.CLASS_NAMES``, that vocabulary's one owner, so a typo in the mapping
-fails loudly at case-build time instead of silently selecting nothing.  Each case asserts
-byte-exact preservation of the requested payload, and the evidence records both payload digests
-and the first divergence offset, which makes the truncating defect's symptom attributable rather
-than merely visible.
+``MD-CHARSET``: 74 cases, one encode and one decode each -- the six coverages of AAP §0.8.2,
+resolved through :data:`CHARSET_COVERAGE_CLASSES`: ``ascii`` (``boundary-alphanumeric`` 12, ``otp``
+12), ``utf8-multibyte`` 24, ``emoji`` 12, ``right-to-left`` (``rtl``) 8, ``embedded-nul`` (``nul-
+byte``) 6, plus ``four-byte-code-points`` from the ``emoji`` and ``utf8-multibyte`` records whose
+code points reach U+10000 and above, which the predicate decides rather than the class. Each case
+asserts byte-exact preservation of the request.
 
-``MD-MODE-OPTIMAL`` emits ``value_mismatch`` when the symbol is larger than the payload's
-own-charset minimum and ``sampling_failed`` when the module grid could not be recovered at all.
-``MD-CHARSET`` emits ``value_mismatch`` and, of its own verdicts, nothing else: it compares
-payload bytes rather than geometry, so a symbol whose grid could not be sampled still yields the
-primary decoder's payload or none at all, and "none at all" is a payload mismatch.
-
-Per-case adapter errors are not classified here.  Both checks route every one through
-:func:`qrcheck.checks.support.case_status_for_error`, the product's only translation of an
-adapter failure into a status: a declared rejection or an unusable artefact becomes a failure
-(``target_rejected``, ``contract_error``), an unsupported capability a skip
-(``unsupported_capability``), and target loss (``TargetUnavailable``, ``TargetTimeout``) is
-re-raised unchanged for the runner's one-error-result-per-check policy.
-
-Determinism: nothing here reads a clock for an assertion, a random source, ``hash()`` or
-``id()``; iteration is by corpus record ``id`` ascending and every mapping is sorted before it
-reaches a result, while ``duration_ms`` is measured and recorded, never compared.  The module
-writes no file: evidence is persisted through
-:func:`qrcheck.checks.support.record_evidence`, and only for a case that did not pass.
-
-It imports no image library, no encoder and no concrete adapter -- only the shared check support,
-the registry's contract, the result model, the capacity tables, and from the port its capability
-vocabulary and error base class, which lets an adapter failure reach the shared translation
-without naming a single error type here -- so it runs against a stub adapter with no decoder, no
-network and no symbol in sight.
+Reasons emitted: ``value_mismatch`` from both checks and ``sampling_failed`` from
+``MD-MODE-OPTIMAL`` when no module grid could be recovered. Adapter errors are not classified here:
+both checks route every one through :func:`qrcheck.checks.support.case_status_for_error`, and
+``TargetUnavailable``/``TargetTimeout`` are re-raised for the runner's target-loss policy, and a
+declared rejection or an unusable artefact becomes a failure with ``target_rejected`` or
+``contract_error``. Nothing reads a clock for an assertion, a random source, ``hash()`` or ``id()``,
+and no image library, encoder or concrete adapter is imported.
 """
 
 from __future__ import annotations
@@ -94,18 +67,14 @@ __all__ = [
     "payload_length_in_mode",
 ]
 
-# The two check identifiers this module registers, each written once and used for
-# registration, for every result it produces, and for the counting contract in
-# ``EXPECTED_ENCODES``.  They are the literals of ``qrcheck.registry.check.CHECK_IDS``
-# and are never renamed: CI trend lines and the expected-failure table key on them.
+# The two check identifiers this module registers, written once and used for registration, for
+# every result and for ``EXPECTED_ENCODES``.  They are literals of ``CHECK_IDS``, never renamed.
 MODE_OPTIMAL_CHECK: Final[str] = "MD-MODE-OPTIMAL"
 CHARSET_CHECK: Final[str] = "MD-CHARSET"
 
-# How many encode invocations each check makes in one full run over the default
-# 240-record corpus: one per case, because neither check ever re-asks the target for a
-# symbol (AAP §0.4.3 and §0.5.6 -- a retry would register here as the declared count
-# plus one and fail the counting test).  ``tests/unit/test_checks_negative.py`` drives
-# each check with a counting stub and asserts the observed count equals these values.
+# How many encode invocations each check makes in one full run over the default 240-record
+# corpus: one per case, because neither check ever re-asks the target for a symbol (AAP §0.4.3,
+# §0.5.6 -- a retry would register as the declared count plus one and fail the counting test).
 EXPECTED_ENCODES: Final[Mapping[str, int]] = MappingProxyType(
     {
         MODE_OPTIMAL_CHECK: 60,
@@ -113,21 +82,16 @@ EXPECTED_ENCODES: Final[Mapping[str, int]] = MappingProxyType(
     }
 )
 
-# The discriminating half of ``MD-MODE-OPTIMAL``'s case set (AAP §0.8.1): the two
-# boundary classes whose payloads sit at a capacity boundary, so their numeric or
-# alphanumeric minimum is strictly below their byte-mode minimum and a wider mode shows
-# up as a larger symbol.  Taken in full, in ``id`` order.
+# The discriminating half of ``MD-MODE-OPTIMAL``'s case set (AAP §0.8.1): the two boundary
+# classes, whose numeric or alphanumeric minimum is strictly below their byte-mode minimum.
 MODE_OPTIMAL_DISCRIMINATING_CLASSES: Final[tuple[str, ...]] = (
     "boundary-alphanumeric",
     "boundary-numeric",
 )
 
-# The size of ``MD-MODE-OPTIMAL``'s byte-mode sample (AAP §0.8.1, whose case matrix
-# fixes the check at 60 cases: 24 discriminating records plus these 36).  The sample is
-# drawn by the declared rule in :func:`mode_optimal_records` -- the first 36 records in
-# ``id`` order whose payload is verifiably outside both the numeric and the
-# alphanumeric charset -- rather than from an arbitrary list, so the set is reproducible
-# from the corpus alone.
+# The size of ``MD-MODE-OPTIMAL``'s byte-mode sample (AAP §0.8.1 fixes the check at 60 cases:
+# 24 discriminating records plus these 36).  The sample is drawn by the declared rule in
+# :func:`mode_optimal_records` -- the first 36 records in ``id`` order outside both charsets.
 MODE_OPTIMAL_BYTE_SAMPLE_SIZE: Final[int] = 36
 
 # Which corpus classes witness which ``MD-CHARSET`` coverage (AAP §0.8.2).  The one
@@ -143,21 +107,17 @@ CHARSET_COVERAGE_CLASSES: Final[Mapping[str, tuple[str, ...]]] = MappingProxyTyp
     }
 )
 
-# The corpus classes ``MD-CHARSET`` draws its 74 cases from, derived from the mapping
-# above rather than listed a second time and sorted so the case set never depends on the
-# mapping's declaration order.  It equals ``qrcheck.corpus.builder.MD_CHARSET_CLASSES``,
-# the corpus builder's own view of the same six classes; a unit test asserts the
-# equality, and :func:`qrcheck.checks.support.records_by_class` validates every name
-# against the corpus vocabulary at case-build time.
+# The corpus classes ``MD-CHARSET`` draws its 74 cases from, derived from the mapping above and
+# sorted so the case set never depends on declaration order.  It equals the corpus builder's own
+# ``MD_CHARSET_CLASSES``; a unit test asserts it and ``records_by_class`` validates every name.
 CHARSET_CLASSES: Final[tuple[str, ...]] = tuple(
     sorted({class_name for names in CHARSET_COVERAGE_CLASSES.values() for class_name in names})
 )
 
-# The encoding modes, in increasing order of the character set each admits, mapped to
-# the unit a payload length is counted in for that mode (ISO/IEC 18004 §7.4: numeric and
-# alphanumeric lengths are character counts, byte mode is a byte count).  Sorted order
-# is the declaration order, so the candidate versions this module derives are emitted in
-# the same order on every run.
+# The encoding modes in increasing order of the charset each admits, mapped to the unit a payload
+# length is counted in (ISO/IEC 18004 §7.4: numeric and alphanumeric are character counts, byte
+# mode a byte count).  Sorted order is declaration order, so derived versions are emitted the same
+# way.
 _MODE_ORDER: Final[Mapping[str, int]] = MappingProxyType(
     {"numeric": 0, "alphanumeric": 1, "byte": 2}
 )
@@ -189,18 +149,11 @@ _CORPUS_CASE_PREFIX: Final[str] = "corpus:"
 def mode_optimal_cases(ctx: RunContext) -> Iterator[Case]:
     """Yield one case per record of the discriminating set and the byte-mode sample.
 
-    Sixty cases over the default corpus: the 24 discriminating boundary records plus 36
-    byte-mode records, each named ``corpus:<record-id>`` and yielded in ascending ``id``
-    order by the shared case builder, so import order and corpus order can never reach a
-    report.
-
-    The decorator replaces this name with the registered contract, so the generator is
-    reached as ``mode_optimal_cases.cases(ctx)``; ``qrcheck.registry.check`` documents
-    that substitution.
-
-    Args:
-        ctx: The run's context.  Its corpus is already filtered by the runner's
-            ``--class`` selection and its EC level is the level every request asks for.
+    Sixty cases over the default corpus: the 24 discriminating boundary records plus 36 byte-mode
+    records, each named ``corpus:<record-id>`` and yielded in ascending ``id`` order by the shared
+    case builder, so import order and corpus order can never reach a report. The decorator replaces
+    this name with the registered contract, so the generator is reached as
+    ``mode_optimal_cases.cases(ctx)``.
 
     Yields:
         One :class:`~qrcheck.registry.check.Case` per selected record.
@@ -216,26 +169,12 @@ def mode_optimal_cases(ctx: RunContext) -> Iterator[Case]:
 def mode_optimal_records(ctx: RunContext) -> tuple[CorpusRecord, ...]:
     """Return ``MD-MODE-OPTIMAL``'s case set: the boundary classes plus the byte sample.
 
-    The discriminating half is the two boundary classes in full.  The complementary half
-    is drawn by the declared, reproducible rule of :data:`MODE_OPTIMAL_BYTE_SAMPLE_SIZE`:
-    every record whose payload :func:`mode_of` reports as ``byte`` -- verifiably outside
-    both restricted charsets -- taken in ascending ``id`` order, first
-    :data:`MODE_OPTIMAL_BYTE_SAMPLE_SIZE` of them.  No list of record identifiers is
-    transcribed anywhere, so a corpus rebuild re-derives the sample instead of silently
-    keeping stale names.
-
-    The union is de-duplicated by record ``id`` and returned in ascending ``id`` order.
-    A record cannot in fact be in both halves (a boundary numeric or alphanumeric payload
-    is not byte-mode), but the de-duplication is what guarantees one case per record even
-    if that ever stopped holding, since two cases sharing an identifier would share one
-    evidence directory.
-
-    Args:
-        ctx: The run's context; only its corpus is read.
-
-    Returns:
-        The selected records, ascending by ``id``.  Fewer than 60 when the run filtered
-        the corpus, which is the filter's decision and not this function's.
+    The discriminating half is the two boundary classes in full. The complementary half is drawn by
+    the declared rule of :data:`MODE_OPTIMAL_BYTE_SAMPLE_SIZE`: every record whose payload
+    :func:`mode_of` reports as ``byte``, taken in ascending ``id`` order, first
+    :data:`MODE_OPTIMAL_BYTE_SAMPLE_SIZE` of them. No list of record identifiers is transcribed, so
+    a corpus rebuild re-derives the sample. The union is de-duplicated by record ``id`` and returned
+    ascending; fewer than 60 records when the run filtered the corpus.
     """
     discriminating = support.records_by_class(ctx.corpus, MODE_OPTIMAL_DISCRIMINATING_CLASSES)
     byte_mode = tuple(
@@ -249,11 +188,7 @@ def mode_optimal_records(ctx: RunContext) -> tuple[CorpusRecord, ...]:
 def _mode_optimal_executor(record: CorpusRecord) -> Callable[[RunContext], CaseResult]:
     """Return the callable that runs `record`'s ``MD-MODE-OPTIMAL`` case.
 
-    Args:
-        record: The corpus record the case is about.
-
-    Returns:
-        A callable taking the run's context and returning that case's result.
+    The callable takes the run's context and returns that case's result.
     """
 
     def execute(ctx: RunContext) -> CaseResult:
@@ -266,39 +201,20 @@ def _mode_optimal_executor(record: CorpusRecord) -> Callable[[RunContext], CaseR
 def execute_mode_optimal(ctx: RunContext, record: CorpusRecord) -> CaseResult:
     """Ask the target for `record`'s symbol and assert its version is mode-optimal.
 
-    One encode and one decode, through the single shared request builder and the single
-    decode path every image check uses.  The expected version is the smallest Version
-    1-40 that holds the payload in the mode its own charset admits, computed from the
-    capacity tables at the run's error-correction level -- the tables a unit test proves
-    equal to the oracle's -- so the expectation is derived rather than transcribed.
-
-    The assertion is an upper bound: the symbol may not be larger than the payload's
-    own-charset minimum.  Mode optimality is precisely that claim, and a wider mode shows
-    up as a version above the bound.  The inline comment below records why equality is
-    not asserted here.
-
-    Args:
-        ctx: The run's context: the adapter, the EC level, the seed and the evidence store.
-        record: The corpus record to encode.
-
-    Returns:
-        ``passed`` when the decoded version is at or below the own-charset minimum;
-        ``failed`` with ``value_mismatch`` when it is larger, and ``failed`` with
-        ``sampling_failed`` when the module grid could not be recovered from the symbol.
-        A failing result carries its evidence directory.
+    One encode and one decode, through the shared request builder and decode path. The expected
+    version is the smallest Version 1-40 that holds the payload in the mode its own charset admits,
+    from the capacity tables at the run's error-correction level. The assertion is an upper bound: a
+    wider mode shows up as a version above that minimum, and the inline comment records why equality
+    is not asserted. Returns ``passed`` at or below the minimum, ``failed`` with ``value_mismatch``
+    above it, and ``failed`` with ``sampling_failed`` when no grid could be recovered.
 
     Raises:
-        TargetUnsupported: The target does not declare ``png``.  Normally pre-resolved to
-            a ``skipped`` result before execution; if it reaches here it becomes a
-            ``skipped`` result with reason ``unsupported_capability``, which is counted
-            separately and never as a pass.
-        TargetUnavailable, TargetTimeout: Propagated unchanged for the runner's
-            one-error-result-per-check policy on target loss.
-        TargetRejected, TargetContractError: Translated into a failing result carrying the
-            target's own text verbatim.
-        ValueError: The record contradicts itself -- its declared mode does not admit its
-            own payload, or its payload does not fit any version at this level.  Both are
-            corpus defects, recorded by the runner as an ``error`` with a traceback.
+        TargetUnsupported: The target does not declare ``png``; a skip with reason
+        ``unsupported_capability`` if it reaches here. TargetUnavailable, TargetTimeout: Propagated
+        unchanged for the runner's target-loss policy. TargetRejected, TargetContractError:
+        Translated into a failing result carrying the target's own text verbatim. ValueError: The
+        record contradicts itself -- its declared mode does not admit its payload, or the payload
+        does not fit any version at this level. Both are corpus defects.
     """
     case_id = _corpus_case_id(record)
     payload = record.payload_bytes
@@ -330,13 +246,10 @@ def execute_mode_optimal(ctx: RunContext, record: CorpusRecord) -> CaseResult:
             duration_ms=duration_ms,
             seed=ctx.seed,
         )
-    # The assertion is an upper bound, not equality with the mode minimum: the claim is
-    # that the encoder used no wider mode than the payload admits, and a wider mode shows
-    # up as a version above the own-charset minimum.  A version *below* the bound cannot be
-    # a mode defect -- the payload does not fit a smaller symbol at the requested
-    # error-correction level -- so an encoder that reaches one has encoded at a lower level,
-    # which SY-EC-MATCH and SY-VERSION-MIN assert against.  Equality would report that
-    # lower-level fault a second time here and would put MD-MODE-OPTIMAL into the defective
+    # The assertion is an upper bound, not equality with the mode minimum: the claim is that the
+    # encoder used no wider mode, and a wider mode shows up as a version above the own-charset
+    # minimum.  A version below the bound cannot be a mode defect -- the payload does not fit a
+    # smaller symbol at that level -- and equality would drop the check into the defective
     # target's expected failing set, which declares that it must pass.
     elif decoded.version > expected_version:
         result = support.fail(
@@ -370,23 +283,12 @@ def _mode_evidence(
 ) -> dict[str, Any]:
     """Return the decoded evidence plus the three candidate minima for `record`.
 
-    The projection the decode layer produces is kept whole -- both decoders' outcomes,
-    agreement, the EC-level pair, version, mask and matrix digest -- and the facts that
-    make the discrimination auditable are added beside it: the record's declared mode,
-    the payload length in that mode's unit, and the minimal version the payload would
-    force in each of the three modes (``None`` where the payload does not fit that
-    charset at all).  A reader can then see, from the evidence alone, whether the symbol
-    under test is the smallest one the payload admits.
-
-    Args:
-        decoded: The decoded evidence for the symbol.
-        record: The corpus record the symbol was produced for.
-        payload: The requested payload bytes.
-        ec_level: The error-correction level the symbol was requested at.
-
-    Returns:
-        A JSON-ready mapping: the decode projection plus ``expected_mode``,
-        ``payload_len_in_mode`` and ``minimal_versions``.
+    The projection the decode layer produces is kept whole -- both decoders' outcomes, agreement,
+    the EC-level pair, version, mask and matrix digest -- and the facts that make the discrimination
+    auditable are added beside it: the record's declared mode, the payload length in that mode's
+    unit, and the minimal version the payload would force in each of the three modes (``None`` where
+    the payload does not fit that charset at all). A reader can then see, from the evidence alone,
+    whether the symbol under test is the smallest one the payload admits.
     """
     evidence = decoded.as_dict()
     evidence["expected_mode"] = record.expected_mode
@@ -402,20 +304,11 @@ def _own_charset_minimal_version(
 ) -> int:
     """Return the minimal version the payload forces in `record`'s own charset.
 
-    Args:
-        record: The corpus record, whose ``expected_mode`` is the mode asserted.
-        payload: The record's payload bytes.
-        ec_level: The run's error-correction level.
-
-    Returns:
-        The smallest Version 1-40 that holds the payload in the record's mode.
-
     Raises:
-        ValueError: The record's declared mode does not admit its own payload, or the
-            payload does not fit Version 40 at `ec_level`.  Both mean the corpus
-            contradicts itself, which the builder's invariant check exists to prevent, so
-            either is a framework defect worth a traceback rather than a verdict about the
-            target.
+        ValueError: The record's declared mode does not admit its own payload, or the payload does
+            not fit Version 40 at the run's EC level. Both mean the corpus contradicts itself, which
+            the builder's invariant check exists to prevent, so either is a framework defect worth a
+            traceback rather than a verdict about the target.
     """
     mode = record.expected_mode
     if not _admits(payload, mode):
@@ -442,18 +335,11 @@ def _own_charset_minimal_version(
 def charset_cases(ctx: RunContext) -> Iterator[Case]:
     """Yield one case per record of the six charset coverages.
 
-    Seventy-four cases over the default corpus, one per record of
-    :data:`CHARSET_CLASSES`, each named ``corpus:<record-id>`` and yielded in ascending
-    ``id`` order.  The coverage each record witnesses is recorded in its result's
-    evidence, so the six-coverage claim is auditable from a report rather than from the
-    class list alone.
-
-    The decorator replaces this name with the registered contract, so the generator is
-    reached as ``charset_cases.cases(ctx)``.
-
-    Args:
-        ctx: The run's context.  Its corpus is already filtered by the runner's
-            ``--class`` selection and its EC level is the level every request asks for.
+    Seventy-four cases over the default corpus, one per record of :data:`CHARSET_CLASSES`, each
+    named ``corpus:<record-id>`` and yielded in ascending ``id`` order. The coverage each record
+    witnesses is recorded in its result's evidence, so the six-coverage claim is auditable from a
+    report rather than from the class list alone. The decorator replaces this name with the
+    registered contract.
 
     Yields:
         One :class:`~qrcheck.registry.check.Case` per selected record.
@@ -469,11 +355,7 @@ def charset_cases(ctx: RunContext) -> Iterator[Case]:
 def _charset_executor(record: CorpusRecord) -> Callable[[RunContext], CaseResult]:
     """Return the callable that runs `record`'s ``MD-CHARSET`` case.
 
-    Args:
-        record: The corpus record the case is about.
-
-    Returns:
-        A callable taking the run's context and returning that case's result.
+    The callable takes the run's context and returns that case's result.
     """
 
     def execute(ctx: RunContext) -> CaseResult:
@@ -486,34 +368,18 @@ def _charset_executor(record: CorpusRecord) -> Callable[[RunContext], CaseResult
 def execute_charset(ctx: RunContext, record: CorpusRecord) -> CaseResult:
     """Ask the target for `record`'s symbol and assert the payload survives byte-exactly.
 
-    One encode and one decode through the shared path.  The comparison is between the
-    payload bytes the record requested and the payload bytes the authoritative decoder
-    returned: not the decoded text, which a decoder may re-render, and never the
-    secondary decoder's answer, which corroborates but never decides (a symbol the
-    primary could not read is a mismatch, not a rescue).
-
-    The evidence records both digests and the offset of the first divergent byte, so a
-    shortened payload is diagnosable from the artefact: a truncation shows a decoded
-    digest that differs and an offset equal to the decoded length, where a corrupted byte
-    shows the offset of that byte.
-
-    Args:
-        ctx: The run's context: the adapter, the EC level, the seed and the evidence store.
-        record: The corpus record to encode.
-
-    Returns:
-        ``passed`` when the decoded payload equals the requested payload byte for byte;
-        ``failed`` with ``value_mismatch`` otherwise, carrying its evidence directory.
+    One encode and one decode through the shared path. The comparison is between the payload bytes
+    the record requested and the bytes the authoritative decoder returned: not the decoded text,
+    which a decoder may re-render, and never the secondary decoder's answer, which corroborates but
+    never decides. The evidence records both digests and the offset of the first divergent byte, so
+    a truncation shows an offset equal to the decoded length. Returns ``passed`` on an exact match,
+    ``failed`` with ``value_mismatch`` otherwise.
 
     Raises:
-        TargetUnsupported: The target does not declare ``png``.  Normally pre-resolved to
-            a ``skipped`` result before execution; if it reaches here it becomes a
-            ``skipped`` result with reason ``unsupported_capability``, counted separately
-            and never as a pass.
-        TargetUnavailable, TargetTimeout: Propagated unchanged for the runner's
-            one-error-result-per-check policy on target loss.
-        TargetRejected, TargetContractError: Translated into a failing result carrying the
-            target's own text verbatim.
+        TargetUnsupported: The target does not declare ``png``; a skip with reason
+        ``unsupported_capability`` if it reaches here. TargetUnavailable, TargetTimeout: Propagated
+        unchanged for the runner's target-loss policy. TargetRejected, TargetContractError:
+        Translated into a failing result carrying the target's own text verbatim.
     """
     case_id = _corpus_case_id(record)
     payload = record.payload_bytes
@@ -575,35 +441,17 @@ def _translated_failure(
 ) -> CaseResult:
     """Translate one adapter error into the result the error table prescribes, with evidence.
 
-    :func:`qrcheck.checks.support.case_status_for_error` is the product's only translation
-    of an adapter failure into a status, so every per-case adapter error reaches it rather
-    than being classified here.  For this family that means a declared rejection or an
-    unusable artefact is a *failure* (these checks never expect a rejection, unlike the
-    invalid-input probes) and an unsupported capability is a *skip* -- the belt-and-braces
-    path behind capability resolution.  ``TargetUnavailable`` and ``TargetTimeout`` are
-    re-raised by the translation, unchanged, for the runner's one-error-result-per-check
-    policy on target loss.
-
-    The translated result is persisted through the shared evidence call, so a failure
-    caused by the target rather than by the symbol still carries ``request.json`` and the
-    target's own diagnostic.  There is no artefact to persist: the target produced none.
-
-    Args:
-        ctx: The run's context; its evidence store and seed are read.
-        check_id: The check the case belongs to.
-        case_id: The case's stable identifier.
-        error: The adapter error, one of the port's five.
-        request: The request that produced it, in its unprojected form.
-        started: The ``perf_counter`` reading taken before the target was asked.
-
-    Returns:
-        The failed or skipped result, carrying its evidence directory.
+    :func:`qrcheck.checks.support.case_status_for_error` is the product's only translation, so every
+    per-case adapter error reaches it rather than being classified here: a declared rejection or an
+    unusable artefact is a *failure* -- these checks never expect a rejection -- and an unsupported
+    capability a *skip*. The result is persisted through the shared evidence call, so a target-
+    caused failure still carries ``request.json`` and the diagnostic; there is no artefact to
+    persist.
 
     Raises:
         TargetUnavailable: Re-raised unchanged when that is the error supplied.
         TargetTimeout: Re-raised unchanged when that is the error supplied.
-        TypeError: `error` is not one of the five adapter errors, which would mean a
-            framework defect rather than a target's.
+        TypeError: `error` is not one of the five adapter errors, which would be a framework defect.
     """
     translated = support.case_status_for_error(
         check_id,
@@ -619,20 +467,11 @@ def _translated_failure(
 def mode_of(payload: bytes) -> str:
     """Return the narrowest encoding mode `payload` fits, as one of the three modes.
 
-    The payload's own answer, read from its bytes: ``numeric`` when every character is a
-    digit, ``alphanumeric`` when every character is in the alphanumeric set (ISO/IEC
-    18004 §7.4.3 and §7.4.4), and ``byte`` for anything else -- including every payload
-    carrying a byte that is not ASCII, which no restricted charset can carry.
-
-    This is what makes the byte-mode sample of ``MD-MODE-OPTIMAL`` reproducible: a record
-    is in the sample because its payload verifiably does not fit either restricted
-    charset, not because a list says so.
-
-    Args:
-        payload: The payload bytes.
-
-    Returns:
-        ``numeric``, ``alphanumeric`` or ``byte``.
+    The payload's own answer, read from its bytes: ``numeric`` when every character is a digit,
+    ``alphanumeric`` when every character is in the alphanumeric set (ISO/IEC 18004 §7.4.3 and
+    §7.4.4), and ``byte`` for anything else -- including every payload carrying a byte that is not
+    ASCII. This is what makes the byte-mode sample reproducible: a record is in it because its
+    payload verifiably does not fit either restricted charset, not because a list says so.
     """
     try:
         text = payload.decode("ascii")
@@ -649,20 +488,15 @@ def mode_of(payload: bytes) -> str:
 def payload_length_in_mode(payload: bytes, mode: str) -> int:
     """Return `payload`'s length in the unit `mode` counts, as the capacity tables expect.
 
-    Args:
-        payload: The payload bytes.
-        mode: One of ``numeric``, ``alphanumeric`` or ``byte``.
-
-    Returns:
-        The byte count for ``byte`` mode, and the character count for the two character
-        modes -- which for their ASCII payloads equals the byte count, but is derived from
-        the text so the unit is the one the capacity arithmetic documents.
+    The byte count for ``byte`` mode, and the character count for the two character modes -- which
+    for their ASCII payloads equals the byte count, but is derived from the text so the unit is the
+    one the capacity arithmetic documents.
 
     Raises:
         ValueError: `mode` is not one of the three modes.
-        UnicodeDecodeError: A payload is not ASCII, so it has no character count in a
-            restricted charset.  The caller is asserting a charset the payload does not
-            fit, which is a corpus defect rather than a target verdict.
+        UnicodeDecodeError: A payload is not ASCII, so it has no character count in a restricted
+            charset. The caller is asserting a charset the payload does not fit, which is a corpus
+            defect rather than a target verdict.
     """
     if mode not in _MODE_ORDER:
         raise ValueError(f"unknown mode {mode!r}; the modes are {tuple(_MODE_ORDER)}")
@@ -674,21 +508,11 @@ def payload_length_in_mode(payload: bytes, mode: str) -> int:
 def candidate_minimal_versions(payload: bytes, ec_level: str) -> dict[str, int | None]:
     """Return the minimal version `payload` forces in each of the three modes.
 
-    The discrimination ``MD-MODE-OPTIMAL`` rests on, made visible: a payload that fits the
-    numeric charset needs a strictly smaller symbol in numeric mode than in byte mode at
-    the same error-correction level, so a target that used the wider mode produces a
-    version above the numeric minimum.  A mode the payload does not fit reports ``None``
-    rather than a version, because there is no such thing as "this payload in that
-    charset".
-
-    Args:
-        payload: The payload bytes.
-        ec_level: The error-correction level to compute against.
-
-    Returns:
-        A mapping of mode to minimal Version 1-40, in mode order, with ``None`` for the
-        charsets the payload does not fit -- and ``None`` for a mode whose payload exceeds
-        Version 40 as well.
+    The discrimination ``MD-MODE-OPTIMAL`` rests on, made visible: a payload that fits the numeric
+    charset needs a strictly smaller symbol in numeric mode than in byte mode at the same
+    error-correction level. A mode the payload does not fit reports ``None`` rather than a version,
+    because there is no such thing as "this payload in that charset"; ``None`` also for a mode whose
+    payload exceeds Version 40.
     """
     versions: dict[str, int | None] = {}
     for mode in _MODE_ORDER:
@@ -704,18 +528,12 @@ def candidate_minimal_versions(payload: bytes, ec_level: str) -> dict[str, int |
 def coverages_for_record(record: CorpusRecord) -> tuple[str, ...]:
     """Return the ``MD-CHARSET`` coverages `record` witnesses, ascending.
 
-    The declared mapping decides, with one predicate applied on top: the
-    ``four-byte-code-points`` coverage needs a payload that really carries a code point
-    of U+10000 or above, so a ``utf8-multibyte`` record whose widest code point is
-    two or three bytes wide does not count toward it.  Every other coverage is a
-    property of the class the record belongs to.
-
-    Args:
-        record: The corpus record.
-
-    Returns:
-        The coverage names, ascending; empty for a class the mapping does not list,
-        which the class list makes unreachable for the records this check selects.
+    The declared mapping decides, with one predicate on top: ``four-byte-code-points`` needs a
+    payload that really carries a code point of U+10000 or above, so a ``utf8-multibyte`` record
+    whose widest code point is two or three bytes wide does not count toward it. Every other
+    coverage is a property
+    of the record's class. Empty for a class the mapping does not list, which the class list makes
+    unreachable for the records this check selects.
     """
     covered = [
         coverage
@@ -732,14 +550,8 @@ def coverages_for_record(record: CorpusRecord) -> tuple[str, ...]:
 def first_divergence(requested: bytes, received: bytes) -> int | None:
     """Return the offset of the first byte at which `received` differs from `requested`.
 
-    Args:
-        requested: The payload the case asked for.
-        received: The payload the decoder returned.
-
-    Returns:
-        ``None`` when the two are equal, the offset of the first differing byte, or the
-        length of the shorter payload when one is a prefix of the other -- which is the
-        offset a truncation produces.
+    ``None`` when the two are equal, the offset of the first differing byte, or the length of the
+    shorter payload when one is a prefix of the other -- the offset a truncation produces.
     """
     shared = min(len(requested), len(received))
     for offset in range(shared):
@@ -751,14 +563,9 @@ def first_divergence(requested: bytes, received: bytes) -> int | None:
 def _admits(payload: bytes, mode: str) -> bool:
     """Return whether `payload` fits the character set `mode` encodes.
 
-    Args:
-        payload: The payload bytes.
-        mode: One of ``numeric``, ``alphanumeric`` or ``byte``.
-
-    Returns:
-        ``True`` for ``byte`` mode always, and for a restricted mode when the payload's
-        narrowest charset is that mode or a narrower one -- numeric payloads fit the
-        alphanumeric set too (ISO/IEC 18004 §7.4.4's set contains §7.4.3's).
+    ``True`` for ``byte`` mode always, and for a restricted mode when the payload's narrowest
+    charset is that mode or a narrower one -- numeric payloads fit the alphanumeric set too (ISO/IEC
+    18004 §7.4.4's set contains §7.4.3's).
     """
     if mode not in _MODE_ORDER:
         raise ValueError(f"unknown mode {mode!r}; the modes are {tuple(_MODE_ORDER)}")
@@ -768,15 +575,8 @@ def _admits(payload: bytes, mode: str) -> bool:
 def _holds_four_byte_code_point(payload: bytes) -> bool:
     """Return whether `payload` holds at least one code point needing four UTF-8 bytes.
 
-    A payload that is not valid UTF-8 holds no code point at all, so the answer is
-    ``False`` rather than an error: the coverage is about the text a payload carries.
-
-    Args:
-        payload: The payload bytes.
-
-    Returns:
-        ``True`` when the payload decodes as UTF-8 and some code point is U+10000 or
-        above, ``False`` otherwise.
+    A payload that is not valid UTF-8 holds no code point at all, so the answer is ``False`` rather
+    than an error: the coverage is about the text a payload carries.
     """
     try:
         text = payload.decode("utf-8")
@@ -788,14 +588,8 @@ def _holds_four_byte_code_point(payload: bytes) -> bool:
 def _digest(payload: bytes | None) -> str | None:
     """Return the SHA-256 hex digest of `payload`, or ``None`` when there is no payload.
 
-    A content digest, never ``hash()``: it is stable across processes and machines, which
-    is what lets a reader compare two evidence files from two runs.
-
-    Args:
-        payload: The payload bytes, or ``None`` when the decoder returned nothing.
-
-    Returns:
-        The 64-character hex digest, or ``None``.
+    A content digest, never ``hash()``: it is stable across processes and machines, which lets a
+    reader compare two evidence files from two runs.
     """
     return None if payload is None else hashlib.sha256(payload).hexdigest()
 
@@ -803,14 +597,8 @@ def _digest(payload: bytes | None) -> str | None:
 def _elapsed_ms(started: float) -> float:
     """Return the milliseconds elapsed since `started`, a :func:`time.perf_counter` value.
 
-    Measured and recorded, never asserted: a duration is the one volatile quantity this
-    family reports, and no comparison in this module reads it.
-
-    Args:
-        started: The ``perf_counter`` reading taken before the target was asked.
-
-    Returns:
-        The elapsed time in milliseconds, never negative.
+    Measured and recorded, never asserted: a duration is the one volatile quantity this family
+    reports, and no comparison in this module reads it.
     """
     return (time.perf_counter() - started) * 1000.0
 
@@ -818,11 +606,7 @@ def _elapsed_ms(started: float) -> float:
 def _corpus_case_id(record: CorpusRecord) -> str:
     """Return `record`'s case identifier, ``corpus:<record-id>``.
 
-    Args:
-        record: The corpus record.
-
-    Returns:
-        The identifier the shared case builder also derives for the same record, so the
-        result the executor reports and the case the runner walks share one name.
+    The identifier the shared case builder also derives for the same record, so the result the
+    executor reports and the case the runner walks share one name.
     """
     return f"{_CORPUS_CASE_PREFIX}{record.id}"

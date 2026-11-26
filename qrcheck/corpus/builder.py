@@ -1,28 +1,20 @@
 """Corpus assembly: the ``CorpusRecord`` type and the 240-record corpus builder.
 
-The corpus is the fixed input every corpus-driven check case is built from, so it must be a
-pure function of the run seed: ``build_corpus(seed)`` returns the same records, in the same
-order, in every process on every machine. This module owns three things and nothing else:
+The corpus is the fixed input every corpus-driven check case is built from, so it must be a pure
+function of the run seed: ``build_corpus(seed)`` returns the same records, in the same order, in
+every process on every machine. This module owns three things and nothing else: the record type
+``CorpusRecord``, the only definition in the product, carrying the wire form the request fixes; the
+class inventory, where ``CLASS_COUNTS`` is the single home of the per-class record counts and
+therefore of the corpus total and of the 40-record boundary subset; and assembly, ``build_corpus``,
+which walks the payload generators, assigns stable ids, orders by id and then proves the
+discriminating predicates still hold.
 
-* the record type, ``CorpusRecord`` -- the only definition in the product, carrying the wire
-  form the request fixes (``id``, ``class``, ``payload_utf8``/``payload_b64``,
-  ``expected_mode``, ``notes``);
-* the class inventory -- ``CLASS_COUNTS`` is the single home of the per-class record counts,
-  and therefore of the corpus total and of the boundary subset success criterion 2 runs at
-  EC L, Q and H through ``--class 'boundary-*'``;
-* assembly, ``build_corpus`` -- which walks the payload generators of
-  ``qrcheck/corpus/payloads.py``, assigns stable ids, orders the records by id, and then
-  proves that the discriminating predicates the self-check targets depend on still hold.
-
-Why the predicates are asserted here rather than only in a test: the defective target's
-injected ``truncated_payload`` and ``wrong_ec_level`` defects are observable only through
-records that make them so. A generator edit that quietly removed those records would leave
-the suite green while proving less, so ``_verify_invariants`` counts the witnesses and
-refuses to return a corpus without them.
-
-No I/O, no printing, no configuration, no clock and no environment: writing the corpus to
-disk is ``qrcheck/corpus/io.py``'s job, and the seed default and the corpus path belong to
-``qrcheck/config``. Standard library plus the two corpus modules this package owns.
+The predicates are asserted here rather than only in a test because the defective target's
+``truncated_payload`` and ``wrong_ec_level`` defects are observable only through records that make
+them so: a generator edit that quietly removed those records would leave the suite green while
+proving less, so ``_verify_invariants`` counts the witnesses and refuses to return a corpus without
+them. No I/O, no printing, no configuration, no clock and no environment: writing the corpus to disk
+is ``qrcheck/corpus/io.py``'s job.
 """
 
 __all__ = [
@@ -43,20 +35,16 @@ from dataclasses import dataclass
 
 from qrcheck.corpus import capacity, payloads
 
-# The three boundary classes. A boundary payload is exactly as long as its version's
-# encoding capacity at EC L, which makes its minimal version ``v`` at EC L and ``v + 1`` at
-# EC M: that one-step difference is what lets the wrong-EC-level defect fail
-# ``SY-VERSION-MIN`` as well as ``SY-EC-MATCH``, and it is why this subset is the one run at
-# three error-correction levels.
+# The three boundary classes: a boundary payload is exactly its version's encoding
+# capacity at EC L, so its minimal version is ``v`` at EC L and ``v + 1`` at EC M -- the
+# one-step difference that lets the wrong-EC-level defect fail ``SY-VERSION-MIN`` too.
 BOUNDARY_CLASSES: tuple[str, ...] = (
     "boundary-alphanumeric",
     "boundary-byte",
     "boundary-numeric",
 )
 
-# The fourteen payload classes and how many records each contributes. The single home of the
-# corpus size: every total below is derived from this mapping and no other module restates a
-# count. Written in sorted-key order so ``repr`` and any future serialization are stable.
+# The fourteen payload classes and their record counts: the single home of the corpus size.
 CLASS_COUNTS: dict[str, int] = {
     "boundary-alphanumeric": 12,
     "boundary-byte": 16,
@@ -77,16 +65,12 @@ CLASS_COUNTS: dict[str, int] = {
 # The corpus class names, sorted, as the vocabulary a record's class must belong to.
 CLASS_NAMES: tuple[str, ...] = tuple(sorted(CLASS_COUNTS))
 
-# Derived, never typed: 240 records in total, and the 40-record boundary subset that success
-# criterion 2 runs at EC L, Q and H. The corpus is 200 non-boundary records plus that subset.
+# Derived, never typed: 240 records in total, and the 40-record boundary subset.
 TOTAL_RECORDS: int = sum(CLASS_COUNTS.values())
 BOUNDARY_RECORDS: int = sum(CLASS_COUNTS[class_name] for class_name in BOUNDARY_CLASSES)
 
-# The classes ``MD-CHARSET`` draws its charset coverages from: ASCII from ``otp`` and
-# ``boundary-alphanumeric``, UTF-8 multibyte from ``utf8-multibyte``, four-byte code points
-# from ``emoji`` and from the widest ``utf8-multibyte`` payloads, right-to-left from ``rtl``
-# and an embedded NUL from ``nul-byte``. The truncation witness below is looked for in these
-# classes only, because they are the ones the truncating defect must be caught by.
+# The classes ``MD-CHARSET`` draws its coverages from: ASCII, UTF-8 multibyte, four-byte code
+# points, right-to-left and an embedded NUL. The truncation witness is looked for here.
 MD_CHARSET_CLASSES: tuple[str, ...] = (
     "boundary-alphanumeric",
     "emoji",
@@ -96,20 +80,16 @@ MD_CHARSET_CLASSES: tuple[str, ...] = (
     "utf8-multibyte",
 )
 
-# The length the ``truncated_payload`` defect cuts a longer payload back to. The corpus must
-# hold at least one ``MD-CHARSET`` record whose truncation to this many bytes does not move
-# its Version at every error-correction level where that is possible, or the defect is
-# silently inert -- the injection would shorten the payload without changing the symbol's
-# version, and no check would see it. Which levels those are is decided by the predicate
-# itself, never by a list here; see ``_verify_truncation_witness``.
-# The eight synthetic ``SY-MATRIX-EQUIV`` payloads are built by ``qrcheck/checks/symbol.py``
-# and are 64 bytes or shorter by construction, so the injection can never reach them; that is
-# another module's case set and is deliberately not represented here.
+# The length the ``truncated_payload`` defect cuts a longer payload back to. The corpus must hold
+# a ``MD-CHARSET`` record whose truncation to it keeps its Version at every level where that is
+# possible, or the defect is inert; ``capacity.truncation_keeps_version`` decides.
+# at least one ``MD-CHARSET`` record whose truncation to this many bytes does not move its Version
+# at every level where that is possible, or the defect is silently inert. Which levels those are
+# is decided by ``capacity.truncation_keeps_version``, never by a list here. The eight synthetic
+# ``SY-MATRIX-EQUIV`` payloads are 64 bytes or shorter, so it never reaches them.
 _TRUNCATION_BYTES: int = 64
 
-# The wire keys of a record. ``class`` is the name the request fixes for the JSONL line, even
-# though it cannot be a Python attribute name; ``payload_utf8`` and ``payload_b64`` are the
-# mutually exclusive alternatives and exactly one of them is present.
+# The wire keys of a record; ``class`` is the JSONL name for ``class_name``.
 _WIRE_KEYS: tuple[str, ...] = (
     "class",
     "expected_mode",
@@ -124,9 +104,9 @@ _REQUIRED_WIRE_KEYS: tuple[str, ...] = ("class", "expected_mode", "id")
 class CorpusError(ValueError):
     """Raised when a record or a built corpus breaks one of the stated invariants.
 
-    A ``ValueError`` subclass, so a caller that already catches the builtin -- the JSONL
-    reader reconstructing records from file text, the CLI turning an unusable corpus into a
-    configuration error -- needs no import of this module to handle it.
+    A ``ValueError`` subclass, so a caller that already catches the builtin -- the JSONL reader
+    reconstructing records from file text, the CLI turning an unusable corpus into a configuration
+    error -- needs no import of this module to handle it.
     """
 
 
@@ -134,24 +114,13 @@ class CorpusError(ValueError):
 class CorpusRecord:
     """One corpus record: a payload and the facts the checks need about it.
 
-    The wire form spells the class key ``class``, the name the request fixes for the JSONL
-    line, while the attribute here is ``class_name`` because ``class`` is a Python keyword;
-    :meth:`to_dict` and :meth:`from_dict` are the only translation between the two, and
-    every other key is spelled identically on both sides.
-
-    ``expected_mode`` is the encoding mode the payload's own bytes are limited to
-    (``numeric``, ``alphanumeric`` or ``byte``), and ``notes`` records how the payload was
-    derived -- for a boundary record, the capacity arithmetic that fixed its length.
+    The wire form spells the class key ``class`` while the attribute is ``class_name``, because
+    ``class`` is a Python keyword; :meth:`to_dict` and :meth:`from_dict` are the only translation.
 
     Instances are immutable and validate themselves on construction: the ``id`` must be
-    ``<class>-<3-digit index>`` for the record's own class, exactly one of the two payload
-    fields must be set and it must carry at least one byte -- an empty ``payload_utf8``, an
-    empty ``payload_b64`` and a ``payload_b64`` that decodes to nothing are all rejected --
+    ``<class>-<3-digit index>``, exactly one payload field must be set and carry at least one byte,
     ``payload_utf8`` must hold no embedded NUL, ``payload_b64`` must be valid base64,
-    ``expected_mode`` must be one of ``numeric``, ``alphanumeric`` and ``byte``, and ``notes``
-    must be a str. A record read back from a malformed corpus line therefore fails where it is
-    created rather than inside a check, and the build path and the load path share that one
-    gate.
+    ``expected_mode`` must be one of the three modes, and ``notes`` must be a str.
     """
 
     id: str
@@ -220,9 +189,11 @@ class CorpusRecord:
         """Return the payload as the bytes a symbol carries.
 
         ``payload_utf8`` is UTF-8 encoded -- precisely the bytes the encoder receives -- and
-        ``payload_b64`` is decoded with validation, so a corrupt string fails loudly here
-        instead of yielding the garbage a lenient decode would. Never returns ``None``;
-        raises CorpusError only for a record built around the constructor's invariants.
+        ``payload_b64`` is decoded with validation, so a corrupt string fails loudly here.
+
+        Raises:
+        CorpusError: Neither payload field is set -- a record built around the constructor's
+        invariants.
         """
         if self.payload_b64 is not None:
             return _decode_base64(self.payload_b64, self.id)
@@ -235,9 +206,9 @@ class CorpusRecord:
     def to_dict(self) -> dict[str, object]:
         """Return the record in its wire form, with the class key spelled ``class``.
 
-        Exactly five keys: ``id``, ``class``, ``expected_mode`` and ``notes``, plus exactly
-        one of ``payload_utf8`` and ``payload_b64`` -- the absent alternative is omitted
-        rather than written as null, so a record states its payload in one way only.
+        Exactly five keys: ``id``, ``class``, ``expected_mode`` and ``notes``, plus exactly one of
+        ``payload_utf8`` and ``payload_b64`` -- the absent alternative is omitted rather than
+        written as null, so a record states its payload in one way only.
         """
         wire: dict[str, object] = {
             "id": self.id,
@@ -255,13 +226,13 @@ class CorpusRecord:
     def from_dict(cls, raw: Mapping[str, object]) -> "CorpusRecord":
         """Rebuild a record from its wire form.
 
-        Reads the class from the key ``class`` and requires ``id``, ``class`` and
-        ``expected_mode``; ``notes`` may be absent and is then empty; exactly one of
-        ``payload_utf8`` and ``payload_b64`` must carry a string, and a key spelled any other
-        way is rejected rather than silently dropped.
+        Reads the class from the key ``class`` and requires ``id``, ``class`` and ``expected_mode``;
+        ``notes`` may be absent and is then empty; exactly one payload field must carry a string,
+        and a key spelled any other way is rejected.
 
-        Raises CorpusError when the mapping has an unknown key, is missing a required key,
-        holds a value of the wrong type, or describes a record that breaks an invariant.
+        Raises:
+        CorpusError: An unknown key, a missing required key, a value of the wrong type, or a record
+        that breaks an invariant.
         """
         if not isinstance(raw, Mapping):
             raise CorpusError(
@@ -294,16 +265,13 @@ def build_corpus(seed: int) -> list[CorpusRecord]:
     """Assemble the whole corpus from `seed`.
 
     Guarantees the record set every corpus-driven check is defined against: exactly
-    ``TOTAL_RECORDS`` records, per-class counts equal to ``CLASS_COUNTS``, ids of the form
-    ``<class>-<3-digit index>`` in ascending order, exactly one payload field per record, and
-    both discriminating witnesses the defect-detection contract requires.
+    ``TOTAL_RECORDS`` records, per-class counts equal to ``CLASS_COUNTS``, ids ascending, one
+    payload field per record, and both discriminating witnesses. Pure: the result is a function of
+    `seed` and of the capacity tables alone.
 
-    Pure: the result is a function of `seed` and of the capacity tables alone, so two calls
-    with the same `seed` return equal records in the same order, in any process, on any
-    machine.
-
-    Raises CorpusError when `seed` is not a non-negative integer, when a corpus class has no
-    payload generator, or when the assembled corpus fails an invariant.
+    Raises:
+    CorpusError: `seed` is not a non-negative integer, a class has no payload generator, or the
+    assembled corpus fails an invariant.
     """
     _require_seed(seed)
     _require_generator_coverage()
@@ -323,8 +291,7 @@ def build_corpus(seed: int) -> list[CorpusRecord]:
                     notes=draft.notes,
                 )
             )
-    # The walk above is already in id order; sorting states the ordering as a contract rather
-    # than leaving it to follow from the shape of the loop.
+    # The walk above is already in id order; sorting states the ordering as a contract.
     records.sort(key=_id_key)
     _verify_invariants(records)
     return records
@@ -333,11 +300,9 @@ def build_corpus(seed: int) -> list[CorpusRecord]:
 def _verify_invariants(records: Sequence[CorpusRecord]) -> None:
     """Raise CorpusError unless `records` is the corpus the checks depend on.
 
-    Every clause positively counts records that satisfy its predicate, so none of them can
-    pass on a corpus that merely lacks what it looks for: the counts must match the
-    inventory, ids must be unique and ordered, payloads must be stated one way, and both
-    discriminating witnesses must exist. Validation reads `records` as given -- sorted or
-    not -- so a perturbed corpus handed to this function is rejected rather than trusted.
+    Every clause positively counts records that satisfy its predicate, so none of them can pass on a
+    corpus that merely lacks what it looks for, and validation reads `records` as given -- sorted or
+    not -- so a perturbed corpus handed here is rejected rather than trusted.
     """
     _verify_counts(records)
     _verify_ids(records)
@@ -396,11 +361,10 @@ def _verify_ids(records: Sequence[CorpusRecord]) -> None:
 def _verify_payload_fields(records: Sequence[CorpusRecord]) -> None:
     """Raise CorpusError unless each record states one payload field the wire allows.
 
-    The non-empty rule is the record's own invariant, enforced by
-    ``CorpusRecord.__post_init__`` for a freshly built corpus and for a corpus read back from
-    disk alike; this function keeps the corpus-wide payload-field checks -- exactly one field
-    set, and no embedded NUL in ``payload_utf8`` -- so a record set that reached here by any
-    other route is still held to the wire's two payload rules.
+    The non-empty rule is the record's own invariant, enforced by ``CorpusRecord.__post_init__`` for
+    a freshly built corpus and for one read back from disk alike; this function keeps the
+    corpus-wide rules -- exactly one field set, and no embedded NUL in ``payload_utf8`` -- so a
+    record set that reached here by any other route is still held to the wire.
     """
     for record in records:
         if (record.payload_utf8 is None) == (record.payload_b64 is None):
@@ -419,22 +383,13 @@ def _verify_payload_fields(records: Sequence[CorpusRecord]) -> None:
 def _verify_truncation_witness(records: Sequence[CorpusRecord]) -> None:
     """Raise CorpusError unless a record makes the truncating defect observable.
 
-    The ``truncated_payload`` defect cuts a payload longer than ``_TRUNCATION_BYTES`` back to
-    exactly that many bytes, under the rule ``capacity.truncation_keeps_version`` -- the same
-    function the defect evaluates, so the witness cannot be computed by a second predicate
-    that drifts from the injection. It stays observable only where the shortened payload
-    still needs the same Version at the error-correction level in use, so that
-    ``RT-ROUNDTRIP`` and ``MD-CHARSET`` fail on the payload and ``SY-VERSION-MIN`` keeps its
-    single cause.
-
-    At least one ``MD-CHARSET`` record must therefore witness the cut at every level in
-    ``capacity.EC_LEVELS`` where a witness is arithmetically possible. A level is impossible
-    when the window is itself the byte capacity of a Version there: the very next byte
-    already needs the following Version, so no payload longer than the window can keep its
-    version -- at EC H the 64-byte window fills Version 7 exactly. That condition is read
-    from the same predicate applied to the shortest longer payload, never from a list of
-    levels, so the clause cannot pass by silently excusing a level that could have been
-    witnessed.
+    The ``truncated_payload`` defect cuts a payload longer than ``_TRUNCATION_BYTES`` back to that
+    many bytes under ``capacity.truncation_keeps_version`` -- the same function the defect
+    evaluates, so the witness cannot come from a second predicate that drifts from the injection. At
+    least one ``MD-CHARSET`` record must witness the cut at every level where that is arithmetically
+    possible; a level is impossible when the window is itself the byte capacity of a Version there
+    -- at EC H the 64-byte window fills Version 7 exactly -- and that condition is read from the
+    same predicate, never from a list of levels.
     """
     witnesses: dict[str, list[str]] = {}
     for record in records:
@@ -465,11 +420,9 @@ def _verify_truncation_witness(records: Sequence[CorpusRecord]) -> None:
 def _verify_version_level_witness(records: Sequence[CorpusRecord]) -> None:
     """Raise CorpusError unless a boundary record separates EC L from EC M by version.
 
-    The ``wrong_ec_level`` defect encodes one level below the request. ``SY-EC-MATCH``
-    catches that on its own, but ``SY-VERSION-MIN`` catches it only through a record whose
-    minimal version differs between the requested level and the level below it -- which is
-    exactly the arithmetic a boundary payload is built for. At least one such record must
-    exist, or that half of the expected failure set could never be produced.
+    ``SY-EC-MATCH`` catches the wrong-EC-level defect on its own, but ``SY-VERSION-MIN`` needs a
+    record whose minimal version differs between the requested level and the level below it --
+    exactly the arithmetic a boundary payload is built for.
     """
     witnesses: list[str] = []
     for record in records:
@@ -515,11 +468,9 @@ def _require_generator_coverage() -> None:
 def _payload_fields(payload: str | bytes) -> tuple[str | None, str | None]:
     """Return the ``(payload_utf8, payload_b64)`` pair for one generated payload.
 
-    One mechanical rule decides which field carries it: text that a UTF-8 codec round-trips
-    and that holds no NUL goes to ``payload_utf8``, so a regenerated corpus diffs readably
-    and its ordinary payloads stay legible in review; ``bytes``, text with an embedded NUL
-    and text no UTF-8 codec can represent go to ``payload_b64``, which keeps a line-oriented
-    JSONL file free of raw NULs and of sequences that are not valid UTF-8.
+    Text a UTF-8 codec round-trips and that holds no NUL goes to ``payload_utf8``, so a regenerated
+    corpus diffs readably; ``bytes``, text with an embedded NUL and text no UTF-8 codec can
+    represent go to ``payload_b64``, which keeps a line-oriented JSONL file free of raw NULs.
     """
     if isinstance(payload, bytes):
         return None, _encode_base64(payload)
@@ -531,8 +482,7 @@ def _payload_fields(payload: str | bytes) -> tuple[str | None, str | None]:
 def _utf8_round_trips(value: str) -> bool:
     """Return whether a UTF-8 codec returns `value` unchanged.
 
-    False only for text holding a lone surrogate, which the codec refuses to encode; every
-    string the corpus generators build returns True.
+    False only for text holding a lone surrogate, which the codec refuses to encode.
     """
     try:
         encoded = value.encode("utf-8")
@@ -545,8 +495,7 @@ def _utf8_bytes(value: str) -> bytes:
     """Return the bytes a str payload contributes to a symbol.
 
     ``surrogatepass`` is reached only for text the strict codec refused, where it is the one
-    encoding that still yields the bytes a caller could have meant; for every other string
-    this is the same strict UTF-8 encoding a symbol carries.
+    encoding that still yields the bytes a caller could have meant.
     """
     try:
         return value.encode("utf-8")
@@ -562,9 +511,9 @@ def _encode_base64(payload: bytes) -> str:
 def _decode_base64(encoded: str, record_id: str) -> bytes:
     """Return the bytes `encoded` carries, raising CorpusError when it is not valid base64.
 
-    Validation is strict, so a corrupted string fails instead of decoding to something
-    plausible; ``binascii.Error`` is a ``ValueError`` subclass, so one clause covers both a
-    malformed alphabet and a malformed padding.
+    Validation is strict, so a corrupted string fails instead of decoding to something plausible;
+    ``binascii.Error`` is a ``ValueError`` subclass, so one clause covers a malformed alphabet and a
+    malformed padding alike.
     """
     try:
         return base64.b64decode(encoded, validate=True)
@@ -577,9 +526,8 @@ def _decode_base64(encoded: str, record_id: str) -> bytes:
 def _id_matches_class(record_id: str, class_name: str) -> bool:
     """Return whether `record_id` is ``<class_name>-<3-digit index>``.
 
-    The index must be exactly three ASCII digits and must survive a round trip through
-    ``int``, so a splatter such as ``url-7`` or ``url-007x`` is rejected while ``url-007``
-    is accepted.
+    The index must be exactly three ASCII digits and must survive a round trip through ``int``, so
+    ``url-7`` and ``url-007x`` are rejected while ``url-007`` is accepted.
     """
     if not isinstance(record_id, str):
         return False

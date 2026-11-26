@@ -1,42 +1,21 @@
-"""The symbol's own 15-bit format information: error correction level, mask, BCH correction.
+"""The symbol's own 15-bit format information: EC level, mask, BCH correction.
 
-This module is the single source of the *mask* and the independent second source
-of the *error correction level* for the whole framework, which is why no pinned
-decoder has to expose either: ``zxing-cpp`` 2.2.0 reports an EC level but neither
-version nor mask, and ``opencv`` reports none of the three. ``SY-MASK`` has no
-other input, and ``SY-EC-MATCH`` compares this answer against the decoder's, so
-a ``format_info_disagreement`` is a finding about the symbol rather than a
-restatement of one library's opinion.
+The single source of the mask and the independent second source of the EC level, which is why no
+pinned decoder must expose either: ``SY-MASK`` has no other input and ``SY-EC-MATCH`` compares this
+answer against the decoder's, so a ``format_info_disagreement`` is a finding about the symbol.
 
-The bits are read out of the sampled module grid, so nothing here consults a
-decoder. What is implemented, clause by clause:
+Implemented clause by clause: ISO/IEC 18004:2015(E) §7.9 (five data bits -- a two-bit EC indicator
+then a three-bit mask reference -- and ten BCH(15, 5) parity bits); §7.9.1 (placement of both
+copies, the two module positions the timing patterns occupy and the fixed dark module that belongs
+to neither copy); Table 12 (``L=01``, ``M=00``, ``Q=11``, ``H=10``); Annex C / Table C.1 (the 32
+valid sequences, generated from the BCH routine rather than transcribed). Model 2 only: a Micro QR
+format layout is out of scope.
 
-* ISO/IEC 18004:2015(E) §7.9 -- format information: five data bits (a two-bit EC
-  level indicator followed by a three-bit mask reference) and ten BCH(15, 5)
-  parity bits.
-* ISO/IEC 18004:2015(E) §7.9.1 -- placement of both copies in a Model 2 symbol,
-  including the two module positions the timing patterns occupy and the fixed
-  dark module that belongs to neither copy.
-* ISO/IEC 18004:2015(E) Table 12 -- the EC level indicators ``L=01``, ``M=00``,
-  ``Q=11``, ``H=10``.
-* ISO/IEC 18004:2015(E) Annex C / Table C.1 -- the 32 valid bit sequences, which
-  this module generates from the BCH routine rather than transcribing, so the
-  only hand-written values are the generator polynomial and the XOR mask.
-
-Model 2 QR only: a Micro QR symbol has a different format layout and is out of
-scope.
-
-The module writes no file, reads no configuration, prints and logs nothing, and
-imports no image or decoder library -- ``numpy`` does not even reach
-``sys.modules``, because :data:`~qrcheck.decode.base.Matrix` resolves for type
-checkers only. It decides no :class:`~qrcheck.report.model.Reason` and never
-raises for bad symbol data: an unreadable grid, an unreadable copy, and a copy
-corrupted beyond three bits all come back as ``None``, which the consensus layer
-records as absent format information and the checks report as
-``sampling_failed``. An exception escaping this module would turn a defective
-symbol into an ``error`` result and destroy the run-level attribution the
-self-check targets depend on, so :class:`ValueError` is raised only for a
-programmer error in a caller's argument.
+Writes no file, reads no configuration, imports no image or decoder library, and raises nothing for
+bad symbol data: an unreadable grid, an unreadable copy and a copy corrupted beyond three bits all
+return ``None``, which the consensus layer records as absent format information. An exception
+escaping here would turn a defective symbol into an ``error`` result, so ``ValueError`` covers only
+a programmer error in a caller's argument.
 """
 
 from __future__ import annotations
@@ -111,23 +90,13 @@ _MODULE_COUNT_STEP: Final = 4
 class FormatInfo:
     """The format information recovered from a symbol, with the evidence behind it.
 
-    ``ec_level`` and ``mask`` are the recovered values; ``mask`` in 0-7 is the
-    only mask evidence the product has, and ``ec_level`` is the reading that is
-    independent of both decoders. ``bit_errors`` is the Hamming distance between
-    the copy that was used and the codeword it was corrected to, so a perfectly
-    printed symbol reports 0 and a damaged one reports how much of its redundancy
-    was spent.
-
-    ``copy_index`` names which of the two copies was used (0 or 1), and
-    ``copy_bit_errors`` records the distance measured on each copy -- ``None``
-    where that copy could not be recovered at all. Because both copies carry the
-    same 15 bits, the pair is the redundancy evidence: one copy at distance 0 and
-    the other at distance 2 says the second copy was damaged, not that the symbol
-    is ambiguous.
-
-    Pass ``copy_bit_errors`` as ``None`` to derive it from ``bit_errors`` at
-    ``copy_index``; the invariant that ``copy_bit_errors[copy_index]`` equals
-    ``bit_errors`` is enforced either way.
+    ``ec_level`` and ``mask`` are the recovered values, ``mask`` in 0-7 being the product's only
+    mask evidence and ``ec_level`` the reading independent of both decoders. ``bit_errors`` is the
+    Hamming distance between the copy used and the codeword it was corrected to; ``copy_index``
+    names that copy (0 or 1) and ``copy_bit_errors`` records both copies' distances, ``None`` where
+    a copy could not be recovered -- the pair is the redundancy evidence, so one clean copy and one
+    at distance 2 means damage, not ambiguity. Passing ``copy_bit_errors=None`` derives it from
+    ``bit_errors`` at ``copy_index``, and that equality is enforced either way.
     """
 
     ec_level: str
@@ -140,12 +109,10 @@ class FormatInfo:
         """Normalise ``copy_bit_errors`` and reject off-contract values.
 
         Raises:
-            ValueError: ``ec_level`` is not one of ``L``/``M``/``Q``/``H``,
-                ``mask`` is outside 0-7, ``bit_errors`` is outside 0-3,
-                ``copy_index`` is not 0 or 1, ``copy_bit_errors`` is not a
-                two-element sequence, a per-copy distance is outside 0-3, or the
-                distance recorded for the used copy disagrees with
-                ``bit_errors``.
+            ValueError: ``ec_level`` is not one of ``L``/``M``/``Q``/``H``, ``mask`` is outside
+                0-7, ``bit_errors`` outside 0-3, ``copy_index`` is not 0 or 1, ``copy_bit_errors``
+                is not a two-element sequence of 0-3 distances, or the distance for the used copy
+                disagrees with ``bit_errors``.
         """
         if self.ec_level not in EC_INDICATORS:
             raise ValueError(
@@ -193,9 +160,8 @@ class FormatInfo:
     def as_dict(self) -> dict[str, Any]:
         """Project this record to a JSON-safe mapping with sorted keys.
 
-        ``copy_bit_errors`` becomes a list because a JSON object has no tuple, and
-        ``None`` entries survive as ``null`` so a copy that could not be read stays
-        distinguishable from a clean one.
+        ``copy_bit_errors`` becomes a list and ``None`` entries survive as ``null``, so an
+        unreadable copy stays distinguishable from a clean one.
         """
         distances = self.copy_bit_errors if self.copy_bit_errors is not None else (None, None)
         projected: dict[str, Any] = {
@@ -211,13 +177,10 @@ class FormatInfo:
 def _bch_codeword(data: int) -> int:
     """Return the unmasked 15-bit codeword holding the five data bits ``data``.
 
-    ISO/IEC 18004:2015(E) §7.9.1: the data bits are shifted left over the ten
-    parity positions and the remainder of that polynomial division by
-    :data:`BCH_GENERATOR` supplies the parity, so the result is
-    ``data << 10 | parity``. This is the module's only BCH implementation:
-    :func:`encode_format_info` masks its result for placement and the candidate
-    set :func:`decode_bits` searches is generated from it, so no codeword is ever
-    transcribed by hand.
+    ISO/IEC 18004:2015(E) §7.9.1: the data bits are shifted left over the ten parity positions and
+    the remainder of that division by :data:`BCH_GENERATOR` supplies the parity, so the result is
+    ``data << 10 | parity``. The module's only BCH implementation: every legal codeword is generated
+    from it, none transcribed.
     """
     remainder = data << 10
     while remainder.bit_length() > 10:
@@ -228,24 +191,14 @@ def _bch_codeword(data: int) -> int:
 def encode_format_info(ec_level: str, mask: int) -> int:
     """Encode an EC level and mask reference into its 15-bit format information.
 
-    The inverse of the codeword search in :func:`decode_bits`, and the reason this
-    module needs no format table: all 32 legal values -- at exactly the
-    ISO/IEC 18004:2015(E) Annex C / Table C.1 sequences -- and any corrupted
-    variant of them can be constructed on demand by a test.
-
-    Args:
-        ec_level: ``L``, ``M``, ``Q`` or ``H``.
-        mask: mask reference in 0-7.
-
-    Returns:
-        The 15-bit value as it appears in the symbol: the two-bit EC indicator
-        (:data:`EC_INDICATORS`), then the three-bit mask reference, then the ten
-        BCH parity bits, XOR :data:`FORMAT_MASK`.
+    The inverse of :func:`decode_bits`' search and the reason this module needs no format table: the
+    two-bit indicator (:data:`EC_INDICATORS`), the three-bit mask reference and ten BCH parity bits,
+    XOR :data:`FORMAT_MASK`, construct all 32 ISO/IEC 18004:2015(E) Annex C / Table C.1 values on
+    demand.
 
     Raises:
-        ValueError: ``ec_level`` is not one of the four levels, or ``mask`` is not
-            an integer in 0-7. Both are programmer errors in a caller's argument,
-            never symbol damage.
+        ValueError: ``ec_level`` is not one of the four levels, or ``mask`` is not an integer in
+            0-7 -- programmer errors, never symbol damage.
     """
     if ec_level not in EC_INDICATORS:
         raise ValueError(f"unknown EC level {ec_level!r}; expected one of {_EC_LEVEL_ORDER}")
@@ -256,10 +209,8 @@ def encode_format_info(ec_level: str, mask: int) -> int:
 
 
 def _legal_codewords() -> tuple[tuple[int, str, int], ...]:
-    """Build the 32 unmasked codewords as ``(codeword, ec_level, mask)`` triples.
-
-    Generated in :data:`_EC_LEVEL_ORDER` then ascending mask, so the tuple is
-    identical on every import and on every interpreter.
+    """Build the 32 unmasked codewords as ``(codeword, ec_level, mask)`` triples, in
+    :data:`_EC_LEVEL_ORDER` then ascending mask, so the tuple is identical every import.
     """
     return tuple(
         (_bch_codeword((EC_INDICATORS[level] << 3) | mask), level, mask)
@@ -280,14 +231,9 @@ def _is_legal_module_count(module_count: int) -> bool:
 
 
 def _version_for_module_count(module_count: int) -> int:
-    """Return the version implied by a Model 2 module count.
-
-    Used only to validate :func:`format_info_positions`' argument: the version a
-    sampled grid implies is owned by ``qrcheck/decode/matrix.py``, so this module
-    publishes no version helper of its own.
-
-    Raises:
-        ValueError: ``module_count`` is not ``4V + 17`` for a version in 1-40.
+    """Return the version implied by a Model 2 module count, validating
+    :func:`format_info_positions`' argument only -- the version a grid implies belongs to
+    ``matrix.py``. ``ValueError`` when it is not ``4V + 17`` for a version in 1-40.
     """
     if not isinstance(module_count, int) or not _is_legal_module_count(module_count):
         raise ValueError(
@@ -339,29 +285,16 @@ def format_info_positions(
 ) -> tuple[tuple[tuple[int, int], ...], tuple[tuple[int, int], ...]]:
     """Return the ``(row, column)`` coordinates of format bits 0-14 in both copies.
 
-    ``positions[bit]`` is the module carrying bit ``bit``, with bit 0 the least
-    significant bit of the 15-bit codeword, so the standard's MSB-first reading
-    order is ``reversed(positions)``. Coordinates are indexed as
-    ``matrix[row][column]``, matching :data:`~qrcheck.decode.base.Matrix`.
-
-    Copy 0 sits around the top-left finder pattern and never moves. Copy 1 is
-    split between the top-right and bottom-left corners, so it depends on the
-    module count: bits 0-7 run along row 8 from column ``N - 1`` down to
-    ``N - 8``, and bits 8-14 run up column 8 from row ``N - 7`` to ``N - 1``.
-    The fixed dark module at ``(N - 8, 8)`` carries no format bit and is never
-    returned, and neither is any timing-pattern module (row 6 or column 6).
-
-    Args:
-        module_count: ``N = 4V + 17`` for a Model 2 symbol of version ``V``.
-
-    Returns:
-        ``(copy 0, copy 1)``, each a 15-position tuple.
+    ``positions[bit]`` carries bit ``bit``, bit 0 the least significant of the 15-bit codeword, so
+    the standard's MSB-first order is ``reversed(positions)``; coordinates index as
+    ``matrix[row][column]``. Copy 0 sits around the top-left finder and never moves. Copy 1 splits
+    between the top-right and bottom-left corners: bits 0-7 run along row 8 from column ``N - 1``
+    down to ``N - 8``, bits 8-14 up column 8 from row ``N - 7`` to ``N - 1``. The fixed dark module
+    at ``(N - 8, 8)`` and every timing-pattern module are never returned.
 
     Raises:
-        ValueError: ``module_count`` is not a legal Model 2 dimension. That is a
-            programmer error in the caller's argument; a grid whose dimension is
-            unusable yields ``None`` from :func:`read_format_copies` instead of
-            reaching this function's error.
+        ValueError: ``module_count`` is not a legal Model 2 dimension -- a caller error; an
+            unusable grid yields ``None`` from :func:`read_format_copies` instead.
     """
     _version_for_module_count(module_count)
     copy_one: tuple[tuple[int, int], ...] = (
@@ -376,9 +309,8 @@ def format_info_positions(
 def _module_count(matrix: Matrix) -> int | None:
     """Return the module count of a grid, or ``None`` when it is not a legal one.
 
-    Only the outer length is consulted: a grid whose rows or columns are shorter
-    than the module count is caught when a position is read, so a ragged grid
-    degrades copy by copy instead of failing as a whole.
+    Only the outer length is consulted, so a ragged grid degrades copy by copy instead of failing as
+    a whole.
     """
     try:
         module_count = len(matrix)
@@ -392,10 +324,8 @@ def _module_count(matrix: Matrix) -> int | None:
 def _read_copy(matrix: Matrix, positions: tuple[tuple[int, int], ...]) -> int | None:
     """Accumulate one copy's 15 bits MSB-first, or ``None`` if it cannot be read.
 
-    Bit 14 is read first so the returned integer is the codeword in its natural
-    orientation. A position outside the grid (short row, ragged grid, non-indexable
-    object) makes the whole copy unreadable, because a copy missing a module is not
-    a copy with an unknown bit.
+    Bit 14 is read first so the integer is the codeword in its natural orientation; a position
+    outside the grid makes the whole copy unreadable.
     """
     raw = 0
     try:
@@ -410,19 +340,14 @@ def _read_copy(matrix: Matrix, positions: tuple[tuple[int, int], ...]) -> int | 
 def read_format_copies(matrix: Matrix) -> tuple[int | None, int | None]:
     """Read both copies of the 15-bit format information out of a module grid.
 
-    Any object indexable as ``matrix[row][column]`` works: the sampled
-    ``numpy.bool_`` grid of :data:`~qrcheck.decode.base.Matrix` and a plain
-    list-of-lists are both valid, and a truthy cell means a **dark** module, so a
-    set bit is a ``1``. No polarity normalisation happens here -- an inverted
-    symbol is normalised by the consensus layer before it samples a grid.
-
-    Args:
-        matrix: the sampled module grid, ``N x N`` with dark modules truthy.
+    Any object indexable as ``matrix[row][column]`` works, and a truthy cell is a dark module, so a
+    set bit is a ``1``. No polarity normalisation happens here: an inverted symbol is normalised by
+    the consensus layer before it samples a grid.
 
     Returns:
-        ``(copy 0, copy 1)`` as raw 15-bit integers, each ``None`` when that copy
-        could not be read -- unreadable object, unusable dimension, or a grid too
-        short or too ragged to hold every one of its 15 positions.
+        ``(copy 0, copy 1)`` as raw 15-bit integers, each ``None`` when that copy could not be read
+        -- an unreadable object, an unusable dimension, or a grid too short or too ragged to hold
+        all 15 positions.
     """
     module_count = _module_count(matrix)
     if module_count is None:
@@ -434,24 +359,13 @@ def read_format_copies(matrix: Matrix) -> tuple[int | None, int | None]:
 def decode_bits(raw: int) -> tuple[str, int, int] | None:
     """Decode one copy's raw 15 bits into ``(ec_level, mask, bit_errors)``.
 
-    The copy is unmasked with :data:`FORMAT_MASK` and then matched against the 32
-    generated codewords. Because the code's minimum Hamming distance is 7 and
-    ``2 * 3 < 7``, the correction spheres of radius three cannot overlap, so at
-    most one candidate is ever within range and no tie can occur; the search
-    still keeps the nearest candidate and breaks an impossible tie by codeword
-    order rather than by iteration order, so the answer never depends on how the
-    candidate set was built.
-
-    Args:
-        raw: the 15 bits as read from the grid, mask still applied. Anything
-            supporting ``__index__`` is accepted -- a Python ``int`` and a
-            ``numpy`` integer alike -- and anything else yields ``None``, so a
-            caller cannot turn an unusable value into an exception.
-
-    Returns:
-        The recovered level and mask together with the number of bit errors
-        corrected (0-3), or ``None`` when no codeword lies within three bits --
-        which is the honest answer for a copy damaged beyond its redundancy.
+    The copy is unmasked with :data:`FORMAT_MASK` and matched against the 32 generated codewords.
+    The code's minimum Hamming distance is 7 and ``2 * 3 < 7``, so radius-3 correction spheres
+    cannot overlap and no tie can occur; the search still breaks an impossible tie by codeword
+    order, never by iteration order. Returns the corrected distance (0-3), or ``None`` when no
+    codeword lies within three bits -- the honest answer for a copy damaged beyond its redundancy.
+    Any value supporting ``__index__`` is accepted; anything else yields ``None`` rather than an
+    exception.
     """
     try:
         value = operator.index(raw)
@@ -473,18 +387,13 @@ def decode_bits(raw: int) -> tuple[str, int, int] | None:
 def decode_format_info(matrix: Matrix) -> FormatInfo | None:
     """Recover the symbol's format information from both of its copies.
 
-    Each copy is decoded independently and the one with the smaller
-    ``bit_errors`` wins, because a symbol that spent redundancy on one copy is
-    read from the copy that spent less. A tie keeps copy 0, which is a fixed
-    choice and not whichever copy happened to decode first.
-
-    Args:
-        matrix: the sampled module grid, ``N x N`` with dark modules truthy.
+    Each copy is decoded independently and the smaller ``bit_errors`` wins, because a symbol that
+    spent redundancy on one copy is read from the copy that spent less; a tie keeps copy 0, a fixed
+    choice rather than whichever copy decoded first.
 
     Returns:
-        The recovered :class:`FormatInfo` carrying both copies' distances, or
-        ``None`` when neither copy could be recovered from the grid. Never raises
-        for unreadable symbol data.
+        The recovered :class:`FormatInfo` carrying both copies' distances, or ``None`` when neither
+        copy could be recovered. Never raises for unreadable symbol data.
     """
     raw_zero, raw_one = read_format_copies(matrix)
     decoded_zero = None if raw_zero is None else decode_bits(raw_zero)

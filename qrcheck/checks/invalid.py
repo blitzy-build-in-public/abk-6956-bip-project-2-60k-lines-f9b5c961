@@ -1,65 +1,32 @@
 """The invalid-input family: ``IV-BAD-OPTION``, ``IV-EMPTY`` and ``IV-OVERCAPACITY``.
 
-AAP §0.8.1's component-to-check-family table, its "What the built-in targets must do for the
-``IV-*`` cases" table, §0.8.2's validation rules and their documented bypass, and §0.9.1.
-These three checks are the product's contract test of a target's *refusal* behaviour: a
-generator that silently accepts an empty payload, an out-of-contract option or a payload
-larger than the symbol it was pinned to is broken in a way no round-trip assertion can see,
-because the symbol it returns may decode perfectly.
+The product's contract test of a target's *refusal* behaviour (AAP §0.8.1, §0.8.2, §0.9.1): a
+generator that silently accepts an empty payload, an out-of-contract option or a payload larger than
+the symbol it was pinned to is broken in a way no round-trip assertion can see.
 
-``IV-EMPTY`` sends ``payload=b""`` at level M in a PNG with a four-pixel module size and a
-four-module quiet zone.  A declared rejection is the expected outcome; a returned symbol is a
-*documented success* and passes too, which is AAP §0.3.5's substitute for the wrong assertion
-that a target must reject anything the framework dislikes.  A crash, a ``TargetContractError``
-or an artefact that is empty or of the wrong format fails with ``Reason.CONTRACT_ERROR``.
-``IV-OVERCAPACITY`` pins Version 10 at level M and sends one byte more than Version 10 holds
-at level **L**: a declared rejection passes, while a returned symbol is decoded once and fails
-with ``Reason.CAPACITY_VIOLATION``, recording ``requested_len``, ``capacity``,
-``decoded_len`` and ``first_divergence_offset`` -- the evidence AAP §0.4.5 requires of the
-``over_capacity_acceptance`` defect.  ``IV-BAD-OPTION`` runs four probes, each breaking one
-rule the port's builder enforces -- ``ec_level="X"``, ``module_size_px=0``,
-``quiet_zone_modules=-1``, and a colour pair below the target's **declared** ``contrast_floor``
--- where a declared rejection passes and a returned symbol fails with
-``Reason.VALUE_MISMATCH``, because the target accepted a request it must refuse.
+* ``IV-EMPTY`` sends ``payload=b""`` at error level M in a PNG with a four-pixel module size and a
+  four-module quiet zone. A declared rejection **is** the expected outcome; a returned symbol is a
+  *documented success* and passes too (AAP §0.3.5: "declared rejection **or** documented success,
+  never a crash, never a partially written file"). A crash, a ``TargetContractError`` or an empty or
+  wrong-format artefact fails with ``Reason.CONTRACT_ERROR``.
+* ``IV-OVERCAPACITY`` pins Version 10 at error level M and sends one byte more than Version 10 holds
+  at level **L**. A declared rejection passes; a returned symbol is decoded once and fails with
+  ``Reason.CAPACITY_VIOLATION``, recording ``requested_len``, ``capacity``, ``decoded_len`` and
+  ``first_divergence_offset`` -- the evidence AAP §0.4.5 requires.
+* ``IV-BAD-OPTION`` runs four probes, each breaking exactly one rule the port's builder enforces:
+  ``ec_level="X"``, ``module_size_px=0``, ``quiet_zone_modules=-1``, and a colour pair below the
+  target's **declared** ``contrast_floor``. A returned symbol fails with ``Reason.VALUE_MISMATCH``.
 
-The over-capacity length is ``max_payload_bytes(10, "L", "byte") + 1`` -- 272 bytes against
-level M's 213 -- rather than §0.8.1's ``max_payload_bytes(10, "M", ...) + 1``, because §0.4.2
-also requires the payload to exceed the L-level capacity: an ``M + 1`` payload would fit
-comfortably after the ``defective`` target's D1 downshift and the probe would stop proving
-anything about over-capacity acceptance.  Both figures come from
-:mod:`qrcheck.corpus.capacity` at call time and are never transcribed.
+Why the over-capacity payload is measured against level L: AAP §0.8.1 phrases the probe as
+``max_payload_bytes(10, "M", "byte") + 1``, while §0.4.2 requires the payload to exceed the L-level
+capacity so ``wrong_ec_level``'s downshift cannot rescale it into an acceptable range. Level L holds
+more than level M, so the length is ``max_payload_bytes(10, "L", "byte") + 1`` -- 272 bytes against
+level M's 213 -- read from :mod:`qrcheck.corpus.capacity` at call time.
 
-Every request here is built by :func:`qrcheck.checks.support.construct_out_of_contract`,
-AAP §0.8.2's one documented bypass of :func:`qrcheck.checks.support.build`, and every result
-records ``out_of_contract=True`` so ``request.json`` states that the request was deliberately
-illegal.
-
-Six cases, one ``generate`` call each, and a decode only where an accepted symbol has to be
-measured: ``IV-EMPTY`` 1 case, 1 encode, 0 decodes; ``IV-OVERCAPACITY`` 1 case, 1 encode, 1
-decode; ``IV-BAD-OPTION`` 4 cases, 4 encodes, 0 decodes.  Those counts are
-:data:`EXPECTED_ENCODES`, the declaration AAP §0.4.3 makes a counting stub assert, so a retry
-added anywhere here would surface as the declared count plus one.  There is no retry, no
-re-run-on-failure and no quarantine path.
-
-:func:`qrcheck.checks.support.case_status_for_error` is the single translation of an adapter
-error, called rather than reimplemented: a ``TargetRejected`` is a pass with the target's text
-verbatim in ``decoded["rejection"]``, a ``TargetContractError`` is a failure with reason
-``contract_error``, and a ``TargetUnsupported`` is a skip.  ``TargetUnavailable`` and
-``TargetTimeout`` are not caught, because ``qrcheck.runner`` owns the one-error-result-per-check
-target-loss policy, and a target that cannot be reached must not look like one that accepted an
-illegal request.  There is no bare or broad ``except`` in this file.
-
-This file owns no request validation (the port's builder), no capability pre-gate
-(:func:`qrcheck.checks.support.generate`), no result vocabulary or failure identifier
-(:mod:`qrcheck.report.model`), no evidence layout or artefact set
-(:mod:`qrcheck.report.evidence`), and no threshold: the contrast floor is read from the
-resolved :class:`~qrcheck.config.models.TargetConfig`.  The four-module size, the four-module
-quiet zone and Version 10 are the request values AAP §0.8.1 tabulates, not thresholds.
-
-Determinism: nothing here reads a clock for an assertion, a random source, ``hash()``,
-``id()``, the filesystem or a locale; the six cases are generated in ``case_id`` order and the
-contrast probe's colour ladder is a fixed tuple, so ``duration_ms`` is the only measurement
-that varies between two runs and it is recorded and never asserted (AAP §0.5.5).
+Every request is built by :func:`qrcheck.checks.support.construct_out_of_contract`, AAP §0.8.2's
+one documented bypass, and every result is recorded with ``out_of_contract=True``. The workload is
+six cases and six ``generate`` calls -- 1/1/0 for ``IV-EMPTY``, 1/1/1 for ``IV-OVERCAPACITY``, 4/4/0
+for ``IV-BAD-OPTION`` -- which is :data:`EXPECTED_ENCODES`, with no retry.
 """
 
 from __future__ import annotations
@@ -95,10 +62,8 @@ __all__ = [
     "overcapacity_cases",
 ]
 
-# The adapter-invocation counts AAP §0.4.3 declares for this family: one ``generate`` per
-# case, and no second call anywhere.  ``tests/unit/test_checks_negative.py`` drives each
-# check with a counting stub and asserts the observed count equals this table, so a retry
-# introduced anywhere in this module fails that test as the declared count plus one.
+# The adapter-invocation counts AAP §0.4.3 declares for this family: one ``generate`` per case,
+# and no second call anywhere; ``tests/unit/test_checks_negative.py`` asserts the observed count.
 EXPECTED_ENCODES: Final[Mapping[str, int]] = MappingProxyType(
     {
         "IV-BAD-OPTION": 4,
@@ -126,30 +91,25 @@ _PROBE_EC_LEVEL: Final[str] = "M"
 _PROBE_MODULE_SIZE_PX: Final[int] = 4
 _PROBE_QUIET_ZONE_MODULES: Final[int] = 4
 
-# ``IV-OVERCAPACITY``'s pin and levels.  The version is pinned so the capacity bound is a
-# fact about one symbol rather than a scan; the requested level is M, and the payload is
-# sized against level L so AAP §0.4.2's cascade containment holds (see the module
-# docstring).  The capacity unit follows the mode: byte mode counts bytes.
+# ``IV-OVERCAPACITY``'s pin and levels: the version is pinned so the capacity bound is a fact about
+# one symbol rather than a scan; the requested level is M and the payload is sized against level L,
+# so AAP §0.4.2's cascade containment holds.  The capacity unit follows the mode: byte mode counts
+# bytes.
 _OVERCAPACITY_VERSION: Final[int] = 10
 _OVERCAPACITY_REQUESTED_EC: Final[str] = "M"
 _OVERCAPACITY_SIZING_EC: Final[str] = "L"
 _OVERCAPACITY_MODE: Final[str] = "byte"
 
-# The filler the over-capacity payload is built from.  Lowercase letters and a colon put
-# the bytes outside the numeric and alphanumeric charsets, so every encoder -- the two
-# built-in targets and :func:`qrcheck.corpus.payloads.mode_of` alike -- reads the payload
-# in byte mode, which is the mode the capacity figures above are measured in.
+# The filler the over-capacity payload is built from: lowercase letters and a colon put the bytes
+# outside the numeric and alphanumeric charsets, so every encoder reads it in byte mode.
 _OVERCAPACITY_FILLER: Final[bytes] = b"qrcheck-overcapacity-probe:"
 
-# The background the below-floor contrast probe measures against, and the grey ladder it
-# walks from darkest to lightest.  Ladder order is lightness order, so the ratio against a
-# white background strictly decreases along it and the first entry below the declared
-# floor is the darkest -- that is, the closest to the floor -- admissible probe.  ``0x88``
-# is first because it is the ≈3.5:1 pair AAP §0.8.1 tabulates, and it is the entry chosen
-# whenever the target declares the documented 7.0 floor; a target that declares a tighter
-# floor still gets a genuine below-floor probe, and the last entry (white on white, ratio
-# 1.0) is below any floor the configuration schema accepts, since it requires a floor
-# greater than 1.0.
+# The background the below-floor contrast probe measures against, and the grey ladder it walks from
+# darkest to lightest.  Ladder order is lightness order, so the ratio against white strictly
+# decreases and the first entry below the declared floor is the darkest admissible probe.  ``0x88``
+# is first because it is the ≈3.5:1 pair AAP §0.8.1 tabulates, chosen whenever the target
+# declares the documented 7.0 floor; white on white, ratio 1.0, is below any floor the schema
+# accepts.
 _CONTRAST_BACKGROUND_RGB: Final[tuple[int, int, int]] = (0xFF, 0xFF, 0xFF)
 _CONTRAST_GREY_LADDER: Final[tuple[int, ...]] = (
     0x88,
@@ -170,32 +130,20 @@ _CONTRAST_GREY_LADDER: Final[tuple[int, ...]] = (
 # and the result's expectation cannot disagree about which illegal value was sent.
 _OUT_OF_CONTRACT_EC_LEVEL: Final[str] = "X"
 
-# The key that marks a deliberately illegal request, written into the result's own
-# request projection so ``summary.json`` and ``request.json`` both say it.  The evidence
-# store sets the same key from its own constant; the two agree because the name is AAP
-# §0.8.2's, and a pass -- which writes no evidence at all -- is the case that would
-# otherwise carry an unmarked probe request.
+# The key that marks a deliberately illegal request, written into the result's own projection so
+# ``summary.json`` and ``request.json`` both say it.  The evidence store sets the same AAP §0.8.2
+# name; a pass writes no evidence, and would otherwise carry an unmarked probe request.
 _OUT_OF_CONTRACT_KEY: Final[str] = "out_of_contract"
 
 
 class _OnAcceptedSymbol(enum.StrEnum):
     """What a returned symbol means for the check that received it.
 
-    The target's refusal is the expected outcome of every probe in this family, so the
-    interesting case is the one where a symbol comes back anyway: this decides what the
-    check reports then, and it is the only place the three checks differ in that respect.
-
-    ``DOCUMENTED_SUCCESS`` is ``IV-EMPTY``'s -- AAP §0.3.5's substitute for "the target
-    must reject anything the framework dislikes" is "declared rejection **or** documented
-    success, never a crash, never a partially written file", so an accepted empty payload
-    passes while an incomplete artefact still fails.
-
-    ``CAPACITY_VIOLATION`` is ``IV-OVERCAPACITY``'s: an accepted over-capacity request is
-    the ``over_capacity_acceptance`` defect, so the symbol is decoded once and the case
-    fails with the measurements AAP §0.4.5 names.
-
-    ``VALUE_MISMATCH`` is ``IV-BAD-OPTION``'s: a target that accepts an out-of-contract
-    option has not done what it declared it would do.
+    The target's refusal is the expected outcome of every probe in this family, so the interesting
+    case is the one where a symbol comes back anyway, and this is the only place the three checks
+    differ. ``DOCUMENTED_SUCCESS`` is ``IV-EMPTY``'s, by AAP §0.3.5; ``CAPACITY_VIOLATION`` is
+    ``IV-OVERCAPACITY``'s, where an accepted over-capacity request is the defect; ``VALUE_MISMATCH``
+    is ``IV-BAD-OPTION``'s, where the target has not done what it declared.
     """
 
     DOCUMENTED_SUCCESS = "documented_success"
@@ -207,16 +155,11 @@ class _OnAcceptedSymbol(enum.StrEnum):
 class _Requested:
     """One probe's request, plus the premise its result records beside the outcome.
 
-    Built per case execution rather than once at case enumeration, so a defect in a
-    probe's arithmetic becomes one case's ``error`` result instead of failing the whole
-    check's case list.
-
-    ``expected`` is what the case asserted and reaches the report's ``expected`` field;
-    ``request_extra`` is the resolved premise that belongs in ``request.json`` beside the
-    request itself (AAP §0.3.4: the case's resolved parameters).  Both are recorded
-    because a reader must be able to check the probe's premise -- the measured contrast
-    ratio and the declared floor, the requested length and the capacity -- without
-    consulting this module.
+    Built per case execution rather than once at case enumeration, so a defect in a probe's
+    arithmetic becomes one case's ``error`` result instead of failing the whole check's case list.
+    ``expected`` reaches the report's ``expected`` field and ``request_extra`` the resolved premise
+    in ``request.json``, so a reader can check the premise -- the measured contrast ratio and
+    declared floor, the requested length and capacity -- without consulting this module.
     """
 
     request: GenerateRequest
@@ -234,12 +177,9 @@ class _Requested:
 def empty_cases(ctx: RunContext) -> Iterator[Case]:
     """Yield ``IV-EMPTY``'s single case: an empty payload at error level M.
 
-    The request is the one AAP §0.8.1 tabulates -- ``payload=b""``, error level M, a PNG
-    with a four-pixel module size and a four-module quiet zone -- so the empty payload is
-    the only rule it breaks.
-
-    Args:
-        ctx: The run's context, passed through to the case's executor.
+    The request is the one AAP §0.8.1 tabulates -- ``payload=b""``, error level M, a PNG with a
+    four-pixel module size and a four-module quiet zone -- so the empty payload is the only rule it
+    breaks.
 
     Yields:
         One case, ``synthetic:iv-empty``.
@@ -262,9 +202,6 @@ def empty_cases(ctx: RunContext) -> Iterator[Case]:
 def overcapacity_cases(ctx: RunContext) -> Iterator[Case]:
     """Yield ``IV-OVERCAPACITY``'s single case: a payload over Version 10's capacity.
 
-    Args:
-        ctx: The run's context, passed through to the case's executor.
-
     Yields:
         One case, ``synthetic:iv-overcapacity``.
     """
@@ -286,16 +223,11 @@ def overcapacity_cases(ctx: RunContext) -> Iterator[Case]:
 def bad_option_cases(ctx: RunContext) -> Iterator[Case]:
     """Yield ``IV-BAD-OPTION``'s four cases, ascending by case identifier.
 
-    The order is the identifiers' own rather than the order the probes were thought of, so
-    the sequence is the one every report and every evidence directory would list anyway
-    (AAP §0.5.3).
-
-    Args:
-        ctx: The run's context, passed through to each case's executor.
+    The order is the identifiers' own rather than the order the probes were thought of, so the
+    sequence is the one every report and every evidence directory lists (AAP §0.5.3).
 
     Yields:
-        Four cases: ``synthetic:iv-bad-option-contrast``, ``-ec``, ``-module-size`` and
-        ``-quiet-zone``.
+        ``synthetic:iv-bad-option-contrast``, ``-ec``, ``-module-size`` and ``-quiet-zone``.
     """
     for probe in _BAD_OPTION_PROBES:
         yield _case(
@@ -309,17 +241,9 @@ def bad_option_cases(ctx: RunContext) -> Iterator[Case]:
 def _empty_request(ctx: RunContext) -> _Requested:
     """Return the empty-payload probe's request and premise.
 
-    Both outcomes are acceptable, which is why the premise records it: a declared
-    rejection passes, and a documented success passes with
-    ``decoded["outcome"] = "documented_success"``.  Only a crash or an incomplete
-    artefact fails (AAP §0.3.5).
-
-    Args:
-        ctx: Unused; the signature is this family's single builder shape, so one executor
-            can call every builder.
-
-    Returns:
-        The out-of-contract request and the premise ``request.json`` records.
+    Both outcomes are acceptable, which is why the premise records it: a declared rejection passes,
+    and a documented success passes with ``decoded["outcome"] = "documented_success"``. Only a crash
+    or an incomplete artefact fails (AAP §0.3.5).
     """
     request = support.construct_out_of_contract(
         b"",
@@ -338,17 +262,11 @@ def _empty_request(ctx: RunContext) -> _Requested:
 def _overcapacity_request(ctx: RunContext) -> _Requested:
     """Return the over-capacity probe's request and premise.
 
-    The payload is one byte longer than the pinned version holds at level **L**, so it
-    exceeds the capacity at the requested level M by a wide margin and cannot be rescued
-    by a target that quietly encodes one level lower (AAP §0.4.2).  Both lengths are read
-    from :mod:`qrcheck.corpus.capacity` at call time; the requested level is the one the
-    request names, and that is the capacity the assertion is measured against.
-
-    Args:
-        ctx: Unused; the signature is this family's single builder shape.
-
-    Returns:
-        The out-of-contract request and the premise ``request.json`` records.
+    The payload is one byte longer than the pinned version holds at level **L**, so it exceeds the
+    capacity at the requested level M by a wide margin and cannot be rescued by a target that
+    quietly encodes one level lower (AAP §0.4.2). Both lengths are read from
+    :mod:`qrcheck.corpus.capacity` at call time; the requested level is the capacity the assertion
+    is measured against.
     """
     capacity = max_payload_bytes(
         _OVERCAPACITY_VERSION, _OVERCAPACITY_REQUESTED_EC, _OVERCAPACITY_MODE
@@ -381,11 +299,7 @@ def _overcapacity_request(ctx: RunContext) -> _Requested:
 def _ec_request(ctx: RunContext) -> _Requested:
     """Return the invalid-error-level probe's request and premise.
 
-    Args:
-        ctx: Unused; the signature is this family's single builder shape.
-
-    Returns:
-        The out-of-contract request and the premise ``request.json`` records.
+    ``ec_level="X"`` is outside ``L``/``M``/``Q``/``H``, so the port's builder would refuse it.
     """
     request = support.construct_out_of_contract(_PROBE_PAYLOAD, _OUT_OF_CONTRACT_EC_LEVEL)
     expected: dict[str, Any] = {
@@ -399,11 +313,7 @@ def _ec_request(ctx: RunContext) -> _Requested:
 def _module_size_request(ctx: RunContext) -> _Requested:
     """Return the zero-module-size probe's request and premise.
 
-    Args:
-        ctx: Unused; the signature is this family's single builder shape.
-
-    Returns:
-        The out-of-contract request and the premise ``request.json`` records.
+    ``module_size_px=0`` is the one rule the request breaks.
     """
     request = support.construct_out_of_contract(
         _PROBE_PAYLOAD, _PROBE_EC_LEVEL, module_size_px=0
@@ -419,11 +329,7 @@ def _module_size_request(ctx: RunContext) -> _Requested:
 def _quiet_zone_request(ctx: RunContext) -> _Requested:
     """Return the negative-quiet-zone probe's request and premise.
 
-    Args:
-        ctx: Unused; the signature is this family's single builder shape.
-
-    Returns:
-        The out-of-contract request and the premise ``request.json`` records.
+    ``quiet_zone_modules=-1`` is the one rule the request breaks.
     """
     request = support.construct_out_of_contract(
         _PROBE_PAYLOAD, _PROBE_EC_LEVEL, quiet_zone_modules=-1
@@ -439,18 +345,11 @@ def _quiet_zone_request(ctx: RunContext) -> _Requested:
 def _contrast_request(ctx: RunContext) -> _Requested:
     """Return the below-floor-contrast probe's request and premise.
 
-    The floor is the target's **declared** ``contrast_floor``, read from the resolved
-    configuration for the target under test -- never a literal here, because a threshold
-    has one home and this is not it (AAP §0.6.2).  AAP §0.8.1's request is a grey on
-    white measuring ≈3.5:1 against the documented 7.0 floor; a target that declares a
-    tighter floor gets a lighter grey that is still genuinely below it, and the measured
-    ratio is recorded so the premise is auditable from the report alone.
-
-    Args:
-        ctx: The run's context; its configuration names the declared floor.
-
-    Returns:
-        The out-of-contract request and the premise ``request.json`` records.
+    The floor is the target's **declared** ``contrast_floor``, read from the resolved configuration
+    for the target under test -- never a literal here, because a threshold has one home (AAP
+    §0.6.2). AAP §0.8.1's request is a grey on white measuring ≈3.5:1 against the documented 7.0
+    floor; a target that declares a tighter floor gets a lighter grey that is still genuinely below
+    it, and the measured ratio is recorded so the premise is auditable from the report alone.
     """
     floor = _declared_contrast_floor(ctx)
     foreground = _below_floor_foreground(floor)
@@ -497,8 +396,8 @@ _BAD_OPTION_PROBES: Final[tuple[_OptionProbe, ...]] = (
 class _Planned:
     """One case's identity, its expected-outcome rule and the builder of its request.
 
-    The three travel together because every executor needs all three and the identity is
-    what the result, its evidence directory and its failure identifier are filed under.
+    The three travel together because every executor needs all three, and the identity is what the
+    result, its evidence directory and its failure identifier are filed under.
     """
 
     check_id: str
@@ -515,22 +414,13 @@ def _case(
 ) -> Case:
     """Return the registry case that executes one probe.
 
-    The case carries only the identifier and a callable, so the runner decides whether it
-    runs at all; the request is built inside the callable, which is what keeps a defect in
-    one probe's arithmetic from failing the enumeration of a check's other cases.
-
-    Args:
-        check_id: The owning check's stable identifier.
-        case_id: The case's stable identifier, in ``synthetic:<name>`` form.
-        on_accept: What a returned symbol means for this check.
-        build: The builder of the request this case sends.
-
-    Returns:
-        The case, ready for the runner.
+    The case carries only the identifier and a callable, so the runner decides whether it runs at
+    all; the request is built inside the callable, which keeps a defect in one probe's arithmetic
+    from failing the enumeration of a check's other cases.
 
     Raises:
-        ValueError: ``case_id`` is not a ``synthetic:`` identifier, or it is the runner's
-            own ``synthetic:target``; or an identifier is empty.
+        ValueError: ``case_id`` is not a ``synthetic:`` identifier, or it is the runner's own
+            ``synthetic:target``; or an identifier is empty.
     """
     planned = _Planned(
         check_id=check_id, case_id=case_id, on_accept=on_accept, build=build
@@ -545,30 +435,18 @@ def _case(
 def _run(ctx: RunContext, planned: _Planned) -> CaseResult:
     """Run one probe: send its request and report what the target did with it.
 
-    One execution path for all six cases, so the family cannot treat two probes
-    differently by accident.  The adapter error table is
-    :func:`qrcheck.checks.support.case_status_for_error`'s and is not restated here: a
-    ``TargetRejected`` passes with the target's text verbatim, a ``TargetContractError``
-    fails with ``contract_error``, a ``TargetUnsupported`` skips -- and
-    ``TargetUnavailable``/``TargetTimeout`` are re-raised by that translator, because a
-    target that cannot be reached must not look like one that answered.
-
-    Exactly one ``generate`` call is made per case, which is the ``1``/``4`` of
-    :data:`EXPECTED_ENCODES`; nothing here retries.
-
-    Args:
-        ctx: The run's context.
-        planned: The case's identity, expected-outcome rule and request builder.
-
-    Returns:
-        The case's result, carrying its evidence directory when it did not pass.
+    One execution path for all six cases, so the family cannot treat two probes differently by
+    accident. The adapter error table is :func:`qrcheck.checks.support.case_status_for_error`'s and
+    is not restated here: a ``TargetRejected`` passes with the target's text verbatim, a
+    ``TargetContractError`` fails with ``contract_error``, a ``TargetUnsupported`` skips, and
+    ``TargetUnavailable``/``TargetTimeout`` are re-raised by that translator. Exactly one
+    ``generate`` call is made per case, which is the ``1``/``4`` of :data:`EXPECTED_ENCODES`.
 
     Raises:
-        TargetUnavailable: The target could not be reached; the runner owns the
-            one-error-result-per-check policy.
-        TargetTimeout: No response within the configured timeout, for the same reason.
-        ValueError: A probe's own arithmetic is defective -- a colour ladder that cannot
-            place a ratio below the declared floor.  The runner records an ``error``.
+        TargetUnavailable: The target could not be reached; the runner owns the one-error-result-
+        per-check policy. TargetTimeout: No response within the configured timeout, for the same
+        reason. ValueError: A probe's own arithmetic is defective -- a colour ladder that cannot
+        place a ratio below the declared floor. The runner records an ``error``.
     """
     requested = planned.build(ctx)
     started = time.perf_counter()
@@ -609,23 +487,10 @@ def _documented_success(
 ) -> CaseResult:
     """Report an empty payload the target chose to encode anyway.
 
-    AAP §0.3.5 makes "declared rejection **or** documented success" the correct assertion
-    for ``IV-EMPTY``, so a returned symbol passes -- and the case deliberately does not
-    decode it, because the product has no assertion to make about what an encoder does
-    with an empty payload.  What is still asserted is that the answer is an artefact at
-    all: an empty body or one of the wrong format is a partially written file, which is
-    the failure the same rule names.
-
-    Args:
-        ctx: The run's context.
-        planned: The case's identity and expected-outcome rule.
-        requested: The request that was sent, with its premise.
-        symbol: What the target returned.
-        duration_ms: How long the invocation took; recorded, never asserted.
-
-    Returns:
-        A passing result, or a failure with ``Reason.CONTRACT_ERROR`` when the artefact is
-        incomplete.  No evidence is persisted for a pass, which is the store's policy.
+    AAP §0.3.5 makes "declared rejection **or** documented success" the correct assertion for ``IV-
+    EMPTY``, so a returned symbol passes, and the case deliberately does not decode it. What is
+    still asserted is that the answer is an artefact at all: an empty body or one of the wrong
+    format is a partially written file, reported as ``Reason.CONTRACT_ERROR``.
     """
     complete = bool(symbol.image_bytes) and (
         symbol.output_format == requested.request.output_format
@@ -675,26 +540,12 @@ def _over_capacity_accepted(
 ) -> CaseResult:
     """Report a symbol the target produced for an over-capacity request.
 
-    This is the ``over_capacity_acceptance`` defect, and the case fails with
-    ``Reason.CAPACITY_VIOLATION`` whatever the symbol contains: a version and level were
-    pinned, the payload exceeds what that symbol holds, and the target answered with an
-    artefact instead of a rejection.  The symbol is decoded exactly once so the evidence
-    can say *what* it did with the request -- AAP §0.4.5 asks for ``decoded_len`` and
-    ``first_divergence_offset``, and AAP §0.6.1 reads them from ``decoded.json`` beside
-    ``capacity``.
-
-    A symbol neither decoder can read is still a violation; ``decoded_len`` is then
-    ``None`` and the decoder's own complaint travels in ``decoded["per_decoder"]``.
-
-    Args:
-        ctx: The run's context.
-        planned: The case's identity and expected-outcome rule.
-        requested: The request that was sent, with its premise.
-        symbol: What the target returned.
-        duration_ms: How long the invocation took; recorded, never asserted.
-
-    Returns:
-        A failing result with ``Reason.CAPACITY_VIOLATION`` and its evidence directory.
+    This is the ``over_capacity_acceptance`` defect: the case fails with
+    ``Reason.CAPACITY_VIOLATION`` whatever the symbol contains, because a version and level were
+    pinned, the payload exceeds what that symbol holds, and the target answered with an artefact
+    instead of a rejection. The symbol is decoded once so the evidence can say what it did -- AAP
+    §0.4.5 asks for ``decoded_len`` and ``first_divergence_offset`` beside ``capacity``. A symbol
+    neither decoder can read is still a violation; ``decoded_len`` is then ``None``.
     """
     decoded = support.decode(ctx, symbol.image_bytes, requested.request)
     measurements: dict[str, Any] = {
@@ -736,21 +587,11 @@ def _bad_option_accepted(
 ) -> CaseResult:
     """Report a symbol the target produced for an out-of-contract option.
 
-    Each probe breaks exactly one rule of the request contract, and a target that answers
-    one with a symbol has accepted a request it had to refuse, so the case fails with
-    ``Reason.VALUE_MISMATCH``.  The symbol travels as evidence so a reader can see what
-    was produced for the illegal request; nothing about it is decoded, because the
-    finding is the acceptance, not the payload.
-
-    Args:
-        ctx: The run's context.
-        planned: The case's identity and expected-outcome rule.
-        requested: The request that was sent, with its premise.
-        symbol: What the target returned.
-        duration_ms: How long the invocation took; recorded, never asserted.
-
-    Returns:
-        A failing result with ``Reason.VALUE_MISMATCH`` and its evidence directory.
+    Each probe breaks exactly one rule of the request contract, and a target that answers one with a
+    symbol has accepted a request it had to refuse, so the case fails with
+    ``Reason.VALUE_MISMATCH``. The symbol travels as evidence so a reader can see what was produced;
+    nothing about it is decoded,
+    because the finding is the acceptance, not the payload.
     """
     decoded: dict[str, Any] = {
         "outcome": "accepted_symbol",
@@ -779,15 +620,9 @@ def _bad_option_accepted(
 def _projection(request: GenerateRequest) -> dict[str, Any]:
     """Return the request's JSON-ready projection, marked as deliberately illegal.
 
-    The marker is set on the result's own projection rather than left to the evidence
-    store, because a *passing* case writes no evidence at all and would otherwise reach
-    ``summary.json`` with an unmarked probe request.
-
-    Args:
-        request: The request the case sent.
-
-    Returns:
-        The projection ``summary.json`` and ``request.json`` both carry.
+    The marker is set on the result's own projection rather than left to the evidence store, because
+    a
+    *passing* case writes no evidence and would otherwise reach ``summary.json`` unmarked.
     """
     projected = request.as_dict()
     projected[_OUT_OF_CONTRACT_KEY] = True
@@ -797,18 +632,11 @@ def _projection(request: GenerateRequest) -> dict[str, Any]:
 def _with_premise(result: CaseResult, premise: Mapping[str, Any]) -> CaseResult:
     """Return `result` with the probe's measurements recorded beside its expectation.
 
-    The translator's own keys win on a collision, because its ``outcome`` names what the
-    probe expected at the point the target failed -- ``usable_artefact`` for a contract
-    error, ``declared_rejection`` for a declared rejection -- while the probe's
-    measurements (the requested length and capacity, the measured ratio and declared
-    floor, the offending field) are added beside it.
-
-    Args:
-        result: The result the translator produced.
-        premise: The probe's premise, as :class:`_Requested` recorded it.
-
-    Returns:
-        The result, unchanged when it already carries the premise.
+    The translator's own keys win on a collision, because its ``outcome`` names what the probe
+    expected at the point the target failed -- ``usable_artefact`` for a contract error,
+    ``declared_rejection`` for a declared rejection -- while the probe's measurements (the requested
+    length and capacity, the measured ratio and declared floor, the offending field) are added
+    beside it. The result is returned unchanged when it already carries the premise.
     """
     merged: dict[str, Any] = {**premise, **(result.expected or {})}
     if merged == (result.expected or {}):
@@ -819,18 +647,12 @@ def _with_premise(result: CaseResult, premise: Mapping[str, Any]) -> CaseResult:
 def _overcapacity_payload(length: int) -> bytes:
     """Return a deterministic byte-mode payload of exactly `length` bytes.
 
-    Byte mode is what the capacity figures are measured in, and the filler holds lowercase
-    letters, so no encoder can spend a smaller charset and fit the payload after all.
-
-    Args:
-        length: The payload length in bytes, at least one.
-
-    Returns:
-        The payload.
+    Byte mode is what the capacity figures are measured in, and the filler holds lowercase letters,
+    so no encoder can spend a smaller charset and fit the payload after all.
 
     Raises:
-        ValueError: ``length`` is not a positive integer -- a programming error, since the
-            caller derives it from a capacity table that is never smaller than one byte.
+        ValueError: ``length`` is not a positive integer -- a programming error, since the caller
+            derives it from a capacity table that is never smaller than one byte.
     """
     if isinstance(length, bool) or not isinstance(length, int) or length < 1:
         raise ValueError(f"an over-capacity payload needs a positive length, got {length!r}")
@@ -841,17 +663,10 @@ def _overcapacity_payload(length: int) -> bytes:
 def _first_divergence_offset(requested: bytes, decoded: bytes | None) -> int | None:
     """Return the offset at which `decoded` first stops matching `requested`.
 
-    ``None`` when the two are identical or when nothing was decoded at all.  When the
-    decoded payload is a strict prefix of the requested one -- the signature of a target
-    that truncated instead of rejecting -- the offset is the shorter length, which is the
-    truncation point.
-
-    Args:
-        requested: The payload the framework asked for.
-        decoded: The payload the symbol carried, or ``None`` when it did not decode.
-
-    Returns:
-        The zero-based offset, or ``None``.
+    ``None`` when the two are identical or when nothing was decoded at all. When the decoded payload
+    is
+    a strict prefix of the requested one -- the signature of a target that truncated instead of
+    rejecting -- the offset is the shorter length, which is the truncation point.
     """
     if decoded is None:
         return None
@@ -867,18 +682,9 @@ def _first_divergence_offset(requested: bytes, decoded: bytes | None) -> int | N
 def _declared_contrast_floor(ctx: RunContext) -> float:
     """Return the contrast floor the target under test declares.
 
-    Read from the resolved configuration for the running adapter's own ``[targets.<name>]``
-    record, so the probe measures against the floor the target is actually held to.  A
-    target with no record -- a stub in a test, say -- falls back to the declared default,
-    which is the same floor ``RN-CONTRAST`` asserts and the same one a target that declares
-    nothing is held to (AAP §0.3.4); the number itself lives in
-    :mod:`qrcheck.config.models` and is never written here.
-
-    Args:
-        ctx: The run's context; only its configuration and the adapter's name are read.
-
-    Returns:
-        The floor as a float greater than ``1.0``.
+    Read from the resolved configuration for the running adapter's own ``[targets.<name>]`` record.
+    A target with no record -- a stub in a test, say -- falls back to the declared default, the same
+    floor ``RN-CONTRAST`` asserts (AAP §0.3.4); the number lives in :mod:`qrcheck.config.models`.
     """
     declared: TargetConfig | None = ctx.config.targets.get(ctx.adapter.name)
     if declared is None:
@@ -890,20 +696,12 @@ def _below_floor_foreground(floor: float) -> tuple[int, int, int]:
     """Return the darkest grey from the fixed ladder whose ratio sits below `floor`.
 
     The ladder runs from ``0x88`` -- AAP §0.8.1's ≈3.5:1 pair, chosen whenever the target
-    declares the documented 7.0 floor -- towards white, so a target declaring a tighter
-    floor still receives a request that is genuinely below it rather than a probe that
-    silently stopped being one.
-
-    Args:
-        floor: The target's declared contrast floor, greater than ``1.0``.
-
-    Returns:
-        The grey as a three-channel colour.
+    declares the documented 7.0 floor -- towards white, so a target declaring a tighter floor still
+    receives a request genuinely below it.
 
     Raises:
-        ValueError: No ladder entry measures below `floor`, which can only happen for a
-            floor at or below ``1.0`` -- a value the configuration schema refuses, so it
-            means the record was hand-built.
+        ValueError: No ladder entry measures below `floor`, which can only happen for a floor at or
+            below ``1.0`` -- a value the schema refuses, so it means the record was hand-built.
     """
     for level in _CONTRAST_GREY_LADDER:
         candidate = (level, level, level)
@@ -921,19 +719,11 @@ def _measured_contrast_ratio(
 ) -> float:
     """Return the WCAG contrast ratio between two colours, from the one implementation.
 
-    Delegated to :func:`qrcheck.decode.consensus.contrast_ratio`, which the built-in
-    targets refuse a request with and ``RN-CONTRAST`` asserts at or above, so the number
-    this probe is constructed against and the number a target measures cannot drift apart.
-    Imported at the point of use because that module loads ``numpy`` and ``Pillow`` when it
-    is imported, and a process that only lists checks must not start an image stack --
-    the rule :func:`qrcheck.checks.support.decode` follows for the same reason.
-
-    Args:
-        foreground: The dark-module colour, three ``0-255`` integers.
-        background: The light-module colour, three ``0-255`` integers.
-
-    Returns:
-        The ratio, ``>= 1.0``.
+    Delegated to :func:`qrcheck.decode.consensus.contrast_ratio`, which the built-in targets refuse
+    a request with and ``RN-CONTRAST`` asserts at or above, so the number this probe is constructed
+    against and the number a target measures cannot drift apart. Imported at the point of use
+    because that module loads ``numpy`` and ``Pillow``, and a process that only lists checks must
+    not start an image stack.
     """
     from qrcheck.decode.consensus import contrast_ratio
 
@@ -943,10 +733,6 @@ def _measured_contrast_ratio(
 def _elapsed_ms(started: float) -> float:
     """Return the milliseconds elapsed since `started`, never negative.
 
-    Args:
-        started: A :func:`time.perf_counter` reading taken before the target was called.
-
-    Returns:
-        The duration in milliseconds, recorded in the result and never asserted.
+    Recorded in the result and never asserted.
     """
     return max(0.0, (time.perf_counter() - started) * 1000.0)

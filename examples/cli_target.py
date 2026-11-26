@@ -1,15 +1,11 @@
 #!/usr/bin/env python3
-"""Example QR generator driven by the ``cli`` adapter.
+"""Example QR generator driven by the ``cli`` adapter: the working counterpart of
+``qrcheck/targets/cli.py``. ``tests/integration/test_cli_adapter.py`` executes it and
+``docs/targets.md`` quotes the canonical table below, so that table is the one CI keeps working.
 
-This script is the working counterpart of ``qrcheck/targets/cli.py``: the adapter
-builds argv from a target's ``command``, ``payload_arg`` and ``output_arg``
-templates, runs it without a shell under ``timeout_s``, and reads the symbol back
-from the output file when ``returns = "file_path"``.
-``tests/integration/test_cli_adapter.py`` executes this script and
-``docs/targets.md`` quotes the configuration below, so that configuration is the
-one CI keeps working. The script imports nothing from ``qrcheck`` by design: an
-example that leaned on the framework testing it would hide exactly the coupling
-the adapter contract forbids.
+Run it from the repository root with the interpreter the dependencies are installed in::
+
+    .venv/bin/python examples/cli_target.py --payload-b64 <BASE64> --output <PATH>
 
 Canonical configuration:
 
@@ -24,84 +20,17 @@ timeout_s = 30.0
 capabilities = ["png"]
 ```
 
-How that ``command`` is run: as a literal argv list with no shell, from the
-framework's own working directory, and the child inherits the framework's
-environment and working directory. No word of ``command`` is ever rendered, so the
-block above is written to run from the repository root, which is where
-``examples/cli_target.py`` lives.
+Exactly one payload source is given -- ``--payload-b64 <BASE64>`` (``-`` reads stdin),
+``--payload-utf8 <TEXT>``, ``--payload-stdin`` or a positional text payload -- always with
+``--output <PATH>``. A template produces one argv word, so the table conveys the payload and
+the artefact path alone and ``capabilities`` lists ``png`` and nothing else: declaring an
+operation it cannot transmit would make the dependent check resolve as runnable. A bare
+``python`` may lack ``segno``, whose exit 1 with a traceback the adapter correctly reports as
+a contract error.
 
-The interpreter is part of the contract. ``.venv/bin/python`` is the interpreter the
-framework and its pinned dependencies are installed into, and the documented
-per-clone setup creates that environment at the repository root. A bare ``python`` is
-whatever the host's ``PATH`` names -- on the documented host, CPython 3.13 without
-``segno`` -- so this file's ``import segno`` fails with ``ModuleNotFoundError``, the
-child exits 1 without declaring a rejection, and the adapter reports a contract error
-quoting the traceback. That classification is correct: an interpreter without the
-dependency set is not a symbol the framework may judge. Name the interpreter the
-dependencies are installed in, as above.
-
-Both argument templates are drawn from the adapter's placeholder vocabulary: a bare
-``{}`` in ``payload_arg`` carries the payload as UTF-8 text, a bare ``{}`` in
-``output_arg`` carries the path of the file the adapter named, and ``{payload_b64}``
-carries the payload base64-encoded, which is the form ``--payload-b64`` strictly
-decodes. The named forms ``{payload_utf8}``, ``{ec_level}``, ``{format}``,
-``{size}``, ``{margin}``, ``{fg}`` and ``{bg}`` carry the payload as UTF-8 text, the
-error level, the output format, the module size and quiet zone the request pins, and
-the request's foreground and background colours. That is why the payload template
-above names ``{payload_b64}`` and not ``{}``: a bare ``{}`` beside ``--payload-b64``
-would hand the flag raw UTF-8 text, which this script refuses as invalid base64.
-
-A template produces exactly one argv word, so a configuration conveys at most one
-value through ``payload_arg`` and one through ``output_arg``. ``capabilities``
-accordingly lists only ``png``. The canonical block above spends both words on the
-payload and the artefact path, leaving no per-request channel for the error level, the
-module size, the quiet zone, the colours, a version or mask pin -- the vocabulary has
-no placeholder for either -- or a logo overlay, so declaring any of those capabilities
-would claim an operation this configuration cannot convey. A check whose required
-capabilities are not declared reports ``skipped`` with reason
-``unsupported_capability``: the honest outcome, instead of measuring a symbol built
-from this file's own defaults and reporting the difference as a target failure.
-
-An alternative, when fixed values are all a target needs, is to put them in
-``command`` as literal words rather than in a template::
-
-    command = [
-        ".venv/bin/python", "examples/cli_target.py",
-        "--ec", "Q", "--size", "6", "--margin", "2",
-    ]
-
-Those values then apply to every request -- the run's EC level never reaches the
-target -- so the level- and geometry-specific checks still skip, and ``capabilities``
-still declares only what a per-request value would require: a statically fixed value
-is not a capability this configuration conveys.
-
-Invocation: ``--payload-b64 <BASE64>``, ``--payload-utf8 <TEXT>``,
-``--payload-stdin`` or a bare positional text payload, always with
-``--output <PATH>``.
-
-Payload bytes that do not survive an argv word -- a NUL, a byte that is not UTF-8 --
-arrive on stdin instead. The adapter writes the raw payload to the child's stdin when
-``payload_arg`` is a flag with no placeholder, passing that flag as one argv word, so
-the adapter-reachable spelling for this file is ``payload_arg = "--payload-b64=-"``:
-``--payload-b64`` reads its value from the same word and treats the literal ``-`` as
-"read ``sys.stdin.buffer``". ``payload_arg = "--payload-stdin"`` is the form for a
-flag that takes no value at all, which this file also offers. The two-word
-``--payload-b64 -`` is only the shell spelling of the first: the adapter never splits
-a template into two argv words, so a configuration that copies it passes the single
-word ``--payload-b64`` with no value, argparse exits 2 with a usage error, and the
-adapter reports a contract error instead of a symbol.
-
-Scope: PNG only. ``svg`` and ``logo_overlay`` are absent from the capability list
-because this script emits no SVG and composites no logo; any other output format
-is refused, never approximated.
-
-Rejection protocol: a request-shaped fault (payload, error level, geometry, colour
-or capacity) prints exactly one line of JSON ``{"error": "<message>"}`` to stdout
-and exits 2, which the adapter maps to ``TargetRejected``. A missing ``--output``
-is an argparse usage error on stderr, and an unexpected internal failure exits 1
-with its traceback on stderr; both are contract errors, not declared refusals.
-Nothing else is ever written to stdout, so a successful run writes no output.
-"""
+A request-shaped fault prints one JSON line ``{"error": "<message>"}`` to stdout and exits 2
+(``TargetRejected``); a missing ``--output`` is an argparse usage error and an internal fault
+exits 1 with its traceback, both contract errors. A successful run writes no stdout."""
 
 import argparse
 import base64

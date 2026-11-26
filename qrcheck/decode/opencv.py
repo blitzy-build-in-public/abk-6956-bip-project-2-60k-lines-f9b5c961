@@ -1,57 +1,22 @@
 """The secondary reference decoder: OpenCV's ``QRCodeDetector``, corroboration only.
 
-``opencv-python-headless`` 4.10 is the *second opinion* of the decode pipeline.
-Its payload corroborates the primary decoder's, and its rectified module image is
-the fallback geometry source when the primary decoder's corner quadrangle cannot
-be snapped to a legal module count. It is never the authority for any check --
-the primary decoder is -- and its silence is recorded as ``undetected``, never as
-a disagreement, so a symbol this decoder cannot read can never fail a conforming
-target.
+``opencv-python-headless`` 4.10 is the second opinion of the decode pipeline: its payload
+corroborates the primary decoder's and its rectified module image is the fallback geometry source
+when the primary's corner quadrangle cannot be snapped to a legal module count, but it is never the
+authority for any check and its silence is ``undetected``, never a disagreement, so a symbol it
+cannot read can never fail a conforming target.
 
-Four limitations of the pinned binding are documented here because each one
-changes how the consensus layer must read this decoder's answer:
+Four limitations of the pinned binding shape how consensus reads it: no metadata at all
+(``reported_ec`` and ``reported_version`` are always ``None``, which is evidence rather than a gap);
+no inverted detection, which is why consensus decodes the 255-inverted copy itself; fragility under
+damage, where a miss and a detection without a decode map to distinct ``error_text`` values; and an
+unreliable one-module quiet zone, which produces the ``primary_only`` case consensus records rather
+than judges.
 
-* **No metadata.** ``detectAndDecode`` exposes neither the version, the error
-  correction level nor the mask, so ``reported_ec`` and ``reported_version`` are
-  always ``None``. That is evidence, not a gap: a future binding that reports
-  them populates the fields without a consumer change.
-* **No inverted detection.** A light-on-dark symbol is not detected at all
-  (verified against 4.10.0), which is why ``consensus.py`` decodes the
-  255-inverted copy for an inverted request instead of relying on decoder
-  support.
-* **Fragile under damage.** Blur, low resolution, distortion and occlusion make
-  it either miss the symbol or detect it without decoding. The two cases are
-  mapped to distinct ``error_text`` values so ``decoded.json`` shows which
-  happened.
-* **Narrow quiet zones are unreliable.** Detection is not guaranteed for a
-  one-module border, so such a symbol may report ``undetected`` here while the
-  primary decoder reads it -- the ``primary_only`` case consensus is built to
-  record rather than to judge. Nothing may be concluded from this decoder's
-  silence under damage.
-
-Three contracts hold for everything in this module:
-
-* **It never raises for a decode failure.** A missing binding, or an exception
-  from it, becomes an outcome with ``status="error"``, because the consensus
-  layer treats a secondary error as absence and must never be able to
-  manufacture a ``decoder_disagreement`` out of it. ``ValueError`` is reserved
-  for a caller defect: an image that is not a ``numpy.uint8`` grayscale or
-  three-channel array.
-* **Nothing heavy is imported at import time.** ``cv2`` is resolved lazily, so
-  ``import qrcheck.decode`` carries no native image stack and the degradation
-  path stays exercisable.
-* **A decoded payload is text, not bytes.** ``detectAndDecode`` returns ``str``,
-  so ``payload`` is the UTF-8 encoding of that text and consensus compares this
-  decoder *as text* -- never as the byte-exact authority, which is what keeps
-  the binary corpus classes from failing round-trip on a conforming target. A
-  zero-length payload is not representable at all: the binding returns ``""``
-  for an empty payload exactly as it does for a symbol it detected but could not
-  decode, and both map to ``undetected`` here.
-
-The decoder is a degradable dependency: when it is not importable the run
-proceeds in single-decoder mode with ``agreement == "primary_only"`` and a
-banner in ``index.html``. No check is ever marked passed on the strength of the
-missing decoder.
+It never raises for a decode failure -- a missing binding, or an exception from it, becomes
+``status="error"``, because consensus treats a secondary error as absence and must never manufacture
+a ``decoder_disagreement``. ``cv2`` is resolved lazily, and ``ValueError`` is reserved for a caller
+defect.
 """
 
 from __future__ import annotations
@@ -97,20 +62,10 @@ _NOT_DECODED_TEXT: Final = "symbol detected but not decoded"
 class SecondaryReading:
     """One call's outcome, plus the rectified module image the binding produced.
 
-    ``straight_qrcode`` is the only artefact this decoder contributes that
-    :class:`~qrcheck.decode.base.DecoderOutcome` cannot carry: OpenCV's
-    rectified square, exactly ``N`` by ``N`` pixels for ``N = 4V + 17``, which
-    ``qrcheck/decode/matrix.py`` uses as its fallback module-count source when
-    the primary decoder's quadrangle cannot be snapped to a legal dimension
-    (recorded there as ``SampledMatrix.source == "straight_qrcode"``). The array
-    is a private C-order ``numpy.uint8`` copy, so a consumer may read it freely
-    and no consumer can mutate the binding's buffer. It is ``None`` whenever
-    there was nothing to rectify: no detection, a detection without a decode, a
-    missing dependency, or an error.
-
-    ``outcome`` is the answer itself -- payload, payload digest, corner
-    quadrangle, polarity and error text -- and is what the consensus layer
-    records in ``per_decoder``.
+    ``straight_qrcode`` is the one artefact :class:`~qrcheck.decode.base.DecoderOutcome` cannot
+    carry: OpenCV's rectified square, exactly ``N`` by ``N`` pixels, which ``matrix.py`` uses as its
+    fallback module-count source (``SampledMatrix.source == "straight_qrcode"``). It is a private
+    C-order copy and ``None`` whenever there was nothing to rectify.
     """
 
     outcome: DecoderOutcome
@@ -120,29 +75,13 @@ class SecondaryReading:
 def decode_secondary(image: numpy.ndarray, *, polarity: Polarity = "original") -> DecoderOutcome:
     """Decode ``image`` with OpenCV and return the outcome on its own.
 
-    This is the interface the decode pipeline consumes; a caller that also needs
-    the rectified module image as a geometry fallback calls
-    :func:`read_secondary` instead and takes its ``outcome``.
-
-    Args:
-        image: An ``H x W`` ``numpy.uint8`` grayscale or ``H x W x 3``
-            ``numpy.uint8`` colour image. Grayscale is preferred and is what the
-            consensus layer passes; for a three-channel array OpenCV reads the
-            channels as BGR, which grayscale avoids entirely.
-        polarity: The polarity ``image`` was presented at. It is recorded
-            verbatim on the outcome so evidence shows which pass produced the
-            answer; this wrapper never inverts the image itself.
-
-    Returns:
-        The decoder's outcome: ``decoded`` with a UTF-8 payload and its digest,
-        ``undetected`` with ``no symbol detected`` or ``symbol detected but not
-        decoded`` in ``error_text``, or ``error`` when the binding is missing or
-        raised.
+    The interface the decode pipeline consumes; a caller that also needs the rectified module image
+    as a geometry fallback calls :func:`read_secondary`. ``polarity`` is recorded verbatim on the
+    outcome, and this wrapper never inverts the image itself.
 
     Raises:
-        ValueError: ``image`` is not a non-empty ``numpy.uint8`` grayscale or
-            three-channel array -- a caller defect rather than a decode result,
-            which is why it is the one thing this module raises.
+        ValueError: ``image`` is not a non-empty ``numpy.uint8`` grayscale or three-channel
+            array -- a caller defect rather than a decode result.
     """
     return read_secondary(image, polarity=polarity).outcome
 
@@ -152,44 +91,17 @@ def read_secondary(
 ) -> SecondaryReading:
     """Decode ``image`` with OpenCV, returning the outcome and the rectified grid.
 
-    The binding is called as ``QRCodeDetector().detectAndDecode(image)``, which
-    returns ``(decoded_info, points, straight_qrcode)``. The mapping is fixed:
-
-    * ``points is None`` -- nothing was detected anywhere: ``status`` is
-      ``undetected`` and ``error_text`` is ``"no symbol detected"``.
-    * ``points`` present but ``decoded_info`` empty -- the geometry was found and
-      the payload was not: ``status`` is ``undetected``, ``error_text`` is
-      ``"symbol detected but not decoded"``, and ``position`` carries the real
-      quadrangle, because the geometry is genuine even though the payload is
-      not. A zero-length payload is indistinguishable from this case and is
-      reported the same way.
-    * ``decoded_info`` non-empty -- ``status`` is ``decoded``, ``payload`` is the
-      UTF-8 encoding of that text, ``payload_sha256`` is its ``sha256`` digest
-      and ``position`` is the four corner ``(x, y)`` pairs of the binding's
-      ``(1, 4, 2)`` array.
-
-    A fresh ``QRCodeDetector`` is constructed per call, so no mutable state is
-    shared between calls and two runs of the same image cannot influence each
-    other. ``reported_ec`` and ``reported_version`` are always ``None``: the
-    binding reports neither.
-
-    Args:
-        image: An ``H x W`` ``numpy.uint8`` grayscale or ``H x W x 3``
-            ``numpy.uint8`` colour image (BGR channel order for colour).
-        polarity: The polarity ``image`` was presented at, recorded verbatim on
-            the outcome. Inversion is the caller's job: this wrapper does not
-            invert, because the second pass for an inverted request belongs to
-            the consensus layer that also runs the primary decoder on it.
-
-    Returns:
-        A :class:`SecondaryReading` whose ``outcome`` never carries a fabricated
-        payload and whose ``straight_qrcode`` is the rectified ``N x N`` module
-        image when the binding produced one, else ``None``.
+    ``QRCodeDetector().detectAndDecode(image)`` returns ``(decoded_info, points, straight_qrcode)``,
+    and the mapping is fixed: ``points is None`` is ``undetected`` with ``error_text`` ``"no symbol
+    detected"``; ``points`` present without ``decoded_info`` is ``undetected`` with ``"symbol
+    detected but not decoded"`` while ``position`` keeps the genuine geometry; non-empty
+    ``decoded_info`` is ``decoded`` with the UTF-8 payload, its ``sha256`` digest and the four
+    corner pairs. A fresh detector per call shares no state, and ``reported_ec`` with
+    ``reported_version`` are always ``None``.
 
     Raises:
-        ValueError: ``image`` is not a non-empty ``numpy.uint8`` grayscale or
-            three-channel array. This is the only failure this function raises:
-            a missing or failing decoder is reported as an outcome.
+        ValueError: ``image`` is not a non-empty ``numpy.uint8`` array of an accepted shape; a
+            missing or failing decoder is an outcome, not a raise.
     """
     decodable = _as_decodable_image(image)
     module = _load_cv2()
@@ -265,18 +177,9 @@ def read_secondary(
 def _load_cv2() -> types.ModuleType | None:
     """Return the ``cv2`` module, or ``None`` when it is not usable.
 
-    Resolved at call time rather than at module import time, so importing the
-    decode package never loads a native image stack and ``qrcheck doctor`` can
-    report this decoder's absence without paying for its import.
-
-    Two failures both mean absent, because either one leaves the binding
-    unusable: the distribution is not installed, which raises ``ImportError``,
-    and the distribution is installed but its compiled extension cannot be
-    loaded -- a wrong architecture, or a missing native library such as
-    ``libGL.so.1`` -- which raises ``OSError`` rather than ``ImportError``.
-    Neither is allowed to escape as a traceback: the caller reports the absence
-    as an outcome, which is the documented single-decoder degradation, not an
-    ``error`` result forced on the consensus layer.
+    Resolved at call time, so importing the decode package loads no native image stack. An
+    ``ImportError`` from an absent distribution and an ``OSError`` from a compiled extension that
+    cannot be loaded both mean absent, and neither escapes as a traceback.
     """
     try:
         return importlib.import_module("cv2")
@@ -287,20 +190,10 @@ def _load_cv2() -> types.ModuleType | None:
 def _as_decodable_image(image: numpy.ndarray) -> numpy.ndarray:
     """Validate ``image`` and return it as a contiguous array the binding accepts.
 
-    Only the two shapes the pipeline produces are accepted -- ``H x W``
-    grayscale and ``H x W x 3`` colour -- so an image of another dtype or shape
-    can never decode differently by accident; the binding would raise an opaque
-    overload error for a float or boolean array instead of a diagnosable one.
-
-    Args:
-        image: The array a caller presented for decoding.
-
-    Returns:
-        The same pixels as a C-contiguous ``numpy.uint8`` array.
-
-    Raises:
-        ValueError: ``image`` is empty, is not ``numpy.uint8``, or is neither
-            two-dimensional nor three-channel.
+    Only the two shapes the pipeline produces are accepted -- ``H x W`` grayscale and ``H x W x 3``
+    colour -- so an image of another dtype or shape cannot decode differently by accident, the
+    binding raising an opaque overload error instead of a diagnosable one. ``ValueError`` when
+    ``image`` is empty, is not ``numpy.uint8``, or is neither two-dimensional nor three-channel.
     """
     array = numpy.asarray(image)
     if array.dtype != numpy.uint8:
@@ -326,12 +219,9 @@ def _as_decodable_image(image: numpy.ndarray) -> numpy.ndarray:
 def _payload_from(decoded_info: object) -> bytes | None:
     """Return the payload the binding reported, or ``None`` when it reported none.
 
-    ``detectAndDecode`` returns a ``str``, and the empty string is the binding's
-    only signal for "no payload": it is what a symbol it detected but could not
-    decode produces, and also what a zero-length payload produces. Neither is
-    turned into bytes, so a zero-length payload is reported as ``undetected``
-    rather than as a decoded empty payload consensus could compare against a
-    legitimate empty request.
+    ``""`` is the binding's only signal for no payload -- a symbol detected but not decoded and a
+    zero-length payload alike -- so it is never turned into bytes: a zero-length payload would
+    otherwise be compared against a legitimate empty request.
     """
     if not isinstance(decoded_info, str) or decoded_info == "":
         return None
@@ -341,10 +231,9 @@ def _payload_from(decoded_info: object) -> bytes | None:
 def _quad(points: object) -> tuple[tuple[float, float], ...] | None:
     """Return the detected corner quadrangle as four ``(x, y)`` float pairs.
 
-    The binding reports a ``(1, 4, 2)`` array of the symbol's corners in
-    source-image pixel coordinates. Anything that is not exactly four corners
-    yields ``None`` rather than a partial geometry, so no consumer ever samples
-    a module grid from an incomplete quadrangle.
+    The binding reports a ``(1, 4, 2)`` array of the symbol's corners in source-image pixel
+    coordinates; anything that is not exactly four corners yields ``None``, so no consumer ever
+    samples a grid from an incomplete quadrangle.
     """
     if points is None:
         return None
@@ -360,10 +249,9 @@ def _quad(points: object) -> tuple[tuple[float, float], ...] | None:
 def _rectified(straight_qrcode: object) -> numpy.ndarray | None:
     """Return the binding's rectified module image as a private ``uint8`` copy.
 
-    The array is ``N x N`` for ``N = 4V + 17`` and is the fallback module-count
-    source for grid sampling. It is copied into C order so the caller can
-    neither mutate the buffer the binding owns nor depend on its strides, and it
-    is ``None`` whenever the binding produced no rectified image.
+    The ``N x N`` array is the fallback module-count source for grid sampling; it is copied into C
+    order so no caller mutates the buffer the binding owns, and is ``None`` whenever the binding
+    produced no rectified image.
     """
     if straight_qrcode is None:
         return None

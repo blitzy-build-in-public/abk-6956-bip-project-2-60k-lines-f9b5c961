@@ -1,56 +1,26 @@
 """Determinism: one identical request, asked twice, must come back as one identical symbol.
 
-AAP §0.8.1's component-to-check-family table and case-matrix row for ``DT-DETERMINISTIC``, and
-§0.4.5's "defects observable only indirectly".  A symbol may be valid, in range and decodable in
-each of two calls and still be a different symbol, so the defect is invisible unless a pair of
-calls is compared -- which is the only thing this check does.
+``DT-DETERMINISTIC`` is the product's only check of *reproducibility* (AAP §0.8.1, §0.4.5 "defects
+observable only indirectly"): a symbol may be valid, in range and decodable in each of two calls and
+still be a different symbol, so the defect is invisible unless a pair of calls is compared.
 
-Two invocations of the **identical** request must agree on all three of the artefact's image
-bytes (``symbol_sha256`` per call), the sampled module matrix (``matrix_sha256``) and the mask
-read out of the symbol's 15-bit format information.  All three, because each catches something
-the others cannot: a byte comparison alone would pass a target whose writer is deterministic
-while the symbol it wrote was not, and would fail one whose writer embeds a chunk a symbol need
-not repeat; the mask is the one value an encoder chooses freely per call, which is what
-``non_deterministic_mask`` changes and a single symbol can never reveal; the matrix digest is the
-structural statement the format information corroborates semantically.
+Two invocations of the **identical** request must agree on all three of the artefact's image bytes
+(``symbol_sha256`` per call), the sampled module matrix (``matrix_sha256``) and the mask read out of
+the
+15-bit format information. All three, because each catches what the others cannot: a byte comparison
+alone would pass a target whose writer is deterministic while the symbol it wrote was not, and the
+mask is the one value an encoder chooses freely per call.
 
-Reasons emitted, and nothing else: ``Reason.VALUE_MISMATCH`` when at least one component that
-*could* be measured differs between the two calls -- ``decoded["divergent"]`` names which and
-``decoded["comparison"]`` carries the per-component verdict, with both calls' full projections
-beside it -- and ``Reason.SAMPLING_FAILED`` when nothing diverged but at least one component
-could not be measured because the module grid could not be recovered, whose ``sampling`` entry
-carries the estimate's own reason; that case fails rather than passing on the components that
-were readable, because "identical" cannot be claimed over a component nobody read, and a proven
-divergence always wins over this reason.  ``TargetRejected``, ``TargetContractError`` and
-``TargetUnsupported`` go through :func:`qrcheck.checks.support.case_status_for_error`, the
-product's single translation, and ``TargetUnavailable``/``TargetTimeout`` propagate unchanged
-because the one-error-result-per-check target-loss policy belongs to :mod:`qrcheck.runner`.  No
-other reason is constructed here and no ``error`` result is ever built -- that status is the
-runner's alone.
+Reasons emitted, and nothing else: ``Reason.VALUE_MISMATCH`` when a component that could be measured
+differs (``decoded["divergent"]`` names which), and ``Reason.SAMPLING_FAILED`` when nothing diverged
+but a component could not be measured -- and a proven divergence always wins over that.
+``TargetRejected``, ``TargetContractError`` and ``TargetUnsupported`` go through
+:func:`qrcheck.checks.support.case_status_for_error`; ``TargetUnavailable`` and ``TargetTimeout``
+propagate unchanged, because the target-loss policy belongs to :mod:`qrcheck.runner`.
 
-Exactly two invocations per case, and never a third: six declared payloads asked for twice is
-**12 encodes and 12 decodes** per full run, which :data:`EXPECTED_ENCODES` declares and
-``tests/unit/test_checks_negative.py`` asserts against a counting stub (AAP §0.4.3, §0.5.6).  A
-third confirming call, a retry loop or a "re-ask until stable" would register as the declared
-count plus one and destroy the only property this check proves -- that the framework asks once
-and believes the answer.  The second call is never skipped because the first one looked wrong: a
-check that fails intermittently is a framework defect to fix, never one to suppress.
-
-Request construction and validation (:func:`qrcheck.checks.support.build`, itself a delegation to
-the port's builder), the generation and decode path, the result vocabulary, the evidence layout
-and every threshold belong to other modules: this check asserts no duration, no size and no
-limit, so it reads no configuration at all.  The one artefact name it chooses is the second
-symbol, which reaches disk as ``symbol-repeat.png`` through ``repeat_symbol``.
-
-Nothing here is random, so nothing derives a seed: the payloads are module constants, the case
-order is ascending by case identifier, and the run seed is recorded on each result only so a case
-can be replayed against the same run.  No clock value reaches an assertion -- the two calls'
-duration is recorded and that is all it is for -- and every digest is ``sha256``.
-
-It imports the standard library, the check registry, the result model and
-:mod:`qrcheck.checks.support`, and does **not** import :mod:`qrcheck.decode` at run time: that
-package loads ``numpy``, and ``qrcheck list`` must not pay for a native image stack to print
-twenty-one check titles, so the decode types are imported for their annotations only.
+Exactly two invocations per case, never a third: six declared payloads asked for twice are **12
+encodes and 12 decodes** per full run, which :data:`EXPECTED_ENCODES` declares and
+``tests/unit/test_checks_negative.py`` asserts against a counting stub (AAP §0.4.3, §0.5.6).
 """
 
 from __future__ import annotations
@@ -65,11 +35,10 @@ from qrcheck.checks import support
 from qrcheck.registry.check import DEPENDENCY_PRIMARY_DECODER, Case, RunContext, check
 from qrcheck.report.model import CaseResult, Reason
 
-# The port, never an adapter. ``Capability`` is what the check's requirement is declared
-# with, and the three error types are the closed vocabulary its handler must name to route
-# them through the shared translation; ``TargetUnavailable`` and ``TargetTimeout`` are
-# deliberately absent from that import, because catching them would stop the runner from
-# applying its target-loss policy.
+# The port, never an adapter. ``Capability`` declares the check's requirement, and the three
+# error types are the closed vocabulary its handler routes through the shared translation;
+# ``TargetUnavailable`` and ``TargetTimeout`` are deliberately not imported, because catching them
+# would stop the runner applying its target-loss policy.
 from qrcheck.targets.base import (
     Capability,
     TargetContractError,
@@ -98,12 +67,10 @@ CHECK_ID: Final[str] = "DT-DETERMINISTIC"
 _SYNTHETIC_PREFIX: Final[str] = "synthetic:"
 
 # The six payloads, one per case, in the order the case identifiers number them. Declared
-# constants rather than anything random: this check compares two calls of one request, so a
-# payload it had to derive would make the pair prove the derivation instead of the target.
-# Every payload is short ASCII that fits every error level comfortably -- a structural
-# question such as capacity is another check's business -- and the six differ in length and
-# in character class (digits, alphanumerics, a URL, a run, punctuation) so a target that
-# mishandles only one mode cannot make all six agree by accident.
+# constants rather than anything derived: this check compares two calls of one request, so a derived
+# payload would make the pair prove the derivation instead of the target.  Each is short ASCII that
+# fits every error level, and the six differ in length and character class (digits, alphanumerics, a
+# URL, a run, punctuation) so a target mishandling one mode cannot make all six agree by accident.
 DETERMINISM_PAYLOADS: Final[tuple[tuple[str, bytes], ...]] = (
     ("determinism-1", b"qrcheck determinism probe 1"),
     ("determinism-2", b"0123456789012345"),
@@ -125,10 +92,9 @@ EXPECTED_ENCODES: Final[Mapping[str, int]] = MappingProxyType(
     {CHECK_ID: _INVOCATIONS_PER_CASE * len(DETERMINISM_PAYLOADS)}
 )
 
-# The three components the two calls are compared component by component, in the order
-# ``decoded["comparison"]`` states them. The artefact digest is compared as
-# ``symbol_sha256`` -- the snapshot key -- because the two calls' bytes are never stored
-# twice in the evidence.
+# The three components the two calls are compared by, in the order
+# ``decoded["comparison"]`` states them.  The artefact digest is compared as ``symbol_sha256``,
+# the snapshot key, because two calls' bytes are never stored twice in the evidence.
 _COMPARED_COMPONENTS: Final[tuple[str, ...]] = ("image_bytes", "matrix_sha256", "mask")
 
 # Which snapshot field carries each compared component. A component is named for what is
@@ -142,11 +108,10 @@ _COMPARISON_KEYS: Final[Mapping[str, str]] = MappingProxyType(
     }
 )
 
-# Which fields of the decoded evidence travel per call. Taken from the decode layer's own
-# projection (:meth:`qrcheck.decode.base.DecodeResult.as_dict`) rather than rebuilt here, so
-# the per-decoder outcome shape has exactly one definition in the product. The documented
-# evidence set is covered: ``per_decoder``, ``agreement``, both EC-level readings,
-# ``version``, ``mask`` and ``matrix_sha256``.
+# Which fields of the decoded evidence travel per call, taken from the decode layer's own
+# projection (:meth:`qrcheck.decode.base.DecodeResult.as_dict`) so the per-decoder outcome shape has
+# one definition: ``per_decoder``, ``agreement``, both EC-level readings, ``version``, ``mask`` and
+# ``matrix_sha256``.
 _SNAPSHOT_KEYS: Final[tuple[str, ...]] = (
     "agreement",
     "ec_level_decoder",
@@ -163,9 +128,8 @@ _SNAPSHOT_KEYS: Final[tuple[str, ...]] = (
 def _case_name(entry: tuple[str, bytes]) -> str:
     """Return one declared payload's case name: the sort key of the case list.
 
-    The single sort key in this module, so "ascending by case identifier" is one order here
-    and in every report: a case identifier is ``synthetic:`` plus this name, so sorting the
-    pairs by name sorts the cases by identifier.
+    A case identifier is ``synthetic:`` plus this name, so sorting the pairs by name sorts the cases
+    by identifier, and this is the one sort key in the module.
     """
     return entry[0]
 
@@ -180,20 +144,11 @@ def _case_name(entry: tuple[str, bytes]) -> str:
 def cases(ctx: RunContext) -> Iterator[Case]:
     """Yield this check's six constructed cases, ascending by case identifier.
 
-    One case per declared payload, named ``synthetic:determinism-<n>``: constructed rather
-    than drawn from the corpus, because the observation needs a second artefact for one
-    request and no corpus record carries one.
-
-    ``requires`` is ``png`` alone. Every request this check builds is a default PNG with no
-    module-size, quiet-zone, colour, version or mask pin, so no other capability is
-    exercised and ``qrcheck/registry/resolve.py`` cannot turn the check into a skip over a
-    capability it never uses. ``dependencies`` declares the primary decoder, which is the
-    authority all twenty-one checks read their payload through.
-
-    Args:
-        ctx: The run's context. Nothing is read from it here -- the cases are constant, and
-            the EC level and seed are read when a case executes -- but the signature is the
-            registry's :data:`~qrcheck.registry.check.CasesFn`.
+    One case per declared payload, named ``synthetic:determinism-<n>``: constructed rather than
+    drawn from the corpus, because the observation needs a second artefact for one request.
+    ``requires`` is ``png`` alone -- every request is a default PNG with no pin -- so no other
+    capability is exercised and resolution cannot turn the check into a skip. ``dependencies``
+    declares the primary decoder.
 
     Yields:
         Six :class:`~qrcheck.registry.check.Case` objects in ascending identifier order.
@@ -206,8 +161,8 @@ def cases(ctx: RunContext) -> Iterator[Case]:
 def _executor(case_id: str, payload: bytes) -> Callable[[RunContext], CaseResult]:
     """Return the callable that executes one case, closing over its identifier and payload.
 
-    Built per case rather than once per check, so each callable carries its own payload and
-    the runner never looks either up.
+    Built per case rather than once per check, so each callable carries its own payload and the
+    runner never looks either up.
     """
 
     def execute(ctx: RunContext) -> CaseResult:
@@ -220,34 +175,18 @@ def _executor(case_id: str, payload: bytes) -> Callable[[RunContext], CaseResult
 def _execute(ctx: RunContext, case_id: str, payload: bytes) -> CaseResult:
     """Ask for `payload` twice, decode each artefact once, and compare the three components.
 
-    The two calls are made with **one** :class:`~qrcheck.targets.base.GenerateRequest`
-    instance, so "identical" is a property of the object rather than of two builders that
-    happen to agree. Each artefact is decoded once, through the framework's one decode path,
-    which keeps the primary decoder the single authority and gives the case its matrix and
-    mask without a second opinion anywhere.
-
-    Evidence is written through :func:`qrcheck.checks.support.record_evidence`, which
-    persists nothing for a passing case: a failing case's directory holds the first
-    artefact as ``symbol.png`` and the second as ``symbol-repeat.png``, which is what makes
-    a mask that changed between calls inspectable rather than merely reported.
-
-    Args:
-        ctx: The run's context: the adapter, the error level, the seed and the evidence
-            store. Configuration is not read, because this check asserts no limit.
-        case_id: The case's stable identifier, one of ``synthetic:determinism-<n>``.
-        payload: The declared payload this case asks for twice.
-
-    Returns:
-        A passed result, or a failed one carrying ``value_mismatch`` or ``sampling_failed``
-        with the comparison and both calls' projections as its evidence.
+    The two calls are made with **one** :class:`~qrcheck.targets.base.GenerateRequest` instance, so
+    "identical" is a property of the object rather than of two builders that happen to agree. Each
+    artefact is decoded once, through the framework's one decode path. Evidence is persisted only
+    for a failing case, whose directory holds ``symbol.png`` and ``symbol-repeat.png``. Returns a
+    passed result, or a failed one carrying ``value_mismatch`` or ``sampling_failed`` with the
+    comparison and both projections.
 
     Raises:
-        ValueError: The payload does not fit the symbol at the run's error level, or that
-            level is outside ``L``/``M``/``Q``/``H``. Both are framework-side defects in the
-            request builder rather than verdicts about the target, so they propagate for the
-            runner to record as an ``error`` result with its traceback.
-        TargetUnavailable: Propagated unchanged, for the runner's target-loss policy.
-        TargetTimeout: Propagated unchanged, for the same reason.
+        ValueError: The payload does not fit the symbol at the run's error level, or that level is
+        outside ``L``/``M``/``Q``/``H`` -- framework-side defects in the request builder.
+        TargetUnavailable: Propagated unchanged, for the runner's target-loss policy. TargetTimeout:
+        Propagated unchanged, for the same reason.
     """
     request = support.build(payload, ctx.ec_level)
     first_symbol = None
@@ -332,20 +271,10 @@ def _execute(ctx: RunContext, case_id: str, payload: bytes) -> CaseResult:
 def _snapshot(symbol_sha256: str, decoded: DecodeResult) -> dict[str, Any]:
     """Project one call into the fields the comparison and the evidence need.
 
-    The decode layer's own projection is the source -- so the per-decoder outcome shape has
-    one definition in the product -- and this function adds the two facts the decode layer
-    cannot know: the artefact's digest, which is compared as the image bytes, and the
-    authoritative payload's length and digest, which let a reader see whether the two calls
-    even decoded to the same bytes.
-
-    Args:
-        symbol_sha256: ``sha256`` of the artefact's bytes, exactly as the target returned it.
-        decoded: That artefact's decoded evidence.
-
-    Returns:
-        A JSON-ready mapping: the snapshot fields of the decode projection plus
-        ``symbol_sha256``, ``payload_len`` and ``payload_sha256``, the last two ``None`` when
-        the primary decoder produced no payload.
+    The decode layer's own projection is the source, so the per-decoder outcome shape has one
+    definition in the product; this adds the two facts the decode layer cannot know: the artefact's
+    sha256 digest, and the authoritative payload's length and digest. The projection is JSON-ready,
+    the last two being ``None`` when the primary decoder produced no payload.
     """
     projection = decoded.as_dict()
     snapshot: dict[str, Any] = {key: projection[key] for key in _SNAPSHOT_KEYS}
@@ -359,13 +288,8 @@ def _snapshot(symbol_sha256: str, decoded: DecodeResult) -> dict[str, Any]:
 def _comparisons(first: Mapping[str, Any], second: Mapping[str, Any]) -> dict[str, bool | None]:
     """Compare the two calls component by component, in the declared component order.
 
-    Args:
-        first: The first call's snapshot.
-        second: The second call's snapshot, under the same keys.
-
-    Returns:
-        One entry per :data:`_COMPARED_COMPONENTS` name: ``True`` when both readings agree,
-        ``False`` when they differ, and ``None`` when either could not be read at all.
+    One entry per :data:`_COMPARED_COMPONENTS` name: ``True`` when both readings agree, ``False``
+    when they differ, ``None`` when either could not be read at all.
     """
     return {
         component: _agrees(
@@ -378,9 +302,9 @@ def _comparisons(first: Mapping[str, Any], second: Mapping[str, Any]) -> dict[st
 def _agrees(left: object, right: object) -> bool | None:
     """Return whether two readings agree, or ``None`` when either could not be read.
 
-    An absent reading is not an agreement: a matrix nobody sampled and a mask the format
-    information did not yield say nothing about determinism, and reporting them as equal
-    would let the case pass on the components that happened to be readable.
+    An absent reading is not an agreement: a matrix nobody sampled and a mask the format information
+    did not yield say nothing about determinism, and reporting them as equal would let the case pass
+    on the components that happened to be readable.
     """
     if left is None or right is None:
         return None
@@ -398,22 +322,9 @@ def _evidence(
 
     The first call's projection is the top-level one, so the documented evidence shape --
     ``per_decoder``, ``agreement``, both EC-level readings, ``version``, ``mask`` and
-    ``matrix_sha256`` -- is present where a reader of any other check's evidence finds it,
-    and the second call travels whole under ``repeat``. That placement is also what keeps
-    the HTML report's single-decoder banner working: it looks for a top-level
-    ``per_decoder`` map, and a run in which this check was the only one that decoded would
-    otherwise report no degradation at all.
-
-    Args:
-        first: The first call's snapshot.
-        second: The second call's snapshot.
-        comparisons: The per-component verdicts.
-        divergent: The components that were read and disagreed.
-        unmeasured: The components that could not be read.
-
-    Returns:
-        The evidence mapping: the first snapshot's fields, ``repeat``, ``comparison``,
-        ``divergent`` and ``unmeasured``.
+    ``matrix_sha256`` -- sits where a reader of any other check's evidence finds it, and the second
+    call travels whole under ``repeat``. The mapping adds ``comparison``, ``divergent`` and
+    ``unmeasured``.
     """
     evidence = dict(first)
     evidence["comparison"] = dict(comparisons)
@@ -426,8 +337,8 @@ def _evidence(
 def _sha256(data: bytes) -> str:
     """Return the lowercase hex ``sha256`` digest of `data`.
 
-    ``sha256`` and not ``hash()``: a report keys on these digests, and ``hash()`` is salted
-    per process, so it would make two runs of one case describe it differently.
+    ``sha256`` and not ``hash()``: a report keys on these digests, and ``hash()`` is salted per
+    process, so it would make two runs of one case describe it differently.
     """
     return hashlib.sha256(data).hexdigest()
 
@@ -435,9 +346,8 @@ def _sha256(data: bytes) -> str:
 def _elapsed_ms(started: float) -> float:
     """Return the milliseconds elapsed since `started`, as a recorded value only.
 
-    A duration is recorded and never asserted -- no comparison, no threshold and no report
-    ordering reads it (AAP §0.5.5) -- so this helper exists to fill the result's field and
-    for nothing else.
+    A duration is recorded and never asserted -- no comparison, no threshold and no report ordering
+    reads it (AAP §0.5.5).
     """
     return (time.perf_counter() - started) * 1000.0
 

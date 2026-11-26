@@ -1,52 +1,20 @@
 """Read ``qrcheck.toml`` and resolve it into an immutable ``models.Config``.
 
-This is the only module in the product that opens the configuration file, and it
-owns exactly two things: *resolution* (the document's relative paths become
-absolute, its omitted keys get their declared defaults) and *assembly* (the
-defaulted document becomes the frozen records the rest of the product reads).  It
-performs no validation of its own -- every key, type, default and rule is declared
-in :mod:`qrcheck.config.schema`, which references the fallback constants of
-:mod:`qrcheck.config.models`.  A threshold's fallback is therefore one declaration
-in :mod:`qrcheck.config.models`, its effective value is the committed
-``qrcheck.toml``'s, and this module holds no threshold and no default of its own: a
-threshold is retuned in that file plus the acceptance criterion that reads it,
-never here.
+The only module in the product that opens the configuration file. It owns *resolution* -- relative
+paths become absolute, omitted keys get their declared defaults -- and *assembly*, and performs no
+validation of its own: every key, type, default and rule is declared in
+:mod:`qrcheck.config.schema`, which references the fallback constants of
+:mod:`qrcheck.config.models`, so no threshold and no default lives here.
 
-What it deliberately does not do, so nothing written below has to be undone later:
-
-* No environment access.  Nothing reads an environment variable, a ``.env`` file, a
-  secret or a telemetry endpoint: the document is the only input.
-* No ``~`` expansion and no ``$VAR`` interpolation.  A configured path is resolved
-  against the configuration file's own directory and nothing else, so
-  ``qrcheck --config /anywhere/qrcheck.toml`` behaves the same for every user.
-* Nothing is printed and no exit code is decided.  The command-line layer owns the
-  exit-code vocabulary; this module raises only the two failures that vocabulary is
-  built from.
-* No capability check.  Whether a declared capability set can satisfy a check
-  depends on the run-time ``--checks`` selection, so the same document would be
-  wrong for one selection and correct for the next; a shortfall is a ``skipped``
-  result with reason ``unsupported_capability`` instead.
-* No check that ``corpus_path`` exists.  That condition holds "when a corpus-driven
-  check is selected", which this module cannot know, so ``qrcheck.runner`` raises it
-  as its own run-prerequisite error -- exit code 2, naming the resolved path, before
-  any check runs and before a report is written.
-
-Two failure channels, one exit code each:
-
-* :class:`qrcheck.config.schema.ConfigError` -- the file cannot be read, is not
-  valid UTF-8, is not valid TOML, or holds a key the schema rejects.  The CLI maps
-  it to exit code 2, prints ``str(exc)`` on stderr, which names the offending
-  dotted key path, and writes no report.  A whole-file fault carries an empty
-  ``key``, because no single key owns it.
-* :class:`OSError` -- ``report_dir`` cannot be created or is not writable.  It is
-  raised unwrapped so ``str(exc)`` names the directory, and the CLI maps it to exit
-  code 3, streaming whatever results exist to stdout as JSON lines.  An unwritable
-  report directory must never read as a configuration fault.
-
-Determinism: loading the same file twice returns equal records.  Nothing here reads
-a clock, a hostname, a process id, ``hash()`` or the filesystem's iteration order,
-and the only strings kept are those the document holds plus the resolved, absolute
-paths.
+What it deliberately does not do: no environment access, since the document is the only input; no
+``~`` expansion and no ``$VAR`` interpolation; no printing and no exit code; no capability check,
+because a shortfall depends on the run-time ``--checks`` selection and is a ``skipped`` result with
+reason ``unsupported_capability``; and no check that ``corpus_path`` exists, which
+``qrcheck.runner`` raises as its own run-prerequisite error. Two failure channels, one exit code
+each: :class:`qrcheck.config.schema.ConfigError` for an unreadable, non-UTF-8, invalid-TOML or
+schema-rejected document -- exit code 2, ``str(exc)`` naming the offending dotted key; and
+:class:`OSError` when ``report_dir`` cannot be created or is not writable -- exit code 3, and never
+a configuration fault.
 """
 
 from __future__ import annotations
@@ -98,30 +66,16 @@ _TARGET_CLASSES: Final[Mapping[str, type[models.TargetConfig]]] = MappingProxyTy
 def load_config(path: str | Path) -> models.Config:
     """Load, validate and resolve one ``qrcheck.toml``.
 
-    The returned record is fully resolved.  ``path`` is the absolute configuration
-    file path and the base every relative path in that file was resolved against;
-    ``report_dir`` and ``corpus_path`` are absolute; every key the document omitted
-    carries the default declared in :mod:`qrcheck.config.models`; and ``report_dir``
-    exists and has been proven writable by creating and removing a probe file inside
-    it.
-
-    Args:
-        path: The configuration file, absolute or relative to the current working
-            directory.  No ``~`` expansion and no environment interpolation is
-            applied to it.
-
-    Returns:
-        The resolved configuration: frozen records, a read-only target mapping in
-        name order, and a value equal to what a second load of the same file
-        returns.
+    ``path`` is absolute or relative to the current working directory; no ``~`` expansion and no
+    environment interpolation is applied. The returned configuration has ``path`` absolute and the
+    base every relative path was resolved against, ``report_dir`` and ``corpus_path`` absolute,
+    every omitted key at its declared default, and ``report_dir`` proven writable by a probe file.
 
     Raises:
-        qrcheck.config.schema.ConfigError: the file cannot be read, is not valid
-            UTF-8, is not valid TOML, or holds a key the schema rejects.  The CLI
-            maps this to exit code 2, prints ``str(exc)`` and writes no report.
-        OSError: ``report_dir`` cannot be created or is not writable.  Raised
-            unwrapped, so ``str(exc)`` names the directory; the CLI maps it to exit
-            code 3.
+        qrcheck.config.schema.ConfigError: the file cannot be read, is not valid UTF-8, is not
+            valid TOML, or holds a key the schema rejects -- exit code 2, ``str(exc)`` naming the
+            key.
+        OSError: ``report_dir`` cannot be created or is not writable, raised unwrapped; exit code 3.
     """
     config_path = _resolve_config_path(path)
     document = _read_document(config_path)
@@ -155,9 +109,8 @@ def load_config(path: str | Path) -> models.Config:
 def _resolve_config_path(path: str | Path) -> Path:
     """Return the absolute configuration file path a relative ``path`` denotes.
 
-    A relative path is joined to the current working directory and then resolved,
-    which is what makes the diagnostic of an unreadable file name a path the caller
-    can open, and what makes two loads of the same relative argument agree.
+    A relative path is joined to the current working directory and then resolved, so an unreadable
+    file's diagnostic names a path the caller can open.
     """
     candidate = Path(path)
     if not candidate.is_absolute():
@@ -168,25 +121,15 @@ def _resolve_config_path(path: str | Path) -> Path:
 def _read_document(config_path: Path) -> dict[str, Any]:
     """Parse the TOML document at ``config_path`` into a fresh mapping.
 
-    The bytes are read first and decoded explicitly, rather than handing a binary
-    stream to ``tomllib.load``, so the UTF-8 contract is stated in this module
-    instead of being implied by the parser.
-
-    Every fault is a whole-file fault and therefore carries the empty key: no
-    single key owns a file that cannot be opened or parsed.
-
-    Args:
-        config_path: The resolved path to read.
-
-    Returns:
-        The parsed document.
+    The bytes are read and decoded explicitly rather than handing a binary stream to
+    ``tomllib.load``, so the UTF-8 contract is stated here instead of being implied by the parser.
+    Every fault is a whole-file fault and carries the empty key.
 
     Raises:
-        qrcheck.config.schema.ConfigError: the file cannot be read (a missing file,
-            a directory, a denied permission or any other ``OSError`` -- every one of
-            them is exit code 2, never exit 3, because only ``report_dir`` failures
-            are environment faults), the bytes are not UTF-8, or the text is not
-            valid TOML.
+        qrcheck.config.schema.ConfigError: the file cannot be read -- a missing file, a directory, a
+        denied permission or any other ``OSError``, every one of them exit code 2 rather than 3,
+        because only ``report_dir`` failures are environment faults -- the bytes are not UTF-8, or
+        the text is not valid TOML.
     """
     try:
         data = config_path.read_bytes()
@@ -216,12 +159,8 @@ def _read_document(config_path: Path) -> dict[str, Any]:
 def _resolve_path(base: Path, value: Any) -> Path:
     """Resolve one configured path against the configuration file's directory.
 
-    An absolute value in the document is honoured as written; a relative one is
-    rooted at ``base``, the directory holding the configuration file, and then
-    resolved.  No ``~`` and no environment variable is expanded, and no path is
-    checked for existence: whether ``corpus_path`` exists depends on which checks
-    are selected, and whether ``report_dir`` is usable is decided by the probe
-    below.
+    An absolute value is honoured as written and a relative one is rooted at ``base`` then resolved.
+    No ``~`` or environment variable is expanded and no path is checked for existence.
     """
     candidate = Path(str(value))
     if not candidate.is_absolute():
@@ -232,25 +171,15 @@ def _resolve_path(base: Path, value: Any) -> Path:
 def _prepare_report_dir(report_dir: Path) -> None:
     """Create ``report_dir`` if absent and prove it is writable.
 
-    Writability is proven the only way it can be: by writing.  A permission bit, an
-    access-mode guess or a mount flag can all be wrong for the reason the run will
-    actually hit, so a probe file is created and removed, and a read-only directory,
-    a full filesystem or a path whose parent is a regular file each surface as the
-    ``OSError`` the real write would have produced.
-
-    The probe is created inside ``report_dir`` rather than in the system temporary
-    directory, so the artifact-cleanup check -- which watches that directory -- never
-    sees it, and it is removed in a ``finally`` so a failure part way through leaves
-    no file behind.
-
-    Args:
-        report_dir: The resolved, absolute report directory.
+    Writability is proven the only way it can be, by writing: a probe file is created inside the
+    directory -- never in the system temporary directory the artifact-cleanup check watches -- and
+    removed in a ``finally``, so a read-only directory, a full filesystem or a parent that is a
+    regular file surfaces as the ``OSError`` the real write would have produced.
 
     Raises:
-        OSError: ``mkdir`` or the probe write failed.  Raised unwrapped and never
-            converted to a configuration error, because a report directory the
-            process cannot write is an environment fault (exit code 3), not a
-            configuration fault (exit code 2).
+        OSError: ``mkdir`` or the probe write failed, raised unwrapped and never converted to a
+        configuration error, because an unwritable report directory is an environment fault (exit
+        code 3) and not a configuration fault (exit code 2).
     """
     report_dir.mkdir(parents=True, exist_ok=True)
     probe_path: Path | None = None
@@ -288,11 +217,9 @@ def _prepare_report_dir(report_dir: Path) -> None:
 def _build_targets(tables: Mapping[str, Any]) -> Mapping[str, models.TargetConfig]:
     """Build every declared target, keyed by name in ``sorted()`` order.
 
-    The sorted population is what makes iteration over targets -- in ``doctor``, in
-    the reports and in any evidence listing -- reproducible from one run to the next
-    regardless of the order the document happened to declare its tables in.  The
-    returned mapping is read-only, so a resolved configuration cannot gain, lose or
-    silently re-point a target.
+    The sorted population makes iteration over targets reproducible from one run to the next
+    whatever order the document declared its tables in, and the mapping is read-only, so a resolved
+    configuration cannot gain, lose or silently re-point a target.
     """
     targets: dict[str, models.TargetConfig] = {}
     for name in sorted(tables):
@@ -326,19 +253,14 @@ def _build_target(name: str, table: Mapping[str, Any]) -> models.TargetConfig:
 def _per_type_options(kind: str, table: Mapping[str, Any]) -> dict[str, Any]:
     """Return the per-type keyword arguments a target's ``type`` declares.
 
-    ``metadata_map`` is added only when the document supplies it.  Every record that
-    reads it declares the same read-only empty mapping as its own default, so filling
-    it here would be a second copy of a default that ``qrcheck.config.models``
-    already owns.
-
-    ``request_template`` is kept as a plain ``dict`` rather than wrapped in a mapping
-    proxy like the other tables.  The HTTP adapter hands it to ``json.dumps`` to build
-    the request body, and ``json`` cannot serialise a proxy; nothing in the product
-    mutates it, so the copy made here is as immutable in practice as the document it
-    came from.  A template written as a table and one written as a JSON-object string
-    both resolve to that same mapping: the string form is parsed here by
-    ``schema.request_template_object`` -- the helper ``schema.validate`` itself used
-    -- so the record carries one shape and the adapter receives one shape.
+    ``metadata_map`` is added only when the document supplies it, because every record that reads it
+    declares the same read-only empty mapping itself and filling it here would be a second copy of a
+    default ``qrcheck.config.models`` already owns. ``request_template`` stays a plain ``dict``
+    rather than a mapping proxy: the HTTP adapter hands it to ``json.dumps``, which cannot serialise
+    a proxy, and nothing in the product mutates it. A template written as a table and one written as
+    a JSON-object string both resolve to that same mapping, the string parsed by
+    ``schema.request_template_object`` -- the helper ``schema.validate`` itself used -- so the
+    record carries one shape.
     """
     if kind == "library":
         options: dict[str, Any] = {
@@ -373,9 +295,8 @@ def _per_type_options(kind: str, table: Mapping[str, Any]) -> dict[str, Any]:
 def _frozen_map(value: Mapping[str, Any]) -> Mapping[str, str]:
     """Return a read-only copy of a ``kwargs_map`` or ``metadata_map`` table.
 
-    A mapping proxy rather than a ``dict``, so no caller can widen a resolved
-    configuration's field mapping after the fact, and a copy rather than the parsed
-    table itself, so the record shares no mutable structure with the document.
+    A mapping proxy, so no caller can widen a resolved field mapping, and a copy, so the record
+    shares no mutable structure with the document.
     """
     return MappingProxyType({str(key): str(mapped) for key, mapped in value.items()})
 
