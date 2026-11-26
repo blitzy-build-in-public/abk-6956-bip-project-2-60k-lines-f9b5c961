@@ -104,8 +104,9 @@ _TRACEBACK: str = (
     "RuntimeError: boom"
 )
 
-# The two decoder maps a result records: both decoders agreeing, which is the healthy
-# shape, and the primary decoder alone, which is the single-decoder degradation.
+# The decoder maps a result can record: both decoders agreeing, which is the healthy shape;
+# the primary decoder alone, which is the single-decoder degradation, both when the secondary
+# decoder is absent and when it is installed but unusable; and the shapes that prove nothing.
 _AGREEING_DECODE: dict[str, object] = {
     "agreement": "agree",
     "per_decoder": {"opencv": {"status": "decoded"}, "zxing": {"status": "decoded"}},
@@ -113,6 +114,27 @@ _AGREEING_DECODE: dict[str, object] = {
 _SINGLE_DECODER_DECODE: dict[str, object] = {
     "agreement": "primary_only",
     "per_decoder": {"zxing": {"status": "decoded"}},
+}
+# The shape a decoder that is installed but cannot be imported leaves: consensus asked it, it
+# answered with an error, and the primary decoder read the payload alone. It proves the same
+# degradation as the shape above, so it must raise the same banner.
+_UNUSABLE_SECONDARY_DECODE: dict[str, object] = {
+    "agreement": "primary_only",
+    "per_decoder": {"opencv": {"status": "error"}, "zxing": {"status": "decoded"}},
+}
+# The shape an artefact no decoder could be shown leaves: both decoders errored and nothing
+# was read, so no payload was corroborated and no check can have passed on the primary's
+# strength. It proves no degradation and must raise no banner.
+_UNREADABLE_DECODE: dict[str, object] = {
+    "agreement": "undetected",
+    "per_decoder": {"opencv": {"status": "error"}, "zxing": {"status": "error"}},
+}
+# A primary decoder that read no payload beside a secondary that could not run: the banner's
+# claim -- a payload corroborated by the primary decoder alone -- would be false here, because
+# no payload was read at all.
+_NO_PAYLOAD_DECODE: dict[str, object] = {
+    "agreement": "undetected",
+    "per_decoder": {"opencv": {"status": "error"}, "zxing": {"status": "undetected"}},
 }
 
 # A run's identity as the model validates it: a content hash rather than a UUID or a
@@ -734,6 +756,19 @@ def test_an_errored_case_renders_its_traceback_in_its_block(tmp_path: Path) -> N
             "Single-decoder mode.",
         ),
         (
+            (
+                CaseResult(
+                    check_id="RT-ROUNDTRIP",
+                    case_id="corpus:url-001",
+                    status=Status.PASSED,
+                    decoded=dict(_UNUSABLE_SECONDARY_DECODE),
+                    seed=_SEED,
+                ),
+            ),
+            "banner-single-decoder",
+            "Single-decoder mode.",
+        ),
+        (
             (_skipped_case("RN-SVG", "synthetic:svg-rasterizer", Reason.MISSING_DEPENDENCY),),
             "banner-missing-dependency",
             "SVG rasterizer missing.",
@@ -744,7 +779,12 @@ def test_an_errored_case_renders_its_traceback_in_its_block(tmp_path: Path) -> N
             "Unsupported platform.",
         ),
     ),
-    ids=("single-decoder", "missing-dependency", "unsupported-platform"),
+    ids=(
+        "single-decoder",
+        "single-decoder-unusable-secondary",
+        "missing-dependency",
+        "unsupported-platform",
+    ),
 )
 def test_a_degraded_run_states_the_degradation_in_a_banner(
     tmp_path: Path, results: tuple[CaseResult, ...], banner: str, phrase: str
@@ -756,6 +796,42 @@ def test_a_degraded_run_states_the_degradation_in_a_banner(
     block = section.group("body")
     assert f'class="banner {banner}"' in block
     assert phrase in block
+
+
+@pytest.mark.parametrize(
+    ("decoded", "why"),
+    (
+        (
+            _UNREADABLE_DECODE,
+            "no decoder read the artefact, so no payload was corroborated by anyone",
+        ),
+        (
+            _NO_PAYLOAD_DECODE,
+            "the primary decoder read no payload, so no check can have passed on its strength",
+        ),
+        ({"payload_len": 32}, "the result records no decoder map at all"),
+    ),
+    ids=("unreadable-artefact", "no-payload-read", "no-decoder-map"),
+)
+def test_a_result_that_proves_no_degradation_carries_no_single_decoder_banner(
+    tmp_path: Path, decoded: dict[str, object], why: str
+) -> None:
+    """The banner is withheld from the shapes that prove nothing, one reason each.
+
+    The decoder shapes here differ from the degraded ones only in their statuses, which is why
+    they are held as one parametrised test: an artefact neither decoder could be shown, and a
+    primary that read no payload beside a secondary that could not run, both leave nothing for
+    the banner's sentence to state, because its claim is about a payload the primary decoder
+    corroborated alone. ``why`` names what each shape fails to prove. A result that records no
+    decoder map at all is skipped the same way, so the writer never fails over evidence it
+    knows how to do without.
+    """
+    run = _run(dataclasses.replace(_passed_case(), decoded=decoded))
+    document = _write_page(tmp_path, run)
+
+    assert _BANNERS.search(document) is None, why
+    assert 'class="banner' not in document, why
+    assert "Single-decoder mode." not in document, why
 
 
 def test_a_healthy_run_carries_no_banner(tmp_path: Path) -> None:

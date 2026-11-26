@@ -71,6 +71,17 @@ is recorded as ``primary_only``. This never loosens the primary's authority -- i
 only declines to let a corroborator that cannot speak about bytes contradict
 bytes.
 
+``DecodeResult.secondary_comparable`` is what makes that narrowing visible rather
+than silent, and it is the only place it is visible: ``True`` when both decoders
+answered and their payloads were comparable -- equal, or a primary payload whose
+text the secondary's could have contradicted -- ``False`` when both answered with
+differing payloads the refinement declined to compare, and ``None`` when no
+comparison was attempted because the secondary decoder did not run, found nothing
+or errored, or the primary decoder produced no payload. A reader of
+``decoded.json`` or ``summary.json`` can therefore tell "the secondary said
+nothing" from "the secondary's answer could not be compared", which the
+``primary_only`` classification alone records identically.
+
 Imports: the four decode-layer modules this pipeline joins, ``qrcheck.evidence.mux``
 and ``qrcheck.config.models``, the standard library, ``numpy`` and ``Pillow``.
 ``GenerateRequest`` is imported for its annotations only, under ``TYPE_CHECKING``,
@@ -579,7 +590,8 @@ def _is_text_payload(payload: bytes, text: str | None) -> bool:
 
     This is the predicate that decides whether the secondary decoder's text can
     contradict the primary decoder's bytes at all; see the module docstring for
-    why a payload that fails it is recorded as ``primary_only``.
+    why a payload that fails it is recorded as ``primary_only`` with
+    ``secondary_comparable`` ``False``.
     """
     if text is None:
         return False
@@ -589,26 +601,58 @@ def _is_text_payload(payload: bytes, text: str | None) -> bool:
         return False
 
 
+def _secondary_comparable(
+    primary: DecoderOutcome, secondary: DecoderOutcome | None, primary_text: str | None
+) -> bool | None:
+    """Report whether the two answers could be compared, and if not, why not.
+
+    ``None`` means no comparison was attempted: the secondary decoder did not
+    run, found nothing or errored, or the primary decoder produced no payload.
+    ``True`` means both decoders answered and their payloads are comparable --
+    they are equal, or the primary payload round-trips through UTF-8, so the
+    secondary decoder's text could have contradicted it. ``False`` means both
+    answered with payloads that differ and that the text-only secondary decoder
+    cannot be held to, which is the one case in which :func:`_classify` declines
+    to report ``disagree``; the module docstring states why that refinement is
+    required. This predicate is the single derivation of the recorded
+    ``secondary_comparable`` field: :func:`_classify` consumes the same value
+    rather than deciding the question a second time.
+    """
+    if primary.payload is None or secondary is None or secondary.payload is None:
+        return None
+    if secondary.payload == primary.payload:
+        return True
+    return _is_text_payload(primary.payload, primary_text)
+
+
 def _classify(
     primary: DecoderOutcome, secondary: DecoderOutcome | None, primary_text: str | None
-) -> Agreement:
-    """Classify the two decoders' payloads into the ``agreement`` vocabulary.
+) -> tuple[Agreement, bool | None]:
+    """Classify the two decoders' payloads, and report whether they were comparable.
 
     ``undetected`` is a decoder finding no payload, never a disagreement. A
     ``disagree`` verdict requires a secondary decoder that ran, two payloads that
-    actually differ, and a primary payload the secondary decoder's text could have
-    spoken about in the first place -- the documented refinement, without which a
-    conforming binary payload would be reported as a disagreement.
+    actually differ, and a comparability of ``True`` -- a primary payload the
+    secondary decoder's text could have spoken about in the first place -- which
+    is the documented refinement, without which a conforming binary payload would
+    be reported as a disagreement.
+
+    Returns:
+        The ``agreement`` value and, beside it, the ``secondary_comparable`` value
+        :func:`_secondary_comparable` derived. Both are returned together so the
+        recorded field and the ``disagree`` decision are one derivation and cannot
+        drift apart.
     """
+    comparable = _secondary_comparable(primary, secondary, primary_text)
     if primary.payload is not None:
         if secondary is None or secondary.payload is None:
-            return "primary_only"
+            return "primary_only", comparable
         if secondary.payload == primary.payload:
-            return "agree"
-        return "disagree" if _is_text_payload(primary.payload, primary_text) else "primary_only"
+            return "agree", comparable
+        return ("disagree" if comparable else "primary_only"), comparable
     if secondary is not None and secondary.payload is not None:
-        return "secondary_only"
-    return "undetected"
+        return "secondary_only", comparable
+    return "undetected", comparable
 
 
 def _unreadable_result(reason: str, secondary_ok: bool) -> DecodeResult:
@@ -652,6 +696,7 @@ def _unreadable_result(reason: str, secondary_ok: bool) -> DecodeResult:
         rejection=None,
         metrics={},
         sampling=None,
+        secondary_comparable=None,
     )
 
 
@@ -772,6 +817,11 @@ def decode_symbol(
         for outcome in (primary_outcome, secondary_outcome)
         if outcome is not None
     }
+    agreement, secondary_comparable = _classify(
+        primary_outcome if primary_outcome is not None else primary_original.outcome,
+        secondary_outcome,
+        authority.text,
+    )
     return DecodeResult(
         payload_bytes=payload,
         text=authority.text if payload is not None else None,
@@ -784,15 +834,12 @@ def decode_symbol(
         matrix=sampling.matrix,
         matrix_sha256=None,
         per_decoder=per_decoder,
-        agreement=_classify(
-            primary_outcome if primary_outcome is not None else primary_original.outcome,
-            secondary_outcome,
-            authority.text,
-        ),
+        agreement=agreement,
         polarity_applied=polarity_applied,
         rejection=None,
         metrics={},
         sampling=sampling,
         format_info=None if format_details is None else format_details.as_dict(),
+        secondary_comparable=secondary_comparable,
     )
 

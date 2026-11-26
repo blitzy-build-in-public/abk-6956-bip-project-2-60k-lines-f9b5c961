@@ -95,6 +95,18 @@ _REASON_EXPLANATIONS: tuple[tuple[str, str], ...] = (
 # result model rather than re-read from disk.
 _IMAGE_SUFFIXES: tuple[str, ...] = (".png", ".svg")
 
+# The decoder names a result's ``per_decoder`` map is keyed by, and the two statuses read
+# back out of it. They are spelled here rather than imported from :mod:`qrcheck.decode`,
+# because this writer is a pure function of the result model: it names the vocabulary it
+# reads instead of depending on the layer that produced it.
+_PRIMARY_DECODER: str = "zxing"
+_SECONDARY_DECODER: str = "opencv"
+
+# The status a decoder records when it returned a payload, and the status it records when
+# it could not be run at all.
+_DECODED_STATUS: str = "decoded"
+_ERROR_STATUS: str = "error"
+
 # The single stylesheet of the document. Logical properties throughout, system font
 # stacks only, colour never the sole carrier of meaning - every status is also spelled out
 # in its row - and not one external resource reference, so the file needs no network. Its
@@ -548,16 +560,18 @@ def _render_banners(run_result: RunResult) -> list[str]:
     No probe, no configuration read and no decoder import: a banner states what the
     results themselves prove. Single-decoder mode is visible from the recorded
     ``per_decoder`` map of a result (AAP §0.6.6 row 4), and the two dependency skips are
-    visible from the reason of a skipped result. Each banner is one sentence naming the
-    consequence, so a reader is never left to infer a degradation from an empty column.
+    visible from the reason of a skipped result. Each banner states the consequence in words,
+    so a reader is never left to infer a degradation from an empty column.
     """
     banners: list[str] = []
     if _has_single_decoder(run_result.results):
         banners.append(
             '<p class="banner banner-single-decoder"><strong>Single-decoder mode.</strong> '
-            "Only one decoder was available for this run, so each payload was corroborated "
-            "by the primary decoder alone and no check was marked passed on the strength of "
-            "a decoder that was not installed.</p>"
+            "Only one decoder answered for this run: the corroborating decoder "
+            "(opencv-python-headless) was not installed, or was installed and could not be "
+            "imported or run. Each payload was corroborated by the primary decoder alone, "
+            "and no check was marked passed on the strength of a decoder that did not "
+            "answer.</p>"
         )
     skipped_reasons = {
         _reason_text(case.reason)
@@ -584,22 +598,57 @@ def _render_banners(run_result: RunResult) -> list[str]:
 
 
 def _has_single_decoder(results: Sequence[CaseResult]) -> bool:
-    """Return whether any result recorded a decode with no secondary decoder.
+    """Return whether any result proves the run decoded without a corroborating decoder.
 
-    The test is the model's own evidence: a non-empty ``per_decoder`` map that omits
-    ``opencv`` means the run happened in single-decoder mode. Every access is a mapping
-    lookup that cannot raise on an absent key, and a result whose ``decoded`` value is not
-    a mapping at all is simply skipped, because a report must not fail over evidence it
-    knows how to do without.
+    Two recorded shapes prove it, and both mean the same thing: the secondary decoder
+    could not answer, so a payload was corroborated by the primary decoder alone
+    (AAP §0.6.6 row 4, §0.7.2).
+
+    * A non-empty ``per_decoder`` map that omits ``opencv``: the decoder is not installed,
+      consensus never ran it and recorded nothing for it.
+    * A ``per_decoder`` map that records ``opencv`` with status ``error`` while ``zxing``
+      recorded status ``decoded``: the decoder is installed but unusable -- a shadowing
+      module, a broken wheel, a native library that will not load. Consensus asked it, it
+      answered with an error, and the primary decoder read the payload all the same.
+
+    The shape of an artefact no decoder could be shown is deliberately excluded: every
+    decoder at status ``error`` with ``agreement`` ``undetected`` means nothing decoded,
+    so no payload was corroborated by anyone and no check can have passed on the primary
+    decoder's strength.
+
+    Every access is a mapping lookup that cannot raise on an absent key, and a result whose
+    ``decoded`` value is not a mapping at all is simply skipped, because a report must not
+    fail over evidence it knows how to do without.
     """
     for case in results:
         decoded = case.decoded
         if not isinstance(decoded, Mapping):
             continue
         per_decoder = decoded.get("per_decoder")
-        if isinstance(per_decoder, Mapping) and per_decoder and "opencv" not in per_decoder:
+        if not isinstance(per_decoder, Mapping) or not per_decoder:
+            continue
+        if _SECONDARY_DECODER not in per_decoder:
+            return True
+        if (
+            _decoder_status(per_decoder, _SECONDARY_DECODER) == _ERROR_STATUS
+            and _decoder_status(per_decoder, _PRIMARY_DECODER) == _DECODED_STATUS
+        ):
             return True
     return False
+
+
+def _decoder_status(per_decoder: Mapping[object, object], decoder: str) -> str | None:
+    """Return ``decoder``'s recorded status in ``per_decoder``, or ``None`` when unreadable.
+
+    Each entry of the map is itself a mapping in a well-formed result, but a malformed entry
+    must not raise: an absent entry, a non-mapping entry or a status that is not a string
+    answers ``None``, which matches no status and therefore proves nothing.
+    """
+    outcome = per_decoder.get(decoder)
+    if not isinstance(outcome, Mapping):
+        return None
+    status = outcome.get("status")
+    return status if isinstance(status, str) else None
 
 
 def _render_table(run_result: RunResult, anchors: Mapping[int, str]) -> list[str]:

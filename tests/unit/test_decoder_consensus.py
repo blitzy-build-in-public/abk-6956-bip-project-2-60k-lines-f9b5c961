@@ -22,9 +22,11 @@ genuine bytes to open:
   doubling the decode cost of a whole run;
 * ``per_decoder`` order is lexicographic, in ``as_dict()`` too, so the evidence bytes never depend
   on the order the decoders happened to be called;
-* a payload that does not round-trip through UTF-8 is ``primary_only``, which is what keeps the
-  forty ``random-bytes`` records from failing the conforming reference gate, while a plain ASCII
-  disagreement stays a disagreement.
+* a payload that does not round-trip through UTF-8 is ``primary_only`` with ``secondary_comparable``
+  ``false``, which is what keeps the forty ``random-bytes`` records from failing the conforming
+  reference gate, while a plain ASCII disagreement stays a disagreement with it ``true`` -- and a
+  secondary decoder that said nothing records ``null``, so the evidence separates a secondary answer
+  that could not be compared from one that never existed.
 
 :func:`_install_decoders` monkeypatches the consensus module's ``read_primary`` and
 ``read_secondary`` with stubs that answer from a polarity-keyed table and build their outcomes
@@ -79,6 +81,7 @@ __all__ = [
     "test_payload_disagreement_keeps_the_primary_payload_authoritative",
     "test_relative_luminance_matches_the_wcag_reference_values",
     "test_secondary_cannot_rescue_a_symbol_the_primary_could_not_read",
+    "test_secondary_comparable_refuses_a_value_outside_its_three",
     "test_secondary_decoder_answering_at_both_polarities_records_both",
     "test_secondary_silence_is_primary_only_and_leaves_the_primary_authoritative",
     "test_secondary_disabled_degrades_the_run_to_primary_only",
@@ -606,6 +609,14 @@ def test_secondary_silence_is_primary_only_and_leaves_the_primary_authoritative(
     assert result.agreement != "disagree", (
         "secondary silence: one decoder's silence is never a disagreement (IM-3)"
     )
+    assert result.secondary_comparable is None, (
+        "secondary silence: no comparison was attempted, so secondary_comparable must be None, "
+        f"got {result.secondary_comparable!r}"
+    )
+    assert result.as_dict()["secondary_comparable"] is None, (
+        "secondary silence: the evidence projection must record that nothing was compared, got "
+        f"{result.as_dict()['secondary_comparable']!r}"
+    )
     assert result.payload_bytes == _PAYLOAD_A, (
         f"secondary silence: the primary payload stays authoritative, got {result.payload_bytes!r}"
     )
@@ -690,6 +701,10 @@ def test_secondary_disabled_degrades_the_run_to_primary_only(
     assert result.agreement == "primary_only", (
         f"single-decoder mode: agreement must be 'primary_only', got {result.agreement!r}"
     )
+    assert result.secondary_comparable is None, (
+        "single-decoder mode: the secondary decoder never ran, so no comparison was attempted and "
+        f"secondary_comparable must be None, got {result.secondary_comparable!r}"
+    )
     assert result.payload_bytes == _PAYLOAD_A, (
         f"single-decoder mode: the primary payload is still authoritative, got "
         f"{result.payload_bytes!r}"
@@ -723,6 +738,10 @@ def test_agreeing_decoders_are_agreement_and_a_conforming_case_passes(
     assert result.agreement == "agree", (
         f"agreeing decoders: agreement must be 'agree', got {result.agreement!r}"
     )
+    assert result.secondary_comparable is True, (
+        "agreeing decoders: two equal payloads were compared, so secondary_comparable must be "
+        f"True, got {result.secondary_comparable!r}"
+    )
     assert result.payload_bytes == _PAYLOAD_A, (
         f"agreeing decoders: the shared payload must be authoritative, got {result.payload_bytes!r}"
     )
@@ -755,6 +774,12 @@ def test_agreeing_decoders_are_agreement_and_a_conforming_case_passes(
         ),
         pytest.param({_ORIGINAL: None}, {_ORIGINAL: None}, "undetected", id="undetected"),
         pytest.param({_ORIGINAL: _PAYLOAD_A}, {_ORIGINAL: _PAYLOAD_B}, "disagree", id="disagree"),
+        pytest.param(
+            {_ORIGINAL: _BINARY_PAYLOAD},
+            {_ORIGINAL: _SECONDARY_TEXT_VIEW},
+            "primary_only",
+            id="primary-only-incomparable",
+        ),
     ],
 )
 def test_decoder_ordering_is_lexicographic_for_every_classification(
@@ -766,7 +791,10 @@ def test_decoder_ordering_is_lexicographic_for_every_classification(
 ) -> None:
     """Every classification keeps the lexicographic decoder order, in the record and in evidence.
     Sorted keys are what make two runs' evidence byte-identical: an insertion-ordered map would
-    put the decoders in whatever order the pipeline happened to call them.
+    put the decoders in whatever order the pipeline happened to call them. The
+    ``primary-only-incomparable`` row is the documented refinement's shape -- two differing
+    payloads the text-only secondary decoder cannot speak about -- which must keep the same order
+    as every other classification.
     """
     _install_decoders(
         monkeypatch,
@@ -812,6 +840,16 @@ def test_binary_payload_is_recorded_as_primary_only_not_a_disagreement(
         "binary refinement: a text-only contradictory view of a binary payload must classify as "
         f"'primary_only', got {result.agreement!r}"
     )
+    assert result.secondary_comparable is False, (
+        "binary refinement: both decoders answered with differing payloads the text-only secondary "
+        f"cannot be held to, so secondary_comparable must be False, got "
+        f"{result.secondary_comparable!r}"
+    )
+    assert result.as_dict()["secondary_comparable"] is False, (
+        "binary refinement: the recorded evidence must carry secondary_comparable False rather "
+        f"than look like a secondary decoder that said nothing, got "
+        f"{result.as_dict()['secondary_comparable']!r}"
+    )
     assert result.payload_bytes == _BINARY_PAYLOAD, (
         f"binary refinement: the primary payload stays authoritative, got {result.payload_bytes!r}"
     )
@@ -848,6 +886,22 @@ def test_ascii_payload_disagreement_is_still_a_disagreement(
         "ascii disagreement: two differing ASCII payloads must still classify as 'disagree', got "
         f"{result.agreement!r}"
     )
+    assert result.secondary_comparable is True, (
+        "ascii disagreement: two text payloads could be compared, so secondary_comparable must be "
+        f"True, got {result.secondary_comparable!r}"
+    )
+
+
+@pytest.mark.parametrize("value", ["decoded", 1], ids=["status-string", "integer"])
+def test_secondary_comparable_refuses_a_value_outside_its_three(
+    make_decode_result: Callable[..., DecodeResult], value: Any
+) -> None:
+    """The recorded field has exactly three values, and anything else is a producer defect. A
+    decoder's status or an integer would reach ``decoded.json`` as a value no reader can
+    interpret, so the record refuses it at construction rather than recording it.
+    """
+    with pytest.raises(ValueError, match="secondary_comparable"):
+        make_decode_result(secondary_comparable=value)
 
 
 # ---------------------------------------------------------------------------

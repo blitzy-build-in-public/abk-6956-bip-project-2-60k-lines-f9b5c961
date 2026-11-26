@@ -394,6 +394,25 @@ class DecodeResult:
     distances included -- so a check can tell "the grid could not be recovered"
     from "the grid was recovered and its format information could not be read",
     and a damaged-but-readable copy stays diagnosable from evidence alone.
+
+    ``secondary_comparable`` extends them once more, and exists so that a reader
+    of the evidence can tell the two shapes of ``primary_only`` apart, because
+    the classification alone cannot:
+
+    * ``True`` -- both decoders answered and their payloads could be compared:
+      they are equal, or the primary's payload round-trips through UTF-8, so the
+      secondary's text could have contradicted it.
+    * ``False`` -- both decoders answered with differing payloads that cannot be
+      compared, which is the documented refinement: the primary's payload does
+      not round-trip through UTF-8 and the text-only secondary decoder therefore
+      cannot speak about it, so a disagreement is declined rather than reported.
+    * ``None`` -- no comparison was attempted: the secondary decoder did not run,
+      found nothing or errored, or the primary decoder produced no payload.
+
+    The secondary decoder's text-only API (``opencv-python-headless`` 4.10) is
+    why the ``False`` case exists at all; this field is the only place the
+    narrowing of the disagreement rule is visible, so no consumer has to infer
+    it from a decoder's status.
     """
 
     payload_bytes: bytes | None
@@ -413,6 +432,7 @@ class DecodeResult:
     metrics: Mapping[str, float]
     sampling: SampledMatrix | None = None
     format_info: Mapping[str, Any] | None = None
+    secondary_comparable: bool | None = None
 
     def __post_init__(self) -> None:
         """Normalise the mappings and make the digest unable to go stale.
@@ -425,7 +445,8 @@ class DecodeResult:
 
         Raises:
             ValueError: ``agreement`` or ``polarity_applied`` is outside its
-                closed vocabulary, a ``per_decoder`` key is not a known
+                closed vocabulary, ``secondary_comparable`` is neither a
+                ``bool`` nor ``None``, a ``per_decoder`` key is not a known
                 decoder, or ``matrix_sha256`` was supplied with a grid and
                 disagrees with it.
         """
@@ -435,6 +456,9 @@ class DecodeResult:
             )
         if self.polarity_applied not in _POLARITY_VALUES:
             raise ValueError(f"unknown polarity {self.polarity_applied!r}")
+        comparable = self.secondary_comparable
+        if comparable is not None and not isinstance(comparable, bool):
+            raise ValueError(f"secondary_comparable must be a bool or None; got {comparable!r}")
         unknown = sorted(name for name in self.per_decoder if name not in DECODER_ORDER)
         if unknown:
             raise ValueError(f"unknown decoder name(s) in per_decoder: {unknown}")
@@ -500,6 +524,7 @@ class DecodeResult:
             "polarity_applied": self.polarity_applied,
             "rejection": self.rejection,
             "sampling": None if self.sampling is None else self.sampling.as_dict(),
+            "secondary_comparable": self.secondary_comparable,
             "symbology_identifier": self.symbology_identifier,
             "text": self.text,
             "version": self.version,

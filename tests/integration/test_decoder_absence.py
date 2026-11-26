@@ -11,9 +11,10 @@ AAP §0.6.6 names this module for two rows, and AAP §0.7.2 fixes the distinctio
 * **row 4 -- the secondary decoder is missing.** ``opencv-python-headless`` corroborates and never
   decides, so its absence is a *supported degradation*: ``qrcheck doctor`` stays green and reports
   the entry as degraded, the run proceeds in single-decoder mode, every decoded result records
-  ``agreement == "primary_only"`` with one entry in ``per_decoder``, the evidence a failing case
-  writes shows the same single decoder, and ``index.html`` states the degradation. Nothing is
-  skipped on its behalf and nothing passes on the strength of the decoder that is not installed.
+  ``agreement == "primary_only"`` with one entry in ``per_decoder`` (or two, the second at status
+  ``error``, when the decoder is installed but unusable), the evidence a failing case writes shows
+  the same decoder set, and ``index.html`` states the degradation. Nothing is skipped on its behalf
+  and nothing passes on the strength of the decoder that could not answer.
 
 Absence is forced honestly: nothing is uninstalled and nothing inside the product is patched. A
 ``None`` entry in ``sys.modules`` makes ``import zxingcpp`` raise :exc:`ImportError` and
@@ -29,6 +30,12 @@ assertions below would prove nothing. The in-process path calls the same
 :func:`qrcheck.cli.main.main` the console script calls, so the exit status under test is still the
 product's own.
 
+The degradation is reached a second way, and that way is held here too: a binding that is
+*installed* but cannot be imported -- a shadowing ``cv2.py`` on ``PYTHONPATH``, a wheel whose native
+library will not load -- passes the availability probe, so consensus asks it and it answers with
+``status: "error"``. Nothing is uninstalled in that case either: the one function whose resolution
+is replaced is :func:`qrcheck.decode.opencv._load_cv2`, and ``monkeypatch`` restores it.
+
 No test here skips for an absent decoder: every supported platform has a wheel (AAP §0.2.3), so a
 genuinely missing one means the environment is broken and must surface as a loud failure naming the
 distribution and ``requirements.lock``, never as a skip. There is no ``xfail``, no retry and no
@@ -40,6 +47,7 @@ fresh report root per test, so a leaked file cannot satisfy another test's absen
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import platform
 import sys
@@ -90,6 +98,11 @@ DECODER_WRAPPERS: Final[tuple[str, str]] = (
 STATUS_OK: Final[str] = "ok"
 STATUS_MISSING: Final[str] = "missing"
 STATUS_DEGRADED: Final[str] = "degraded"
+
+#: The status a decoder records in ``per_decoder`` when it could not be run at all, which is what a
+#: present-but-unimportable binding leaves behind: consensus asked it, and it answered with an
+#: error rather than a payload.
+UNUSABLE_DECODER_STATUS: Final[str] = "error"
 
 #: The six keys the doctor report object carries, exactly (AAP §0.8.3), so a field that is added,
 #: dropped or renamed fails here instead of shrinking a machine-readable surface.
@@ -624,8 +637,92 @@ def test_report_states_the_degradation(
     )
 
 
+def test_run_degrades_when_the_secondary_decoder_cannot_be_imported(
+    run_cli: Callable[..., Any],
+    write_config: Callable[..., Path],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A decoder that is installed but unusable degrades the run, and the report says so.
+
+    ``module_absent`` above is the easy half of row 4: ``find_spec`` answers ``None``, consensus
+    never asks the secondary decoder, and its name never reaches ``per_decoder``. A binding that is
+    *installed* but cannot be imported is the half that looks different while meaning the same
+    thing -- the availability probe discovers it, so consensus does ask it, and it answers with
+    ``status: "error"``. The run is single-decoder in effect while the evidence names both
+    decoders, so the degradation has to be derived from what each decoder recorded, not from the
+    decoder set. Breaks if ``index.html`` goes silent again for this shape, which is how a degraded
+    run came to be indistinguishable from a fully corroborated one (AAP §0.6.6 row 4, §0.7.2).
+    """
+    assert importlib.util.find_spec(SECONDARY_MODULE) is not None, (
+        f"{SECONDARY_MODULE!r} is not installed in this environment, so the binding could not be "
+        f"discovered even before it was made unusable and this is not the path under test; it is "
+        f"declared in requirements.lock, so install the pins there"
+    )
+    monkeypatch.setattr("qrcheck.decode.opencv._load_cv2", lambda: None)
+    space = workspace(write_config, tmp_path, target=REFERENCE_TARGET)
+
+    result = invoke(
+        run_cli,
+        space,
+        "run",
+        "--adapter",
+        REFERENCE_TARGET,
+        "--ec",
+        EC_LEVEL,
+        "--checks",
+        ROUNDTRIP_CHECK,
+        "--class",
+        CORPUS_CLASS,
+    )
+    assert result.exit_code == EXIT_OK, (
+        f"the present-but-unusable run exited {result.exit_code}; an unusable corroborating "
+        f"decoder is a supported degradation, so a conforming target must still pass; "
+        f"{diagnostic(result)}"
+    )
+    summary = load_summary(space, result)
+    counts = summary["counts"]
+    assert counts["failed"] == 0 and counts["error"] == 0 and counts["skipped"] == 0, (
+        f"the present-but-unusable run reported failed={counts['failed']} "
+        f"error={counts['error']} skipped={counts['skipped']} against a conforming target; a "
+        f"decoder that could not answer must not fail, error or skip a case; counts: {counts!r}"
+    )
+    entries = results_of(summary)
+    for entry in entries:
+        decoded = entry["decoded"]
+        assert decoded["agreement"] == SINGLE_DECODER_AGREEMENT, (
+            f"{entry['check_id']} {entry['case_id']} records agreement "
+            f"{decoded['agreement']!r}, not {SINGLE_DECODER_AGREEMENT!r}, although the "
+            f"secondary decoder answered with an error"
+        )
+        assert sorted(decoded["per_decoder"]) == sorted([PRIMARY_DECODER, SECONDARY_DECODER]), (
+            f"{entry['check_id']} {entry['case_id']} records the decoders "
+            f"{sorted(decoded['per_decoder'])}; an installed-but-unusable decoder is asked, so "
+            f"both names are recorded even though only one answered"
+        )
+        secondary = decoded["per_decoder"][SECONDARY_DECODER]
+        assert secondary["status"] == UNUSABLE_DECODER_STATUS, (
+            f"{entry['check_id']} {entry['case_id']} records the secondary decoder's status as "
+            f"{secondary['status']!r}, not {UNUSABLE_DECODER_STATUS!r}; entry: {secondary}"
+        )
+    html_path = space.report_dir / HTML_FILENAME
+    assert html_path.is_file(), (
+        f"the run wrote no {HTML_FILENAME} under {space.report_dir}; {diagnostic(result)}"
+    )
+    lowered = html_path.read_text(encoding="utf-8").lower()
+    assert DEGRADATION_CLASS in lowered, (
+        f"{HTML_FILENAME} carries no {DEGRADATION_CLASS!r} banner although the secondary "
+        f"decoder could not be imported, so the degradation is inferable only from the "
+        f"per-decoder statuses"
+    )
+    assert DEGRADATION_LABEL in lowered, (
+        f"{HTML_FILENAME} never mentions the degradation it describes; the word "
+        f"{DEGRADATION_LABEL!r} is missing"
+    )
+
+
 # ---------------------------------------------------------------------------
-# The control, without which the three tests above would prove nothing
+# The control, without which the four row-4 tests above would prove nothing
 # ---------------------------------------------------------------------------
 
 
