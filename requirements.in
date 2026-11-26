@@ -1,0 +1,12 @@
+# Runtime dependency pins for qrcheck (compile input for requirements.lock).
+# Regenerate with: pip-compile --generate-hashes --output-file=requirements.lock requirements.in
+# The lock file is the authority CI installs from with --require-hashes.
+# pip-tools 7.5.3 requires pip==24.0 in the generation environment (later pip
+# releases removed pip._internal.utils.compat.stdlib_pkgs, which pip-tools imports).
+click==8.1.8
+httpx==0.27.2
+numpy==1.26.4
+opencv-python-headless==4.10.0.84
+Pillow==10.4.0
+segno==1.6.6
+zxing-cpp==2.2.0
