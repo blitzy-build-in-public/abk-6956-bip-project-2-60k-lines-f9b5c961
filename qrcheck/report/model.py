@@ -122,10 +122,18 @@ class Reason(enum.StrEnum):
     the command with exit code 2 before any result exists, so they never reach this
     model and need no word here.
 
-    ``INTERNAL_ERROR`` names an ``error`` result filed after an internal fault - an
-    exception raised by a check or by the framework itself, which the run contains
-    instead of aborting (AAP §0.6.6 row 11) - so the row names the fault instead of
-    borrowing a check's verdict.
+    The vocabulary is closed at thirteen members. Twelve are the ones the
+    specification fixes - ``unsupported_capability``, ``missing_dependency``,
+    ``unsupported_platform``, ``decoder_disagreement``, ``format_info_disagreement``,
+    ``target_rejected``, ``target_unavailable``, ``target_timeout``,
+    ``contract_error``, ``value_mismatch``, ``sampling_failed`` and
+    ``capacity_violation`` - each spelled exactly as it writes them, in that order.
+    The thirteenth, ``INTERNAL_ERROR``, is one accepted addition, and the
+    specification's own internal-fault state is why it exists (AAP §0.6.6 row 11):
+    an exception raised by a check or by the framework itself is contained as an
+    ``error`` result carrying its traceback while the run continues, every
+    non-``passed`` result must carry a reason, and none of the twelve describes a
+    fault of the framework rather than a verdict on the target.
 
     Adding a member is additive and safe for consumers that compare against the
     string value; renaming one changes the public surface that ``summary.json``,

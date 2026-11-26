@@ -17,6 +17,10 @@ command with exit code 2 **before a single case runs**, so no report is written 
 report directory is left empty:
 
 * the configuration cannot be loaded or fails validation (``ConfigError``);
+* the adapter cannot be built from a record the schema accepted -- a ``kwargs_map`` naming
+  a field the framework does not have, a ``metadata_map`` beside a stdout-based ``returns``,
+  an http template with no payload placeholder, or a target the constructor finds
+  unavailable (``ConfigError``, ``TargetError`` and ``ValueError``);
 * ``--adapter`` names no declared ``[targets.<name>]`` table, ``--ec`` is outside ``L``,
   ``M``, ``Q``, ``H``, or the seed is negative;
 * ``--checks`` matches no registered check (``SelectionError``, which echoes the selector);
@@ -28,8 +32,10 @@ exists or can exist, and exit code 3 outranks 1, which outranks 0. One or more `
 results with no ``error`` result is 1; any ``error`` result is 3; a run of ``passed`` and
 ``skipped`` results alone is 0, because a skip is neither a failure nor a pass-flavoured
 outcome and is tallied in its own integer. A report directory that cannot be written is 3 as
-well, and is the one condition where the results the run did produce are streamed to stdout
-as one JSON object per line, so a CI consumer is never left with nothing.
+well, and is the one condition where the results the run did produce are streamed to stdout as
+one JSON object per line; a directory found unusable before a result existed leaves nothing to
+stream, which the diagnostic states, so a CI consumer is never left with an empty stream it
+cannot explain.
 
 Two interface gaps the plan leaves open, and how this module settles them
 ------------------------------------------------------------------------
@@ -67,9 +73,11 @@ from qrcheck.report import write_all_reports
 from qrcheck.report.json_report import dumps_canonical
 from qrcheck.runner import RunPrerequisiteError, run_suite
 from qrcheck.targets import ADAPTER_TYPES
+from qrcheck.targets.base import TargetError
 
-if TYPE_CHECKING:  # Annotation resolution only: no runtime import of the model is needed
+if TYPE_CHECKING:  # Annotation resolution only: this module constructs no record itself
     from qrcheck.report.model import RunResult
+    from qrcheck.targets.base import Adapter
 
 __all__ = ("DEFAULT_CONFIG_PATH", "DEFAULT_EC_LEVEL", "EC_LEVELS", "run", "run_command")
 
@@ -149,11 +157,12 @@ def run(
         everything passed or was skipped.
 
     Raises:
-        Exception: anything the framework did not classify -- an adapter constructor defect, a
-            programming error in a check that escaped containment, a non-``OSError`` fault of
-            the writer. It propagates untouched, because only ``qrcheck.cli.main`` may turn
-            an unclassified exception into exit code 3, and swallowing it here would publish a
-            run as if nothing had gone wrong.
+        Exception: anything the framework did not classify -- a constructor fault outside the
+            three error classes step 7 maps to exit code 2, a programming error in a check
+            that escaped containment, a non-``OSError`` fault of the writer. It propagates
+            untouched, because only ``qrcheck.cli.main`` may turn an unclassified exception
+            into exit code 3, and swallowing it here would publish a run as if nothing had
+            gone wrong.
     """
     # -- 1. the configuration -------------------------------------------------
     try:
@@ -240,7 +249,23 @@ def run(
     # -- 7. the adapter, and the run -----------------------------------------
     # ADAPTER_TYPES is the only factory table, and a lookup imports the one adapter module
     # for this target kind: no concrete adapter is named in this file.
-    adapter_obj = ADAPTER_TYPES[str(target.type)](target, name=name)
+    #
+    # Construction sits inside the exit-2 mapping, never above it. A constructor refuses a
+    # configuration that is wrong on its own terms but whose shape alone the schema can
+    # check: a ``kwargs_map`` naming a field the framework does not have, because that
+    # mapping's key vocabulary belongs to the adapter and not to the schema; a
+    # ``metadata_map`` beside a stdout-based ``returns``, which would read one stream twice;
+    # an http ``request_template`` carrying no payload placeholder. AAP §0.3.4 puts each of
+    # these at exit code 2, named by its dotted key and decided before any check runs, and
+    # ``str(error)`` already reads "<dotted key>: <message>". A ``TargetError`` raised this
+    # early is the pre-flight availability fault, which carries that same code wherever it
+    # is found: an adapter that could not be built leaves no run to describe.
+    adapter_obj: Adapter | None = None
+    try:
+        adapter_obj = ADAPTER_TYPES[str(target.type)](target, name=name)
+    except (ConfigError, TargetError, ValueError) as error:
+        click.echo(f"{_DIAGNOSTIC_PREFIX}configuration error: {error}", err=True)
+        return EXIT_CONFIG
     try:
         run_result = run_suite(
             config, selection, adapter_obj, level, run_seed, fail_fast=fail_fast
@@ -257,9 +282,11 @@ def run(
         # and necessary here: the runner closes the adapter once its walk begins, but every
         # prerequisite failure raises before that point, and a loopback client or a scratch
         # directory must not outlive the command. A teardown fault is not a check's verdict,
-        # so it is swallowed rather than allowed to replace the run's own outcome.
+        # so it is swallowed rather than allowed to replace the run's own outcome. There is
+        # nothing to close when construction itself failed, because no adapter was made.
         try:
-            adapter_obj.close()
+            if adapter_obj is not None:
+                adapter_obj.close()
         except Exception:  # noqa: BLE001 - see above: it must not replace the run's outcome
             pass
 
@@ -337,9 +364,11 @@ def _report_unwritable(
     -- no wrapper object and no array -- through the product's only JSON formatter, so a CI
     consumer parses results it would otherwise never see.
 
-    When no run result exists the stream is empty, which is the honest answer: the failure was
-    found before any case ran, and no result is fabricated to fill the output. Every fault is
-    decided by the caller, not here: the run may have completed and only the report failed.
+    When the caller holds no run result the stream stays empty and the diagnostic says so, so an
+    empty stdout is never mistaken for a truncated one: the failure was found before the run
+    produced a result to stream, and none is fabricated to fill the output. Every fault is
+    decided by the caller, not here: the run may have completed and only the report failed, and
+    then the number of results streamed is stated on stderr as well.
 
     Args:
         detail: The ``OSError`` that prevented the write, quoted in the diagnostic because its
@@ -359,7 +388,20 @@ def _report_unwritable(
         f"{_DIAGNOSTIC_PREFIX}report directory cannot be written: {where}: {detail}",
         err=True,
     )
-    if run_result is not None:
+    if run_result is None:
+        # Nothing is streamed and nothing is invented: a consumer reading only stdout has to
+        # learn from stderr that the empty stream is this run's whole answer, not a truncation.
+        click.echo(
+            f"{_DIAGNOSTIC_PREFIX}no result was streamed to stdout: the run produced none",
+            err=True,
+        )
+    else:
+        streamed = len(run_result.results)
+        click.echo(
+            f"{_DIAGNOSTIC_PREFIX}{streamed} "
+            f"{'result' if streamed == 1 else 'results'} streamed to stdout as JSON lines",
+            err=True,
+        )
         for result in run_result.results:
             click.echo(_json_line(result.as_dict()))
     return EXIT_INTERNAL

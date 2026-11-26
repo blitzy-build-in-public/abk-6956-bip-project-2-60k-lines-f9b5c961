@@ -105,6 +105,12 @@ RAISING_MESSAGE: Final[str] = "deliberate failure injected by the exit-code suit
 UNAVAILABLE_TARGET: Final[str] = "remote"
 UNAVAILABLE_DETAIL: Final[str] = "connection refused"
 
+#: The stable half of the diagnostic an unwritable ``report_dir`` produces when no run result
+#: exists to stream. The probe decides before any case runs, so AAP §0.6.6 row 10's JSON-lines
+#: half is unreachable for that trigger and the empty stream has to be stated rather than left
+#: to be read as a truncation; this is the phrase a consumer can key on.
+NOTHING_STREAMED: Final[str] = "no result was streamed to stdout"
+
 #: The payload every stubbed decode returns. Deliberately not the payload of any corpus
 #: record, so a round-trip case fails on the payload comparison and for no other reason.
 STUBBED_PAYLOAD: Final[bytes] = b"qrcheck exit-code suite: not the requested payload"
@@ -670,6 +676,72 @@ def test_exit_two_for_a_target_unavailable_at_preflight(
     assert stub_adapter.closed is True
 
 
+#: A ``library`` target whose ``kwargs_map`` names a field :class:`GenerateRequest` does not
+#: have. ``qrcheck.config.schema`` accepts the mapping because it checks that mapping's *shape*
+#: -- every key and value non-empty text -- and never its vocabulary, which belongs to the
+#: adapter that has to pass the fields on.
+UNKNOWN_KWARGS_FIELD_DOCUMENT: Final[str] = (
+    'default_adapter = "local"\n'
+    "\n"
+    "[targets.local]\n"
+    'type = "library"\n'
+    'callable = "qrcheck_no_such_module:build"\n'
+    'returns = "raw_bytes"\n'
+    'kwargs_map = { payload = "text", not_a_request_field = "x" }\n'
+    'capabilities = ["png"]\n'
+)
+
+#: A ``cli`` target that asks ``metadata_map`` to read the target's JSON metadata from stdout
+#: while ``returns = "base64"`` puts the artefact there. Both keys are individually valid, so
+#: only the adapter can see that they would consume one stream twice.
+STDOUT_METADATA_MAP_DOCUMENT: Final[str] = (
+    'default_adapter = "local"\n'
+    "\n"
+    "[targets.local]\n"
+    'type = "cli"\n'
+    'command = ["qrcheck-no-such-target"]\n'
+    'payload_arg = "-p {}"\n'
+    'output_arg = "-o {}"\n'
+    'returns = "base64"\n'
+    'metadata_map = { version = "version" }\n'
+    'capabilities = ["png"]\n'
+)
+
+
+@pytest.mark.parametrize(
+    ("document", "offending_key"),
+    [
+        (UNKNOWN_KWARGS_FIELD_DOCUMENT, "targets.local.kwargs_map"),
+        (STDOUT_METADATA_MAP_DOCUMENT, "targets.local.metadata_map"),
+    ],
+    ids=["kwargs_map-names-an-unknown-field", "metadata_map-beside-a-stdout-returns"],
+)
+def test_exit_two_when_a_configuration_the_schema_accepts_cannot_build_an_adapter(
+    invoke_cli: Callable[..., Any],
+    toml_config_file: Callable[..., Path],
+    report_dir: Path,
+    document: str,
+    offending_key: str,
+) -> None:
+    """A configuration fault the adapter finds at construction is exit 2, not exit 3. Both
+    documents below are decided from the file alone -- one names a request field the framework
+    does not have, the other makes two keys read one stream -- so they belong to the exit-2
+    class the moment they are refused, even though the loader cannot see either. The key
+    assertion is the one that keeps the test honest: the message has to name the mapping's own
+    dotted key, because a diagnostic that named some other key would still exit 2 while telling
+    the reader to edit the wrong line. Nothing is imported, spawned or decoded here: the fault
+    is raised before the adapter resolves its callable, and no report may be written for a run
+    that never started.
+    """
+    config = toml_config_file(text=document)
+
+    result = invoke_cli("run", "--checks", "RT-ROUNDTRIP", config=config)
+
+    assert result.exit_code == EXIT_CONFIG
+    assert offending_key in result.stderr
+    assert_no_report(report_dir)
+
+
 # --------------------------------------------------------------------------- #
 # Exit code 3: an internal fault, the report, and the one time results stream
 # --------------------------------------------------------------------------- #
@@ -732,14 +804,22 @@ def test_exit_three_when_the_report_directory_is_unwritable(
     unwritable_report_dir: Path,
     report_dir: Path,
 ) -> None:
-    """A ``report_dir`` that cannot be created is exit 3, and the path is in the message. A
-    regular file stands where the directory belongs, so ``mkdir`` fails for every user
-    including root -- a permission bit would prove nothing in a container that runs as root.
+    """A ``report_dir`` that cannot be created is exit 3, the path is in the message, and the
+    empty stream is stated. A regular file stands where the directory belongs, so ``mkdir``
+    fails for every user including root -- a permission bit would prove nothing in a container
+    that runs as root. Writability is probed before any case runs, so nothing is streamed and
+    the diagnostic has to say that no result exists: an unstated empty stdout is
+    indistinguishable from a stream that was lost. The non-vacuous half of the same row is
+    ``test_exit_three_streams_json_lines_when_the_report_cannot_be_written``.
     """
     result = invoke_cli("run", "--report-dir", str(unwritable_report_dir))
 
     assert result.exit_code == EXIT_INTERNAL
     assert str(unwritable_report_dir.resolve()) in result.stderr
+    assert NOTHING_STREAMED in result.stderr, (
+        "the probe decides before any case runs, so stderr must say that no result was "
+        f"streamed; stderr was {result.stderr!r}"
+    )
     assert json_object_lines(result.stdout) == []
     assert_no_report(report_dir)
 

@@ -30,19 +30,34 @@ one ``_`` per *code point*, so a two-byte ``ü`` and a four-byte emoji each cost
 No threshold from ``qrcheck.toml`` is read here, nothing is skipped, retried or marked, every
 collection is iterated in sorted order, and the only process this module starts is one short child
 interpreter printing identifiers under a chosen ``PYTHONHASHSEED``.
+
+``CaseResult`` and ``RunResult`` themselves are pinned here too, because the identifier above is
+derived from the very fields they validate: both subjects are ``qrcheck/report/model.py``, and
+``tests/unit/`` is the plan's closed 21-module inventory (AAP §0.9.1, §0.11.1). A ``duration_ms``
+is finite and non-negative (``nan`` and ``inf`` are not tokens RFC 8259 defines), ``request``,
+``decoded`` and ``expected`` are Mappings, a string ``decoded[TRACEBACK_KEY]`` has its absolute
+paths folded into a portable form, ``evidence_dir`` is a non-empty relative posix path, a
+``RunResult`` finishes at or after it starts, and one row stands per ``(check_id, case_id)`` pair;
+every rejected record is paired with the record the same construction accepts.
 """
 
 import ast
+import dataclasses
 import hashlib
 import json
 import os
 import re
 import subprocess
 import sys
+import traceback
+import types
+from collections.abc import Callable, Mapping
 from pathlib import Path
+from typing import Any
 
 import pytest
 
+from qrcheck.checks.support import build
 from qrcheck.evidence import naming as naming_module
 from qrcheck.evidence.naming import (
     EVIDENCE_DIR_NAME,
@@ -54,7 +69,15 @@ from qrcheck.evidence.naming import (
     sanitize,
 )
 from qrcheck.report import model as model_module
-from qrcheck.report.model import CaseResult, Reason, Status, failure_id
+from qrcheck.report.model import (
+    TRACEBACK_KEY,
+    CaseResult,
+    Counts,
+    Reason,
+    RunResult,
+    Status,
+    failure_id,
+)
 
 # Resolved from the imported module, never from the working directory: a submodule's
 # __file__ is always the real source file, so the package directory and the repository
@@ -771,3 +794,490 @@ def test_the_scan_is_not_vacuous() -> None:
     assert files, f"no Python file found under {_PACKAGE_DIR}"
     assert _MODEL_PATH in files, f"{len(files)} files scanned, none of them {_MODEL_PATH}"
     assert _NAMING_PATH in files, f"{len(files)} files scanned, none of them {_NAMING_PATH}"
+
+
+# --------------------------------------------------------------------------- #
+# The result model records: what CaseResult and RunResult refuse
+# --------------------------------------------------------------------------- #
+
+# The field names AAP §0.3.4 states for each record, written out here rather than read
+# from the dataclasses under test, so a field that is added, dropped or renamed fails an
+# assertion below instead of moving with the implementation.
+CASE_RESULT_FIELDS = (
+    "check_id",
+    "case_id",
+    "status",
+    "reason",
+    "duration_ms",
+    "request",
+    "decoded",
+    "expected",
+    "evidence_dir",
+    "seed",
+)
+RUN_RESULT_FIELDS = (
+    "run_id",
+    "started_at",
+    "finished_at",
+    "adapter",
+    "seed",
+    "ec_level",
+    "loc_count",
+    "counts",
+    "results",
+)
+
+# A content hash, not a UUID and not a timestamp, which is the identity shape the model
+# accepts.
+RUN_ID = "9f2c4a1d8e7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d"
+STARTED_AT = "2026-01-01T00:00:05+00:00"
+FINISHED_AT = "2026-01-01T00:00:07.500+00:00"
+EVIDENCE_DIR = "evidence/RT-ROUNDTRIP/RT-ROUNDTRIP__corpus_url-001__value_mismatch"
+
+NON_FINITE_DURATIONS = (
+    pytest.param(float("nan"), id="nan"),
+    pytest.param(float("inf"), id="positive-inf"),
+    pytest.param(float("-inf"), id="negative-inf"),
+)
+
+FINITE_DURATIONS = (
+    pytest.param(0.0, id="zero"),
+    pytest.param(0.25, id="sub-millisecond"),
+    pytest.param(12.5, id="fractional"),
+    pytest.param(1000, id="int"),
+    pytest.param(1e-9, id="tiny"),
+)
+
+# Everything that is not a mapping, including the two shapes a careless caller would
+# most plausibly pass: a JSON array and a JSON scalar.
+NON_MAPPING_PAYLOADS = (
+    pytest.param(["payload_b64"], id="list"),
+    pytest.param(("payload_b64",), id="tuple"),
+    pytest.param("payload_b64", id="str"),
+    pytest.param(7, id="int"),
+    pytest.param(None, id="none"),
+)
+
+MAPPING_PAYLOADS = (
+    pytest.param({}, id="empty-dict"),
+    pytest.param({"payload_b64": "aGk="}, id="dict"),
+    pytest.param(types.MappingProxyType({"payload_b64": "aGk="}), id="mapping-proxy"),
+)
+
+PAYLOAD_FIELDS = ("request", "decoded", "expected")
+
+
+def case_result(**overrides: Any) -> CaseResult:
+    """Build a failing case result with every field at a legal default."""
+    given: dict[str, Any] = {
+        "check_id": "RT-ROUNDTRIP",
+        "case_id": "corpus:url-001",
+        "status": Status.FAILED,
+        "reason": Reason.VALUE_MISMATCH,
+        "duration_ms": 12.5,
+        "request": {"payload_b64": "aGk="},
+        "decoded": {"payload_bytes": "aGk="},
+        "expected": {"payload_sha256": "0" * 64},
+        "evidence_dir": EVIDENCE_DIR,
+        "seed": 20240101,
+    }
+    given.update(overrides)
+    return CaseResult(**given)
+
+
+def run_result(**overrides: Any) -> RunResult:
+    """Build a run holding one failing case, with every field at a legal default."""
+    given: dict[str, Any] = {
+        "run_id": RUN_ID,
+        "started_at": STARTED_AT,
+        "finished_at": FINISHED_AT,
+        "adapter": "reference",
+        "seed": 20240101,
+        "ec_level": "M",
+        "loc_count": 1234,
+        "counts": Counts(failed=1),
+        "results": (case_result(),),
+    }
+    given.update(overrides)
+    return RunResult(**given)
+
+
+# --------------------------------------------------------------------------- #
+# The record shape AAP §0.3.4 fixes
+# --------------------------------------------------------------------------- #
+
+
+def test_case_result_keeps_the_ten_stated_fields() -> None:
+    """The record and its summary projection are exactly the AAP's ten fields."""
+    assert tuple(field.name for field in dataclasses.fields(CaseResult)) == CASE_RESULT_FIELDS
+    assert sorted(case_result().as_dict()) == sorted(CASE_RESULT_FIELDS)
+
+
+def test_run_result_keeps_the_nine_stated_public_fields() -> None:
+    """The nine public fields, plus the two private parsed-timestamp caches."""
+    public = tuple(
+        field.name for field in dataclasses.fields(RunResult) if not field.name.startswith("_")
+    )
+    assert public == RUN_RESULT_FIELDS
+    assert sorted(run_result().as_dict()) == sorted(RUN_RESULT_FIELDS)
+
+
+# --------------------------------------------------------------------------- #
+# duration_ms: finite, then non-negative
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("duration_ms", NON_FINITE_DURATIONS)
+def test_a_non_finite_duration_is_refused(duration_ms: float) -> None:
+    """A nan or an inf would reach summary.json as a token JSON does not define."""
+    with pytest.raises(ValueError) as excinfo:
+        case_result(duration_ms=duration_ms)
+    message = str(excinfo.value)
+    assert "CaseResult.duration_ms" in message
+    assert "finite" in message
+
+
+def test_a_negative_duration_is_still_refused() -> None:
+    """The finiteness guard sits beside the negative guard, which still bites."""
+    with pytest.raises(ValueError, match="must not be negative"):
+        case_result(duration_ms=-0.001)
+
+
+@pytest.mark.parametrize("duration_ms", FINITE_DURATIONS)
+def test_a_finite_non_negative_duration_is_accepted(duration_ms: float) -> None:
+    """Every duration a real case can produce is still storable."""
+    assert case_result(duration_ms=duration_ms).duration_ms == duration_ms
+
+
+# --------------------------------------------------------------------------- #
+# request, decoded and expected are objects
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("name", ("request", "decoded"))
+@pytest.mark.parametrize("value", NON_MAPPING_PAYLOADS)
+def test_a_non_mapping_request_or_decoded_is_refused(name: str, value: object) -> None:
+    """An array or a scalar would stand where summary.json fixes an object."""
+    with pytest.raises(ValueError) as excinfo:
+        case_result(**{name: value})
+    message = str(excinfo.value)
+    assert f"CaseResult.{name}" in message
+    assert type(value).__name__ in message
+
+
+# ``expected`` alone may be ``None``, so its table omits the ``none`` case.
+@pytest.mark.parametrize("value", NON_MAPPING_PAYLOADS[:-1])
+def test_a_non_mapping_expected_is_refused(value: object) -> None:
+    """expected is an object when it is set, and None when nothing was asserted."""
+    with pytest.raises(ValueError) as excinfo:
+        case_result(expected=value)
+    message = str(excinfo.value)
+    assert "CaseResult.expected" in message
+    assert type(value).__name__ in message
+
+
+@pytest.mark.parametrize("name", PAYLOAD_FIELDS)
+@pytest.mark.parametrize("value", MAPPING_PAYLOADS)
+def test_a_mapping_payload_is_accepted(name: str, value: Mapping[str, Any]) -> None:
+    """A dict, an empty dict and a read-only mapping proxy all satisfy the schema."""
+    assert case_result(**{name: value}).as_dict()[name] == value
+
+
+def test_an_absent_expected_is_accepted() -> None:
+    """expected is the one payload a case may leave out."""
+    assert case_result(expected=None).expected is None
+
+
+# --------------------------------------------------------------------------- #
+# decoded[TRACEBACK_KEY]: absolute frame paths folded into a portable form
+# --------------------------------------------------------------------------- #
+
+
+def recorded_traceback(call: Callable[[], object]) -> str:
+    """Return the traceback text a check records for the exception ``call`` raises."""
+    try:
+        call()
+    except Exception:
+        return traceback.format_exc()
+    raise AssertionError("call did not raise, so there is no traceback to record")
+
+
+def stored_traceback(text: str) -> str:
+    """Return how the model stores ``text`` as an error result's traceback."""
+    result = case_result(
+        status=Status.ERROR, reason=Reason.CONTRACT_ERROR, decoded={TRACEBACK_KEY: text}
+    )
+    return result.decoded[TRACEBACK_KEY]
+
+
+def test_a_project_frame_is_stored_project_relative() -> None:
+    """An internal error's own frames name qrcheck/..., not the clone they ran in."""
+    text = recorded_traceback(lambda: build(b"A" * 5000, "M", version=1))
+    # The precondition is what lets this test fail: a real traceback spells every frame's
+    # file as an absolute path.
+    assert 'File "/' in text
+    portable = stored_traceback(text)
+    assert 'File "/' not in portable
+    assert re.search(r'File "qrcheck/checks/support\.py", line \d+, in build', portable)
+    assert re.search(r'File "qrcheck/targets/base\.py", line \d+, in build_request', portable)
+    assert "ValueError: payload is 5000 bytes" in portable
+
+
+def test_a_frame_outside_the_project_keeps_its_last_two_segments() -> None:
+    """A standard-library frame keeps ``.../<package>/<module>.py`` and nothing above it."""
+    text = recorded_traceback(lambda: json.loads("{"))
+    assert 'File "/' in text
+    portable = stored_traceback(text)
+    assert 'File "/' not in portable
+    assert re.search(r'File "\.\.\./json/decoder\.py", line \d+, in \w+', portable)
+
+
+def test_the_rewrite_of_a_real_traceback_is_idempotent() -> None:
+    """A second pass over a real error traceback finds nothing left to rewrite."""
+    once = stored_traceback(recorded_traceback(lambda: build(b"A" * 5000, "M", version=1)))
+    assert stored_traceback(once) == once
+
+
+PORTABLE_TRACEBACKS = (
+    pytest.param('  File ".../json/decoder.py", line 355, in raw_decode', id="marker-form"),
+    pytest.param('  File "qrcheck/checks/support.py", line 238, in build', id="project-relative"),
+    pytest.param("qrcheck/x.py beside .../y.py", id="relative-and-marker"),
+    pytest.param("see http://127.0.0.1:8000/a/b and https://example.com/a/b", id="urls"),
+)
+
+
+@pytest.mark.parametrize("text", PORTABLE_TRACEBACKS)
+def test_an_already_portable_traceback_is_stored_untouched(text: str) -> None:
+    """A portable text, and a URL that only looks like a path, are left exactly alone."""
+    decoded = {TRACEBACK_KEY: text}
+    result = case_result(status=Status.ERROR, reason=Reason.CONTRACT_ERROR, decoded=decoded)
+    assert result.decoded is decoded
+    assert result.decoded[TRACEBACK_KEY] == text
+
+
+def test_only_the_traceback_text_is_rewritten() -> None:
+    """Every other decoded key, and all of request and expected, are stored as given."""
+    request = {"cwd": "/var/lib/scratch", "payload_b64": "aGk="}
+    expected = {"symbol_path": "/var/lib/scratch/symbol.png"}
+    decoded = {
+        TRACEBACK_KEY: '  File "/var/lib/scratch/x.py", line 7, in run',
+        "per_decoder": {"opencv": {"status": "undetected"}, "zxing": {"status": "ok"}},
+        "version": 3,
+    }
+    result = case_result(
+        status=Status.ERROR,
+        reason=Reason.CONTRACT_ERROR,
+        request=request,
+        decoded=decoded,
+        expected=expected,
+    )
+    assert result.decoded[TRACEBACK_KEY] == '  File ".../scratch/x.py", line 7, in run'
+    assert result.decoded["per_decoder"] == decoded["per_decoder"]
+    assert result.decoded["version"] == 3
+    assert sorted(result.decoded) == sorted(decoded)
+    assert result.request is request
+    assert result.expected is expected
+
+
+@pytest.mark.parametrize(
+    "value",
+    (
+        pytest.param(None, id="none"),
+        pytest.param(7, id="int"),
+        pytest.param({"frame": "/var/lib/x/y.py"}, id="mapping"),
+    ),
+)
+def test_a_non_string_traceback_is_stored_as_given(value: object) -> None:
+    """Only a string can carry a path, so any other JSON value is left as it was given."""
+    decoded = {TRACEBACK_KEY: value}
+    result = case_result(status=Status.ERROR, reason=Reason.CONTRACT_ERROR, decoded=decoded)
+    assert result.decoded is decoded
+
+
+# --------------------------------------------------------------------------- #
+# evidence_dir: a non-empty relative posix path
+# --------------------------------------------------------------------------- #
+
+
+def test_an_empty_evidence_dir_is_refused() -> None:
+    """The empty string would make the evidence root itself the case directory."""
+    with pytest.raises(ValueError, match="non-empty relative posix path"):
+        case_result(evidence_dir="")
+
+
+@pytest.mark.parametrize(
+    "evidence_dir",
+    (
+        EVIDENCE_DIR,
+        "evidence/SY-EC-MATCH/SY-EC-MATCH__corpus_url-001__value_mismatch",
+        "a",
+    ),
+    ids=("layout", "two-segments", "single-segment"),
+)
+def test_a_relative_posix_evidence_dir_is_accepted(evidence_dir: str) -> None:
+    """The relative form the evidence store writes is the form the model accepts."""
+    assert case_result(evidence_dir=evidence_dir).evidence_dir == evidence_dir
+
+
+# --------------------------------------------------------------------------- #
+# RunResult: one instant range, one case identity
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    ("started_at", "finished_at"),
+    (
+        ("2026-01-01T00:00:05+00:00", "2026-01-01T00:00:00+00:00"),
+        ("2026-01-01T01:00:06+01:00", "2026-01-01T00:00:05+00:00"),
+        ("2026-01-01T00:00:05.500+00:00", "2026-01-01T00:00:05.499+00:00"),
+    ),
+    ids=("same-zone", "across-zones", "sub-second"),
+)
+def test_a_run_that_finishes_before_it_starts_is_refused(
+    started_at: str, finished_at: str
+) -> None:
+    """A negative run duration would be rendered as fact in two artefacts."""
+    with pytest.raises(ValueError) as excinfo:
+        run_result(started_at=started_at, finished_at=finished_at)
+    message = str(excinfo.value)
+    assert "started_at" in message
+    assert "finished_at" in message
+    assert started_at in message
+    assert finished_at in message
+
+
+@pytest.mark.parametrize(
+    ("started_at", "finished_at"),
+    (
+        ("2026-01-01T00:00:05+00:00", "2026-01-01T00:00:05+00:00"),
+        ("2026-01-01T00:00:05+00:00", "2026-01-01T01:00:05+01:00"),
+    ),
+    ids=("identical", "identical-across-zones"),
+)
+def test_a_zero_length_run_is_accepted(started_at: str, finished_at: str) -> None:
+    """A run may take no measurable time; equal instants are not a reversal."""
+    assert run_result(started_at=started_at, finished_at=finished_at).duration_ms == 0.0
+
+
+@pytest.mark.parametrize(
+    ("started_at", "finished_at", "expected_ms"),
+    (
+        ("2026-01-01T00:00:05+00:00", "2026-01-01T00:00:05.250+00:00", 250.0),
+        ("2026-01-01T00:00:05+00:00", "2026-01-01T01:00:07.500+01:00", 2500.0),
+    ),
+    ids=("sub-second", "across-zones"),
+)
+def test_a_forward_run_reports_a_positive_duration(
+    started_at: str, finished_at: str, expected_ms: float
+) -> None:
+    """Elapsed time is the difference between two instants, whatever their zone."""
+    result = run_result(started_at=started_at, finished_at=finished_at)
+    assert result.duration_ms == pytest.approx(expected_ms)
+    assert result.duration_s == pytest.approx(expected_ms / 1000.0)
+
+
+def test_a_duplicate_case_identity_is_refused() -> None:
+    """Two rows for one case would share one failure ID and one evidence directory."""
+    with pytest.raises(ValueError) as excinfo:
+        run_result(results=(case_result(), case_result()), counts=Counts(failed=2))
+    message = str(excinfo.value)
+    assert "RT-ROUNDTRIP" in message
+    assert "corpus:url-001" in message
+
+
+def test_a_duplicate_that_differs_only_in_reason_is_refused() -> None:
+    """The case identity is (check_id, case_id); the cause is not part of it."""
+    results = (case_result(), case_result(reason=Reason.TARGET_TIMEOUT))
+    with pytest.raises(ValueError, match="corpus:url-001"):
+        run_result(results=results, counts=Counts(failed=2))
+
+
+def test_every_repeated_pair_is_named_in_one_diagnostic() -> None:
+    """Sorting groups each repeat, and one message lists all of them."""
+    results = (
+        case_result(),
+        case_result(check_id="SY-EC-MATCH", case_id="corpus:url-002"),
+        case_result(),
+        case_result(check_id="SY-EC-MATCH", case_id="corpus:url-002"),
+    )
+    with pytest.raises(ValueError) as excinfo:
+        run_result(results=results, counts=Counts(failed=4))
+    message = str(excinfo.value)
+    assert "'RT-ROUNDTRIP'/'corpus:url-001'" in message
+    assert "'SY-EC-MATCH'/'corpus:url-002'" in message
+
+
+def test_the_same_case_id_under_two_check_ids_is_accepted() -> None:
+    """Two checks may legitimately run the same corpus record in one run."""
+    results = (
+        case_result(check_id="RT-ROUNDTRIP", case_id="corpus:url-001"),
+        case_result(check_id="SY-EC-MATCH", case_id="corpus:url-001"),
+    )
+    result = run_result(results=results, counts=Counts(failed=2))
+    assert [(case.check_id, case.case_id) for case in result.results] == [
+        ("RT-ROUNDTRIP", "corpus:url-001"),
+        ("SY-EC-MATCH", "corpus:url-001"),
+    ]
+
+
+# --------------------------------------------------------------------------- #
+# Reason: the vocabulary names every non-passed cause
+# --------------------------------------------------------------------------- #
+
+
+# The twelve reason words the result model fixes, written out here in the order the enum
+# declares them rather than read back from the product, so a member that is reordered,
+# added, dropped or re-spelled has to disagree with this table (AAP §0.3.4 "Result model"
+# enumerates all twelve and spells each one).
+SPECIFIED_REASONS: tuple[str, ...] = (
+    "unsupported_capability",
+    "missing_dependency",
+    "unsupported_platform",
+    "decoder_disagreement",
+    "format_info_disagreement",
+    "target_rejected",
+    "target_unavailable",
+    "target_timeout",
+    "contract_error",
+    "value_mismatch",
+    "sampling_failed",
+    "capacity_violation",
+)
+
+
+def test_an_internal_fault_has_a_reason_of_its_own() -> None:
+    """An ``error`` row names the framework's fault, not a check's verdict. AAP §0.6.6 row 11
+    contains an internal exception as an ``error`` result carrying its traceback instead of
+    aborting the run, so its cause needs a word of its own: without one, a real capacity-gate
+    ``ValueError`` raised on the framework side can only be filed as ``capacity_violation`` - a
+    check's verdict - and the ``reason`` ``summary.json`` records and the ``<error
+    message=...>`` ``junit.xml`` emits then describe the row as something it is not.
+    """
+    assert Reason.INTERNAL_ERROR.value == "internal_error"
+    assert Reason("internal_error") is Reason.INTERNAL_ERROR
+    result = case_result(
+        check_id="IV-OVERCAPACITY",
+        case_id="synthetic:internal-error",
+        status=Status.ERROR,
+        reason=Reason.INTERNAL_ERROR,
+    )
+    assert result.as_dict()["reason"] == "internal_error"
+
+
+def test_the_vocabulary_is_closed_at_the_twelve_specified_reasons_and_internal_error() -> None:
+    """The vocabulary is closed, and this is where that is pinned. The result model fixes it at
+    exactly twelve words and spells each one, while ``Reason`` is a documented public surface -
+    ``summary.json`` records the value, ``junit.xml`` emits it as an ``<error message=...>``, and
+    a CI trend line keys on it - so a member that is added, dropped, reordered or re-spelled has
+    to fail here instead of reaching those artefacts. Members are compared in declaration order,
+    which is the order every serialisation and every table of them is built from.
+
+    The thirteenth member exists for a state the twelve cannot name: an exception raised by a
+    check or by the framework itself must become an ``error`` result carrying its traceback while
+    the run continues (AAP §0.6.6 row 11), a ``CaseResult`` refuses any non-``passed`` result that
+    carries no reason, and none of the twelve describes a fault of the framework rather than a
+    verdict on the target. ``internal_error`` is the one accepted addition, compared last, so a
+    second addition fails here as surely as a missing member does.
+    """
+    assert len(SPECIFIED_REASONS) == 12
+    assert [member.value for member in Reason] == [*SPECIFIED_REASONS, "internal_error"]
