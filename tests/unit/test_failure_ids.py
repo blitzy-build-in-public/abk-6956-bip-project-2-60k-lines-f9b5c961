@@ -822,4 +822,3 @@ def test_the_scan_is_not_vacuous() -> None:
     assert files, f"no Python file found under {_PACKAGE_DIR}"
     assert _MODEL_PATH in files, f"{len(files)} files scanned, none of them {_MODEL_PATH}"
     assert _NAMING_PATH in files, f"{len(files)} files scanned, none of them {_NAMING_PATH}"
-

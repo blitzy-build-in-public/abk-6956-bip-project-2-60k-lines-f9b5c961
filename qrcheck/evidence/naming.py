@@ -5,15 +5,14 @@ directory or anything inside it reads the name from here (AAP §0.3.4 "Evidence 
 and naming", §0.8.1 "Single owner of each cross-cutting concern"). The consumers are
 fixed, and no second definition of any name below may exist:
 
-* ``qrcheck/report/__init__.py`` imports :data:`EVIDENCE_DIR_NAME` to default the
-  evidence root to ``<report_dir>/evidence``.
-* ``qrcheck/report/evidence.py`` builds every directory with :func:`evidence_dir` or
-  :func:`case_evidence_dir` and writes only the closed artefact set
-  (:data:`FIXED_ARTIFACT_NAMES`, :func:`symbol_artifact_name`,
+* ``qrcheck/report/evidence.py`` reads :data:`EVIDENCE_DIR_NAME` to place the
+  evidence root at ``<report_dir>/evidence``, and builds every case directory with
+  :func:`evidence_dir` or :func:`case_evidence_dir`, writing only the closed artefact
+  set (members of :data:`FIXED_ARTIFACT_NAMES`, :func:`symbol_artifact_name`,
   :func:`damage_artifact_name`), whose completeness :func:`is_evidence_artifact`
   decides.
-* ``qrcheck/report/html.py`` lists a case's damage evidence in :data:`DAMAGE_KINDS`
-  order.
+* ``qrcheck/report/html.py`` renders a case's images from that same closed set,
+  admitted by :func:`is_evidence_artifact` and listed in sorted-name order.
 
 ``qrcheck/checks/damage.py`` must import :data:`DAMAGE_KINDS` from here rather than
 restating the order. Two spellings of one path would let a report link to evidence
@@ -51,8 +50,9 @@ import hashlib
 import re
 from pathlib import Path
 
-# The middle path segment of every evidence location. ``qrcheck/report/__init__.py``
-# imports this constant, so its name and value are a fixed public surface.
+# The middle path segment of every evidence location. ``qrcheck/report/evidence.py``
+# reads this constant for the evidence root, so its name and value are a fixed public
+# surface.
 EVIDENCE_DIR_NAME: str = "evidence"
 
 # The closed artefact set of AAP §0.3.4: "the set is closed; a check may write only the
@@ -228,8 +228,9 @@ def is_evidence_artifact(name: str) -> bool:
     """Return whether ``name`` is a name the closed evidence set allows.
 
     AAP §0.3.4 closes the set, so completeness is decided here once instead of by each
-    writer keeping its own list: the evidence store and the HTML writer use this to
-    ignore an unknown directory entry rather than publish it.
+    writer keeping its own list: ``qrcheck/report/html.py`` uses this to ignore an
+    unknown directory entry rather than publish it, and the evidence store names every
+    artefact it writes through the closed-set names and helpers this module owns.
 
     Args:
         name: A bare file name, never a path.
@@ -380,4 +381,3 @@ __all__ = [
     "sanitize",
     "symbol_artifact_name",
 ]
-
