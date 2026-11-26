@@ -76,7 +76,9 @@ and are raised before anything is written:
 
 * :exc:`ValueError` from this module or from :mod:`qrcheck.evidence.naming` when the
   artefact request itself is malformed - an unknown symbol format, a non-PNG repetition, an
-  undeclared damage kind. Each message names the offending value.
+  undeclared damage kind - or from :func:`qrcheck.report.json_report.dumps_canonical` when a
+  persisted mapping holds a non-finite float (``nan``, ``inf`` or ``-inf``), which JSON
+  defines no token for. Each message names the offending value or the artefact at fault.
 * :exc:`TypeError` when a persisted mapping holds a value the canonical writer cannot
   serialise, or a supplied artefact's ``image_bytes`` is not bytes-like. Both fail here
   rather than being stringified into a plausible-looking artefact, and the message names
@@ -152,12 +154,13 @@ def _artifact_bytes(name: str, value: Any) -> bytes:
 
 
 def _canonical_text(name: str, payload: Any) -> str:
-    """Return the canonical JSON text for artefact ``name``, or raise :exc:`TypeError`.
+    """Return the canonical JSON text for artefact ``name``, or raise the writer's refusal.
 
-    The serialisation itself belongs to :func:`qrcheck.report.json_report.dumps_canonical`,
-    the product's only JSON formatter; this function adds the artefact name to the
-    diagnostic so that a caller who persisted an unserialisable value is told which file it
-    was for, not merely which type was refused.
+    The serialisation itself belongs to
+    :func:`qrcheck.report.json_report.dumps_canonical`, the product's only JSON formatter;
+    this function adds the artefact name to the diagnostic so that a caller who persisted
+    an unserialisable value - or a non-finite one, which the writer refuses for the same
+    reason - is told which file it was for, not merely which type was refused.
 
     Args:
         name: The artefact name the text is destined for, so that the message names it.
@@ -169,17 +172,25 @@ def _canonical_text(name: str, payload: Any) -> str:
     Raises:
         TypeError: ``payload`` holds a value that is not JSON-serialisable. The message
             names ``name`` and then the value the writer refused.
+        ValueError: ``payload`` holds a non-finite float, which JSON does not define, so
+            the artefact could not be canonical JSON. The message names ``name`` and then
+            the value the writer refused.
         UnicodeEncodeError: the text holds a character UTF-8 cannot encode, such as a lone
-            surrogate. Raised before anything is written.
+            surrogate. Raised before anything is written, and never converted into the
+            ``ValueError`` above - a lone surrogate is not a serialisation defect.
     """
     try:
         text = dumps_canonical(payload)
-        # Encoded here as well as in write_canonical_text, although the text is what is
-        # returned: proving it encodes is what lets record() create the case directory
-        # knowing neither write that follows can fail on encoding.
-        text.encode("utf-8")
     except TypeError as exc:
         raise TypeError(f"artefact {name}: {exc}") from exc
+    except ValueError as exc:
+        raise ValueError(f"artefact {name}: {exc}") from exc
+    # Encoded here as well as in write_canonical_text, although the text is what is
+    # returned: proving it encodes is what lets record() create the case directory
+    # knowing neither write that follows can fail on encoding. It is encoded outside the
+    # handlers above because UnicodeEncodeError is a ValueError: catching it there would
+    # report an unencodable character as an unserialisable value.
+    text.encode("utf-8")
     return text
 
 
@@ -284,7 +295,11 @@ class EvidenceStore:
             ValueError: ``symbol.output_format`` or ``repeat_symbol.output_format`` is
                 neither ``"png"`` nor ``"svg"`` (the repetition must be PNG), or a damage
                 kind is not one of the declared kinds. Nothing has been written when this
-                is raised: every name is resolved first.
+                is raised: every name is resolved first. The same exception is raised when
+                a persisted mapping holds a non-finite float - ``nan``, ``inf`` or
+                ``-inf`` - which JSON does not define, so ``request.json`` or
+                ``decoded.json`` could not be canonical JSON; its message names the
+                artefact, and neither body has been written when it is raised.
             TypeError: a supplied artefact's ``image_bytes`` is not bytes-like, or a
                 mapping persisted here holds a value that is not JSON-serialisable. The
                 message names the artefact at fault, and nothing has been written when it

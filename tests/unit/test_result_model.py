@@ -12,6 +12,10 @@ the model boundary where the value enters:
   FR-6) and would render as the text ``nan`` in the HTML table and the JUnit ``time``;
 * ``request``, ``decoded`` and ``expected`` are Mappings, so no artefact carries an
   array or a scalar where its schema fixes an object;
+* ``decoded[TRACEBACK_KEY]``, when it holds a string, has every absolute path in it
+  rewritten into a portable form, so an error case's evidence names the module that failed
+  rather than the clone it ran in - which is what keeps ``decoded.json`` byte-identical
+  across clones and free of absolute paths (§0.5.4, §0.5.5);
 * ``evidence_dir`` is a non-empty relative posix path, so the empty string cannot name
   the report root as if it were a case's own evidence directory;
 * a ``RunResult`` finishes at or after it starts, so the duration its HTML header
@@ -30,13 +34,17 @@ written and no process is started: these are pure functions of their inputs.
 """
 
 import dataclasses
+import json
+import re
+import traceback
 import types
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any
 
 import pytest
 
-from qrcheck.report.model import CaseResult, Counts, Reason, RunResult, Status
+from qrcheck.checks.support import build
+from qrcheck.report.model import TRACEBACK_KEY, CaseResult, Counts, Reason, RunResult, Status
 
 # The field names AAP §0.3.4 states for each record, written out here rather than read
 # from the dataclasses under test, so a field that is added, dropped or renamed fails an
@@ -224,6 +232,112 @@ def test_a_mapping_payload_is_accepted(name: str, value: Mapping[str, Any]) -> N
 def test_an_absent_expected_is_accepted() -> None:
     """expected is the one payload a case may leave out."""
     assert case_result(expected=None).expected is None
+
+
+# --------------------------------------------------------------------------- #
+# decoded[TRACEBACK_KEY]: absolute frame paths folded into a portable form
+# --------------------------------------------------------------------------- #
+
+
+def recorded_traceback(call: Callable[[], object]) -> str:
+    """Return the traceback text a check records for the exception ``call`` raises."""
+    try:
+        call()
+    except Exception:
+        return traceback.format_exc()
+    raise AssertionError("call did not raise, so there is no traceback to record")
+
+
+def stored_traceback(text: str) -> str:
+    """Return how the model stores ``text`` as an error result's traceback."""
+    result = case_result(
+        status=Status.ERROR, reason=Reason.CONTRACT_ERROR, decoded={TRACEBACK_KEY: text}
+    )
+    return result.decoded[TRACEBACK_KEY]
+
+
+def test_a_project_frame_is_stored_project_relative() -> None:
+    """An internal error's own frames name qrcheck/..., not the clone they ran in."""
+    text = recorded_traceback(lambda: build(b"A" * 5000, "M", version=1))
+    # The precondition is what lets this test fail: a real traceback spells every frame's
+    # file as an absolute path.
+    assert 'File "/' in text
+    portable = stored_traceback(text)
+    assert 'File "/' not in portable
+    assert re.search(r'File "qrcheck/checks/support\.py", line \d+, in build', portable)
+    assert re.search(r'File "qrcheck/targets/base\.py", line \d+, in build_request', portable)
+    assert "ValueError: payload is 5000 bytes" in portable
+
+
+def test_a_frame_outside_the_project_keeps_its_last_two_segments() -> None:
+    """A standard-library frame keeps ``.../<package>/<module>.py`` and nothing above it."""
+    text = recorded_traceback(lambda: json.loads("{"))
+    assert 'File "/' in text
+    portable = stored_traceback(text)
+    assert 'File "/' not in portable
+    assert re.search(r'File "\.\.\./json/decoder\.py", line \d+, in \w+', portable)
+
+
+def test_the_rewrite_of_a_real_traceback_is_idempotent() -> None:
+    """A second pass over a real error traceback finds nothing left to rewrite."""
+    once = stored_traceback(recorded_traceback(lambda: build(b"A" * 5000, "M", version=1)))
+    assert stored_traceback(once) == once
+
+
+PORTABLE_TRACEBACKS = (
+    pytest.param('  File ".../json/decoder.py", line 355, in raw_decode', id="marker-form"),
+    pytest.param('  File "qrcheck/checks/support.py", line 238, in build', id="project-relative"),
+    pytest.param("qrcheck/x.py beside .../y.py", id="relative-and-marker"),
+    pytest.param("see http://127.0.0.1:8000/a/b and https://example.com/a/b", id="urls"),
+)
+
+
+@pytest.mark.parametrize("text", PORTABLE_TRACEBACKS)
+def test_an_already_portable_traceback_is_stored_untouched(text: str) -> None:
+    """A portable text, and a URL that only looks like a path, are left exactly alone."""
+    decoded = {TRACEBACK_KEY: text}
+    result = case_result(status=Status.ERROR, reason=Reason.CONTRACT_ERROR, decoded=decoded)
+    assert result.decoded is decoded
+    assert result.decoded[TRACEBACK_KEY] == text
+
+
+def test_only_the_traceback_text_is_rewritten() -> None:
+    """Every other decoded key, and all of request and expected, are stored as given."""
+    request = {"cwd": "/var/lib/scratch", "payload_b64": "aGk="}
+    expected = {"symbol_path": "/var/lib/scratch/symbol.png"}
+    decoded = {
+        TRACEBACK_KEY: '  File "/var/lib/scratch/x.py", line 7, in run',
+        "per_decoder": {"opencv": {"status": "undetected"}, "zxing": {"status": "ok"}},
+        "version": 3,
+    }
+    result = case_result(
+        status=Status.ERROR,
+        reason=Reason.CONTRACT_ERROR,
+        request=request,
+        decoded=decoded,
+        expected=expected,
+    )
+    assert result.decoded[TRACEBACK_KEY] == '  File ".../scratch/x.py", line 7, in run'
+    assert result.decoded["per_decoder"] == decoded["per_decoder"]
+    assert result.decoded["version"] == 3
+    assert sorted(result.decoded) == sorted(decoded)
+    assert result.request is request
+    assert result.expected is expected
+
+
+@pytest.mark.parametrize(
+    "value",
+    (
+        pytest.param(None, id="none"),
+        pytest.param(7, id="int"),
+        pytest.param({"frame": "/var/lib/x/y.py"}, id="mapping"),
+    ),
+)
+def test_a_non_string_traceback_is_stored_as_given(value: object) -> None:
+    """Only a string can carry a path, so any other JSON value is left as it was given."""
+    decoded = {TRACEBACK_KEY: value}
+    result = case_result(status=Status.ERROR, reason=Reason.CONTRACT_ERROR, decoded=decoded)
+    assert result.decoded is decoded
 
 
 # --------------------------------------------------------------------------- #

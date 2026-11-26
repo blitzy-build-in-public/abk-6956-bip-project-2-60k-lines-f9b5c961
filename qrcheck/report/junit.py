@@ -68,7 +68,7 @@ from typing import Final
 from xml.etree import ElementTree as ET
 
 from qrcheck.report.json_report import dumps_canonical
-from qrcheck.report.model import CaseResult, RunResult, Status
+from qrcheck.report.model import TRACEBACK_KEY, CaseResult, RunResult, Status
 
 __all__ = ["write_junit"]
 
@@ -94,11 +94,6 @@ _ILLEGAL_CODEPOINTS: Final[tuple[int, ...]] = (
 _ILLEGAL_XML_CHARS: Final[dict[int, str]] = str.maketrans(
     {codepoint: "\ufffd" for codepoint in _ILLEGAL_CODEPOINTS}
 )
-
-# The key an errored result carries its traceback under. The runner and
-# ``qrcheck.checks.support`` put it in ``decoded["traceback"]``; that key is the agreed
-# contract between the two, so it is named once here rather than spelled out per call site.
-_TRACEBACK_KEY: Final[str] = "traceback"
 
 # ``testsuite name="qrcheck"`` is the suite identity every consumer keys on, and the
 # ``classname`` of a case is this prefix followed by its check's family.
@@ -141,6 +136,11 @@ def write_junit(run_result: RunResult, path: Path) -> Path:
     Raises:
         TypeError: a result field holds a value that :func:`dumps_canonical` cannot
             serialise, which is a check's defect and must fail loudly.
+        ValueError: a result mapping holds a non-finite float - ``nan``, ``inf`` or
+            ``-inf`` - such as a metric computed from a zero elapsed time.
+            :func:`dumps_canonical` refuses it because JSON defines no token for one, and
+            a ``failure`` body embedding an unparseable number would be worse than a run
+            that fails naming the check that produced it.
         OSError: the parent directory cannot be created or the file cannot be written.
             Propagated untouched - ``qrcheck.cli.run`` is the single place that turns an
             unwritable report directory into exit code 3, and the product has no retry path
@@ -289,11 +289,14 @@ def _error_body(case: CaseResult) -> str:
     """Return the text of an ``error`` element: the traceback, or the decoded mapping.
 
     An internal framework exception reaches the model as an ``error`` result whose
-    ``decoded`` carries the traceback under ``traceback``, and that text is what a reader
-    needs verbatim. A result without it still renders its whole decoded mapping, so an
-    error is never reported as an empty element.
+    ``decoded`` carries the traceback under
+    :data:`qrcheck.report.model.TRACEBACK_KEY`, and that text is what a reader needs. A
+    result without it still renders its whole decoded mapping, so an error is never
+    reported as an empty element. The key is imported from the model rather than spelled
+    out here, because the model is what makes that text portable and a second copy of the
+    name could read a value it never normalised.
     """
-    traceback_text = case.decoded.get(_TRACEBACK_KEY)
+    traceback_text = case.decoded.get(TRACEBACK_KEY)
     if isinstance(traceback_text, str):
         return _xml_text(traceback_text)
     return _xml_text(dumps_canonical(case.decoded))

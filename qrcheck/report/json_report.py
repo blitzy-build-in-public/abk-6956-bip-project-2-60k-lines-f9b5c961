@@ -25,9 +25,10 @@ Nothing here reads a clock, the environment or configuration, and nothing prints
 the only effect this module has is the file :func:`write_canonical_text` is handed, so an
 artefact is a pure function of the value it serialises. None of the three writers sanitises,
 replaces or escapes a value to make it writable: a payload that cannot be serialised raises
-:exc:`TypeError` and a text that UTF-8 cannot encode raises :exc:`UnicodeEncodeError`, both
-before the destination file exists, because a caller defect must be reported rather than
-stringified or mangled into a plausible-looking artefact.
+:exc:`TypeError`, a payload holding a non-finite float raises :exc:`ValueError` because JSON
+defines no token for one, and a text that UTF-8 cannot encode raises
+:exc:`UnicodeEncodeError` - all of them before the destination file exists, because a caller
+defect must be reported rather than stringified or mangled into a plausible-looking artefact.
 """
 
 import json
@@ -54,10 +55,15 @@ def dumps_canonical(payload: Any) -> str:
     There is deliberately no ``default=`` hook and no coercion. ``request`` and
     ``decoded`` mappings are built JSON-ready by the checks, so a stray ``bytes``,
     ``Path`` or adapter object has to raise here instead of being stringified into a
-    plausible-looking report that hides the defect behind a green artefact. The
-    canonical form also carries no ``allow_nan=False``: the model's numeric fields are
-    finite by construction, and adding the guard would make this one formatter reject
-    payloads for a reason the next formatter could disagree about.
+    plausible-looking report that hides the defect behind a green artefact. ``allow_nan``
+    is ``False`` for that same reason: :class:`qrcheck.report.model.CaseResult` guards only
+    its own ``duration_ms``, so a check-supplied metric - a throughput divided by a zero
+    elapsed time is ``inf`` - reaches this function unguarded, and ``json`` would otherwise
+    write the bare ``NaN``/``Infinity`` token that JSON does not define and no strict
+    RFC 8259 parser accepts. A ``summary.json`` that tooling cannot parse is a worse
+    artefact than a run that fails naming the check that produced the value, and since
+    this module is the product's only formatter there is no second one to disagree with
+    the refusal.
 
     Args:
         payload: Any JSON-ready value: a mapping, sequence or scalar as the model and
@@ -69,8 +75,25 @@ def dumps_canonical(payload: Any) -> str:
     Raises:
         TypeError: ``payload`` holds a value that is not JSON-serialisable, which is a
             caller defect rather than something to paper over here.
+        ValueError: ``payload`` holds a non-finite float - ``nan``, ``inf`` or ``-inf`` -
+            which JSON does not define, so the text would otherwise carry a bare ``NaN``
+            or ``Infinity`` token where a number belongs; or it holds a self-referential
+            container. The message names which of the two was found and quotes the
+            serialiser's own reason.
     """
-    return json.dumps(payload, sort_keys=True, indent=2, ensure_ascii=False)
+    try:
+        return json.dumps(payload, sort_keys=True, indent=2, ensure_ascii=False, allow_nan=False)
+    except ValueError as exc:
+        # ``allow_nan=False`` refuses a non-finite float, which JSON defines no token for.
+        # The only other ValueError json raises here is a self-referential payload, so the
+        # diagnostic names the one that actually happened instead of assuming the first,
+        # and both are refused here so that no caller opens a destination first.
+        reason = (
+            "a self-referential container"
+            if "Circular reference" in str(exc)
+            else "a non-finite float (nan, inf or -inf), which JSON does not define"
+        )
+        raise ValueError(f"payload holds {reason}: {exc}") from exc
 
 
 def write_canonical_text(text: str, path: Path) -> Path:
@@ -156,12 +179,17 @@ def write_canonical_json(payload: Any, path: Path) -> Path:
 
     Raises:
         TypeError: ``payload`` holds a value that is not JSON-serialisable.
+        ValueError: ``payload`` holds a non-finite float - ``nan``, ``inf`` or ``-inf`` -
+            which JSON does not define, so the text would carry a bare ``NaN`` or
+            ``Infinity`` token where a number belongs. Raised before the file is opened, so
+            no artefact is left behind.
         UnicodeEncodeError: the serialised payload holds a character UTF-8 cannot encode,
             such as a lone surrogate carried in by a target's JSON metadata. Raised before
             the file is opened, so no artefact is left behind.
         OSError: the parent directory cannot be created or the file cannot be written.
     """
-    # Serialise and encode first: TypeError and UnicodeEncodeError must leave no artefact.
+    # Serialise and encode first: TypeError, ValueError and UnicodeEncodeError must leave
+    # no artefact at all.
     return write_canonical_text(dumps_canonical(payload), path)
 
 
@@ -192,6 +220,10 @@ def write_summary(run_result: RunResult, path: Path) -> Path:
 
     Raises:
         TypeError: a result field holds a value that is not JSON-serialisable.
+        ValueError: a result field holds a non-finite float - ``nan``, ``inf`` or ``-inf``
+            - such as a metric computed from a zero elapsed time, which JSON does not
+            define. Raised before the file is opened, so no ``summary.json`` is left
+            behind.
         UnicodeEncodeError: a result field holds a character UTF-8 cannot encode, such as
             a lone surrogate carried in by a target's JSON metadata. Raised before the
             file is opened, so no ``summary.json`` is left behind.

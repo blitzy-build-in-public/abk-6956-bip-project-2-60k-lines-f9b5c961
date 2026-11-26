@@ -404,6 +404,10 @@ def write_html(
         TypeError: a ``request``, ``decoded`` or ``expected`` mapping holds a value that
             is not JSON-serialisable, which is a caller defect rather than something to
             hide behind a plausible-looking report.
+        ValueError: a ``request``, ``decoded`` or ``expected`` mapping holds a non-finite
+            float - ``nan``, ``inf`` or ``-inf`` - which JSON does not define. It is
+            refused rather than rendered as a token no JSON parser accepts, and it is
+            raised while the document is still in memory, before the file is opened.
         OSError: the destination directory cannot be created or the file cannot be
             written. It propagates untouched: ``qrcheck.cli.run`` is the single place that
             turns an unwritable report directory into exit code 3, and no retry path

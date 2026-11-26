@@ -14,16 +14,25 @@ what makes two runs comparable field by field. The one volatile quantity the mod
 carries - how long a run took - is reachable only through the
 :attr:`RunResult.duration_ms` and :attr:`RunResult.duration_s` properties and is
 deliberately absent from every ``as_dict`` projection.
+
+The one value the model rewrites is :data:`TRACEBACK_KEY`, the text an errored case
+carries: its absolute frame paths are folded into a portable form here, once, so no
+writer, evidence store or report can publish the clone or the machine a run happened
+in (AAP §0.5.5). The anchor a frame path is folded against is this module's own
+location, taken from ``__file__`` lexically and never resolved, so it is the one input
+here that depends on where the package sits - and it is used only to take that location
+back out of the text.
 """
 
 import datetime
 import enum
 import hashlib
 import math
+import os
 import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Final
 
 __all__ = [
     "CaseResult",
@@ -31,12 +40,19 @@ __all__ = [
     "Reason",
     "RunResult",
     "Status",
+    "TRACEBACK_KEY",
     "failure_id",
 ]
 
 # The bound on a failure ID in characters. The ID becomes a filesystem path
 # segment, so the whole identifier - prefix and digest together - is bounded.
 FAILURE_ID_MAX: int = 64
+
+# The ``decoded`` key an errored result carries its traceback under: a check that raises
+# puts ``traceback.format_exc()`` there, and the JUnit writer renders that text as the
+# error body. The key is named once, here, because the model is what normalises the field
+# and a second spelling of it would let an artefact miss the normalisation (AAP §0.8.1).
+TRACEBACK_KEY: Final[str] = "traceback"
 
 # Anything outside this set becomes a single "_", so a hostile case_id cannot
 # traverse out of the evidence directory it names.
@@ -52,6 +68,33 @@ _UUID_SHAPED = re.compile(
     r"[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}"
 )
 _DATE_SHAPED = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
+
+# The directory that holds the ``qrcheck`` package: ``qrcheck/report/model.py`` sits three
+# directories below it, both in a checkout and in an installed ``site-packages`` copy.
+# Derived from this module's ``__file__`` by three ``os.path.dirname`` steps and nothing
+# else - no filesystem call and no environment read - so the module keeps its promise to be
+# a deterministic function of its inputs. A relative ``__file__`` yields a relative anchor
+# that simply never matches an absolute frame path, which then takes the fallback rule.
+_PROJECT_ROOT: Final[str] = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+
+# The fixed marker an absolute path outside this project is collapsed behind: a traceback
+# still names the module and the line that failed, without naming the clone or the machine
+# it ran on (AAP §0.5.5: no absolute path may reach an artefact).
+_PORTABLE_PATH_MARKER: Final[str] = "..."
+
+# One absolute path token inside free text: a leading "/" followed by at least two
+# non-empty segments. The leading slash may not follow a word character, "." or ":" or
+# "/", so the middle of a relative path, a dotted run already in the portable form
+# (".../json/decoder.py") and a URL ("http://host/path", whose first slash follows ":" and
+# whose second follows "/") are all left alone - which is what makes the rewrite
+# idempotent. An absolute path that a URL carries as a query value is folded like any
+# other, because the artefact must hold no absolute path at all and such a value can name
+# the clone just as a frame path can. A segment stops at whitespace, a quote, a comma, a
+# bracket or a colon, so the punctuation surrounding a path in a message is not swallowed
+# into it.
+_PORTABLE_PATH_TOKEN = re.compile(
+    r"(?<![\w.:/-])(/(?:[^\s/\"'`,;:()\[\]{}<>]+/)+[^\s/\"'`,;:()\[\]{}<>]+)"
+)
 
 
 class Status(enum.StrEnum):
@@ -245,6 +288,12 @@ class CaseResult:
     layer; that they really are mappings is enforced here, so a list or a scalar cannot
     reach a serialisation whose schema fixes an object.
 
+    One value is not stored as it was handed in: when ``decoded`` carries
+    :data:`TRACEBACK_KEY` as a string, the absolute paths inside that text are rewritten
+    into a portable form, because a frame's ``co_filename`` is absolute and no artefact
+    may record the directory a run happened in (AAP §0.5.5). Every other key of
+    ``decoded``, and all of ``request`` and ``expected``, are stored untouched.
+
     The instance is frozen: derive a variation with :func:`dataclasses.replace`
     rather than mutating one in place.
 
@@ -274,7 +323,9 @@ class CaseResult:
         finite non-negative number of milliseconds - a ``nan`` or an ``inf`` would reach
         ``summary.json`` as a token JSON does not define - and an evidence directory is a
         non-empty relative posix path, so no artefact records an absolute location and
-        none names the report root itself.
+        none names the report root itself. The traceback an errored case carries is
+        rewritten into a portable form here, at the one point where every artefact's value
+        of it is created, so no writer has to remember to do it.
 
         Raises:
             ValueError: ``status`` or ``reason`` is outside its enum, the status and
@@ -337,13 +388,17 @@ class CaseResult:
                 )
         object.__setattr__(self, "status", status)
         object.__setattr__(self, "reason", reason)
+        object.__setattr__(self, "decoded", _portable_decoded(self.decoded))
 
     def as_dict(self) -> dict[str, Any]:
         """Return the ten-key projection every report writer serialises.
 
         The mappings are returned as given, not copied or coerced: a value that is
         not JSON-serialisable must fail loudly in the writer rather than be silently
-        stringified here, where the defect would be invisible.
+        stringified here, where the defect would be invisible. The one exception is the
+        text field :meth:`__post_init__` normalised - ``decoded[TRACEBACK_KEY]`` comes
+        back with its absolute paths already rewritten, so no artefact can carry one
+        (AAP §0.5.5), while every other value is untouched.
         """
         return {
             "check_id": self.check_id,
@@ -531,3 +586,57 @@ def _validate_run_id(run_id: str) -> None:
         raise ValueError(f"RunResult.run_id must be a content hash, not a UUID: {run_id!r}")
     if _DATE_SHAPED.match(run_id) is not None or _parses_as_isoformat(run_id):
         raise ValueError(f"RunResult.run_id must be a content hash, not a timestamp: {run_id!r}")
+
+
+def _portable_decoded(decoded: Mapping[str, Any]) -> Mapping[str, Any]:
+    """Return ``decoded`` with the traceback it carries made portable to any clone.
+
+    Only :data:`TRACEBACK_KEY` is considered, and only when it holds a string: that text
+    is the single field an absolute filesystem path reaches an artefact through, because
+    every frame of a Python traceback names its source file absolutely (AAP §0.5.5). The
+    mapping itself is returned - the same object - when there is nothing to rewrite, so an
+    error result without a traceback, an empty mapping and an already-portable traceback
+    all keep exactly what the caller supplied.
+
+    Args:
+        decoded: The decoded-or-error evidence mapping a caller supplied.
+
+    Returns:
+        The same mapping, or a copy of it whose :data:`TRACEBACK_KEY` text has no absolute
+        path left in it and whose every other key is unchanged.
+    """
+    text = decoded.get(TRACEBACK_KEY)
+    if not isinstance(text, str):
+        return decoded
+    portable = _portable_traceback_text(text)
+    if portable == text:
+        return decoded
+    normalised = dict(decoded)
+    normalised[TRACEBACK_KEY] = portable
+    return normalised
+
+
+def _portable_traceback_text(text: str) -> str:
+    """Return ``text`` with every absolute path token replaced by a portable form.
+
+    A token inside the directory that holds the ``qrcheck`` package becomes relative to
+    that directory, whether the package is the checkout's (``<clone>/qrcheck/x.py`` ->
+    ``qrcheck/x.py``) or an installed copy (``<site-packages>/qrcheck/x.py`` ->
+    ``qrcheck/x.py``). Any other absolute token keeps its last two segments behind
+    :data:`_PORTABLE_PATH_MARKER`, which still names the module that failed
+    (``/usr/lib/python3.11/json/decoder.py`` -> ``.../json/decoder.py``). The result is
+    the same on every clone and every machine, so ``decoded.json`` stays byte-identical
+    for the same case and seed (AAP §0.5.4), and the rewrite is idempotent: a second pass
+    finds no token left to rewrite.
+    """
+    return _PORTABLE_PATH_TOKEN.sub(_portable_token, text)
+
+
+def _portable_token(match: re.Match[str]) -> str:
+    """Return one absolute path token of a traceback in its portable form."""
+    token = match.group(1)
+    prefix = _PROJECT_ROOT + "/"
+    if _PROJECT_ROOT.startswith("/") and token.startswith(prefix):
+        return token[len(prefix):]
+    segments = token.rsplit("/", 2)
+    return f"{_PORTABLE_PATH_MARKER}/{'/'.join(segments[-2:])}"
