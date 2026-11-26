@@ -19,10 +19,12 @@ The four configuration keys
     module is resolved **lazily**, on the first :meth:`LibraryAdapter.generate`,
     so constructing an adapter costs nothing and ``qrcheck doctor``'s single
     probe generate -- not the constructor -- is what proves the path exists.  A
-    missing module or attribute raises :class:`TargetUnavailable`; a raw
-    ``ImportError`` never escapes, because the runner reports one ``error``
-    result per affected check on target loss and a raw import failure would
-    instead surface as a framework crash that misattributes the fault.
+    missing module or a missing attribute raises :class:`TargetUnavailable`,
+    which is the one trigger that error has; any other exception the module's own
+    import body raises is a defect in the target module rather than a missing
+    import path, so it is left unconverted and propagates to the runner, which
+    records it as a framework defect -- an ``error`` result with its traceback --
+    instead of misattributing it to an unreachable target.
 ``kwargs_map``
     Framework field name -> the callable's keyword-argument name.  The framework
     field vocabulary is exactly the field list of :class:`GenerateRequest`
@@ -72,17 +74,20 @@ request the framework considers valid -- instead of appearing to crash.  Any
 other exception from the callable becomes :class:`TargetContractError` carrying
 ``"<ExceptionType>: <text>"``, so a target bug is reported as a target bug.
 
-``timeout_s`` is accepted and cannot be enforced
-------------------------------------------------
-The configured ``targets.<name>.timeout_s`` is stored on the adapter and enforced
-nowhere, because a call inside this interpreter has no process boundary, socket
-or pipe to interrupt.  Enforcing it would need a thread, a signal alarm or a
-process pool, and the product admits no such component: execution is
-single-process and sequential so that a run stays deterministic.  A library
-target that hangs is a target defect the run reports as a slow case, and
-``docs/targets.md`` states the limitation where a user configures a target.  The
-``cli`` adapter enforces the same key with ``subprocess.run(timeout=...)`` and
-the ``http`` adapter with ``httpx.Timeout``.
+``timeout_s`` is enforced with a daemon-thread watchdog
+-------------------------------------------------------
+The configured ``targets.<name>.timeout_s`` is a real ceiling on the call, not a
+recorded number: :func:`_call_with_watchdog` invokes the callable once on a
+daemon thread and waits at most that many seconds for it, and no answer by then
+raises :class:`TargetTimeout` naming the configured timeout, the callable and the
+adapter -- the same treatment the ``cli`` adapter gives the key with
+``subprocess.run(timeout=...)`` and the ``http`` adapter with ``httpx.Timeout``.
+A call inside this interpreter has no process boundary, socket or pipe to
+interrupt, so a timed-out call **keeps running in the background with its result
+discarded**: the framework never joins it again, and because the thread is a
+daemon it cannot hold the process open.  The watchdog is one thread per call
+inside one still-sequential pass; it adds no component, no check runs
+concurrently, and nothing about a run's ordering or determinism changes.
 
 What this module imports
 ------------------------
@@ -96,6 +101,7 @@ at the port and knows only the port's vocabulary.
 from __future__ import annotations
 
 import importlib
+import threading
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import fields
@@ -110,6 +116,7 @@ from qrcheck.targets.base import (
     TargetContractError,
     TargetError,
     TargetRejected,
+    TargetTimeout,
     TargetUnavailable,
     apply_metadata_map,
     declared_capabilities,
@@ -152,7 +159,9 @@ class LibraryAdapter:
     check's requirement has to become ``skipped``/``unsupported_capability``,
     counted separately and never a pass, rather than a silent wrong assertion.
 
-    ``timeout_s`` is recorded and not enforced; the module docstring says why.
+    ``timeout_s`` bounds every call through the daemon-thread watchdog the module
+    docstring describes, so a hung generator costs one ``TargetTimeout`` rather
+    than the whole run.
     """
 
     def __init__(self, config: LibraryTarget, *, name: str | None = None) -> None:
@@ -196,7 +205,7 @@ class LibraryAdapter:
 
         The call is made with exactly the keyword arguments ``kwargs_map``
         declares, in :class:`GenerateRequest` field order, and its duration is
-        measured around the call alone -- resolution, decoding and metadata
+        measured around the wait for it alone -- resolution, decoding and metadata
         projection are framework work and are excluded from ``elapsed_ms``.
 
         Args:
@@ -215,6 +224,9 @@ class LibraryAdapter:
                 reaches the target.
             TargetUnavailable: The configured ``targets.<name>.callable`` cannot
                 be imported or cannot be found in its module.
+            TargetTimeout: The call had not returned within the configured
+                ``targets.<name>.timeout_s``; the message names the timeout, the
+                callable and the adapter.
             TargetRejected: The callable declared a client-side rejection through
                 the ``rejected:`` channel; the message is the target's text.
             TargetContractError: The callable raised anything else, returned a
@@ -227,9 +239,14 @@ class LibraryAdapter:
                 ``metadata_map`` naming a field outside the four metadata fields.
                 A framework defect rather than a target one, so it is deliberately
                 not reported as a target failure.
+            Exception: The target module's own import body raised something other
+                than a missing module or attribute.  That is a defect in the target
+                module and not an unreachable target, so it propagates unconverted
+                for the runner to record as a framework defect.
 
-        ``TargetTimeout`` is never raised: the target runs in this interpreter, so
-        there is no boundary to interrupt at ``timeout_s``.
+        A call that outlives ``timeout_s`` cannot be interrupted, only abandoned:
+        it keeps running on its daemon thread with its result discarded, the
+        framework never joins it again, and it cannot hold the process open.
         """
         # Belt-and-braces on the registry's resolution: a check whose requirements
         # the declared set cannot satisfy is already skipped before execution, so
@@ -241,16 +258,14 @@ class LibraryAdapter:
             target_name: getattr(request, field_name)
             for field_name, target_name in self._mapped
         }
-        started = time.perf_counter()
-        try:
-            returned: object = func(**kwargs)
-        except TargetError:
-            # Already inside the adapter vocabulary: a target that speaks it gets
-            # its message through untouched rather than re-wrapped as a defect.
-            raise
-        except Exception as exc:
-            raise _convert_call_failure(exc, self._key) from exc
-        elapsed_ms = (time.perf_counter() - started) * 1000.0
+        returned, elapsed_ms = _call_with_watchdog(
+            func,
+            kwargs,
+            timeout_s=self.timeout_s,
+            key=self._key,
+            adapter_name=self.name,
+            operation=self.callable,
+        )
 
         image_value, raw_metadata = self._split_return(returned)
         data = ensure_image_bytes(
@@ -295,6 +310,10 @@ class LibraryAdapter:
             TargetContractError: The attribute exists but is not callable.
             ValueError: ``callable`` is not a ``module:attribute`` path, which the
                 configuration schema should have refused at load time.
+            Exception: Anything else the target module's own import body raises is a
+                defect in that module rather than a missing import path, so it
+                propagates unconverted for the runner to record as a framework
+                defect.
         """
         resolved = self._resolved
         if resolved is not None:
@@ -303,10 +322,14 @@ class LibraryAdapter:
         module_path, attribute_path = _split_callable(self.callable, self._key)
         try:
             target: object = importlib.import_module(module_path)
-        except Exception as exc:
-            # ImportError for a missing module, and anything the module's own body
-            # raises: either way the configured target cannot be loaded, which is
-            # the TargetUnavailable trigger.  The cause is quoted, never swallowed.
+        except (ImportError, AttributeError) as exc:
+            # Only a missing import path is the TargetUnavailable trigger: an absent
+            # module raises ModuleNotFoundError, and an attribute a module's own
+            # import statements need raises AttributeError.  Every other exception
+            # is a defect in the target module's import body rather than an
+            # unreachable target, so it is deliberately not converted: it
+            # propagates to the runner, which records the framework-defect ``error``
+            # result with its traceback.  The cause is quoted, never swallowed.
             raise TargetUnavailable(
                 f"{self._key} = {self.callable!r}: cannot import module "
                 f"{module_path!r} to resolve attribute {attribute_path!r} "
@@ -412,6 +435,89 @@ def _convert_call_failure(exc: Exception, key: str) -> TargetError:
     if text.startswith(_REJECTION_PREFIX):
         return TargetRejected(text[len(_REJECTION_PREFIX) :].strip())
     return TargetContractError(f"{type(exc).__name__}: {text}")
+
+
+def _call_with_watchdog(
+    func: Callable[..., object],
+    kwargs: Mapping[str, object],
+    *,
+    timeout_s: float,
+    key: str,
+    adapter_name: str,
+    operation: str,
+) -> tuple[object, float]:
+    """Invoke `func` once on a daemon thread and wait at most `timeout_s` for it.
+
+    The wait is what makes ``targets.<name>.timeout_s`` a ceiling for an
+    in-process target, which has no process boundary, socket or pipe to interrupt.
+
+    Args:
+        func: The resolved callable, invoked exactly once.
+        kwargs: The keyword arguments to pass, already projected in
+            :class:`GenerateRequest` field order.
+        timeout_s: The configured ``targets.<name>.timeout_s`` in seconds.
+        key: The configured key a conversion diagnostic names.
+        adapter_name: The adapter name the timeout diagnostic names.
+        operation: The configured import path the timeout diagnostic names.
+
+    Returns:
+        The callable's return value, and the duration of the call in milliseconds
+        measured around the wait.
+
+    Raises:
+        TargetTimeout: The call had not returned when the wait elapsed.  The
+            message names the timeout, the operation and the adapter.
+        TargetRejected: The callable declared a client-side rejection.
+        TargetContractError: The callable raised anything else.
+        TargetError: Whatever adapter error the callable itself raised, passed
+            through untouched so a target that speaks the vocabulary keeps its
+            message.
+        BaseException: An exception that is not a library exception at all
+            (``SystemExit``, ``KeyboardInterrupt``) is re-raised unchanged, as it
+            would have been without the watchdog.
+
+    The worker is a **daemon** thread and cannot be cancelled: a call still
+    running when the wait expires keeps running in the background with its result
+    discarded, the framework never joins it again, and it cannot hold the process
+    open.
+    """
+    holder: dict[str, object] = {}
+
+    def _invoke() -> None:
+        # The holder is the only channel out of the thread.  Both outcomes are
+        # captured so the waiting caller can re-raise in its own frame, with the
+        # original exception as the cause and without the interpreter printing a
+        # traceback for an exception the adapter is about to convert.
+        try:
+            holder["value"] = func(**kwargs)
+        except BaseException as exc:
+            holder["error"] = exc
+
+    worker = threading.Thread(
+        target=_invoke, name=f"qrcheck-target-{adapter_name}", daemon=True
+    )
+    started = time.perf_counter()
+    worker.start()
+    worker.join(timeout_s)
+    elapsed_ms = (time.perf_counter() - started) * 1000.0
+    if worker.is_alive():
+        raise TargetTimeout(
+            f"target {adapter_name!r} did not answer {key} = {operation!r} within "
+            f"timeout_s = {timeout_s:g} s; the in-process call cannot be "
+            "interrupted, so it is left running in the background and its result "
+            "is discarded"
+        )
+    raised = holder.get("error")
+    if raised is not None:
+        exc = cast("BaseException", raised)
+        if isinstance(exc, TargetError):
+            raise exc
+        if not isinstance(exc, Exception):
+            # Not a library exception: propagate it untouched, exactly as the
+            # direct call did before the watchdog existed.
+            raise exc
+        raise _convert_call_failure(exc, key) from exc
+    return holder.get("value"), elapsed_ms
 
 
 def _checked_kwargs_map(

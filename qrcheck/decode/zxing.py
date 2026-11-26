@@ -123,10 +123,14 @@ def _validate_image(image: numpy.ndarray) -> None:
     """Reject any argument that is not a supported image array.
 
     The accepted forms are exactly the two the decode layer produces: an
-    ``H x W`` ``uint8`` grayscale array and an ``H x W x 3`` ``uint8`` RGB
-    array. No other dtype is accepted, so a float image cannot quietly decode
-    against a different pixel scale than the ``uint8`` one the framework
-    measured and recorded.
+    ``H x W`` ``uint8`` grayscale array and an ``H x W x 3`` ``uint8`` ``BGR``
+    array -- three bytes per pixel in the order the pinned binding documents,
+    byte 0 blue and byte 2 red, which is not the ``RGB`` order a Pillow image
+    converts to. The consensus layer hands over grayscale, so a three-channel
+    order is never exercised by the framework itself; both shapes are accepted so
+    this wrapper stays correct on its own terms. No other dtype is accepted, so a
+    float image cannot quietly decode against a different pixel scale than the
+    ``uint8`` one the framework measured and recorded.
 
     Raises:
         ValueError: ``image`` is not a ``numpy.ndarray``, is not ``uint8``, or
@@ -145,7 +149,7 @@ def _validate_image(image: numpy.ndarray) -> None:
     if image.ndim == 3 and image.shape[2] == 3:
         return
     raise ValueError(
-        f"image must be HxW grayscale or HxWx3 RGB uint8; got shape {tuple(image.shape)}"
+        f"image must be HxW grayscale or HxWx3 BGR uint8; got shape {tuple(image.shape)}"
     )
 
 
@@ -271,7 +275,7 @@ def decode_primary(image: numpy.ndarray, *, polarity: Polarity = "original") -> 
     raises for anything the symbol or the binding does.
 
     Args:
-        image: An ``H x W x 3`` ``uint8`` RGB array or an ``H x W`` ``uint8``
+        image: An ``H x W x 3`` ``uint8`` ``BGR`` array or an ``H x W`` ``uint8``
             grayscale array. Any other dtype or shape is rejected, so pixels
             cannot be interpreted at a scale the framework never measured.
         polarity: The polarity of the pixels in ``image``, stamped onto the
@@ -296,7 +300,7 @@ def read_primary(image: numpy.ndarray, *, polarity: Polarity = "original") -> Pr
     """Decode ``image`` and return the outcome together with its text metadata.
 
     Args:
-        image: An ``H x W x 3`` ``uint8`` RGB array or an ``H x W`` ``uint8``
+        image: An ``H x W x 3`` ``uint8`` ``BGR`` array or an ``H x W`` ``uint8``
             grayscale array.
         polarity: The polarity of the pixels in ``image``, stamped onto the
             outcome. ``"original"`` for the artifact as the target produced it,

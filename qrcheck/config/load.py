@@ -5,9 +5,12 @@ owns exactly two things: *resolution* (the document's relative paths become
 absolute, its omitted keys get their declared defaults) and *assembly* (the
 defaulted document becomes the frozen records the rest of the product reads).  It
 performs no validation of its own -- every key, type, default and rule is declared
-in :mod:`qrcheck.config.schema` and every default value in
-:mod:`qrcheck.config.models` -- so a threshold changes in one declaration and the
-acceptance criterion that reads it, never here.
+in :mod:`qrcheck.config.schema`, which references the fallback constants of
+:mod:`qrcheck.config.models`.  A threshold's fallback is therefore one declaration
+in :mod:`qrcheck.config.models`, its effective value is the committed
+``qrcheck.toml``'s, and this module holds no threshold and no default of its own: a
+threshold is retuned in that file plus the acceptance criterion that reads it,
+never here.
 
 What it deliberately does not do, so nothing written below has to be undone later:
 
@@ -332,7 +335,10 @@ def _per_type_options(kind: str, table: Mapping[str, Any]) -> dict[str, Any]:
     proxy like the other tables.  The HTTP adapter hands it to ``json.dumps`` to build
     the request body, and ``json`` cannot serialise a proxy; nothing in the product
     mutates it, so the copy made here is as immutable in practice as the document it
-    came from.
+    came from.  A template written as a table and one written as a JSON-object string
+    both resolve to that same mapping: the string form is parsed here by
+    ``schema.request_template_object`` -- the helper ``schema.validate`` itself used
+    -- so the record carries one shape and the adapter receives one shape.
     """
     if kind == "library":
         options: dict[str, Any] = {
@@ -351,7 +357,7 @@ def _per_type_options(kind: str, table: Mapping[str, Any]) -> dict[str, Any]:
         options = {
             "url": str(table["url"]),
             "method": cast(models.HttpMethod, str(table["method"])),
-            "request_template": dict(table["request_template"]),
+            "request_template": dict(schema.request_template_object(table["request_template"])),
             "image_field": str(table["image_field"]),
             "image_encoding": cast(models.ImageEncoding, str(table["image_encoding"])),
         }

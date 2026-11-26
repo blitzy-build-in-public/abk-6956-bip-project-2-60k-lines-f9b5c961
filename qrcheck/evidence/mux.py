@@ -13,12 +13,19 @@ consumers are:
   :func:`decode_image`.
 * ``CL-ARTIFACTS`` in ``qrcheck.checks.cleanup`` — reads :func:`open_images` to attribute
   an unclosed handle to the case that leaked it (AAP §0.8.1).
+* ``qrcheck.targets.reference`` — composites the logo overlay a request carries onto the
+  symbol it rendered, through :func:`composite_overlay` (AAP §0.3.4: ``logo_overlay`` is a
+  capability the built-in target declares, so the declaration must have behaviour).
 
-Scope: this module *opens* and *encodes* images; it does not transform them.  Resize,
-rotate, perspective warp, blur, JPEG re-encode and noise synthesis belong to
-``qrcheck.checks.damage``, and module-grid sampling belongs to ``qrcheck.decode.matrix``;
-both open their inputs through :func:`open_image`.  A transform API must not be added
-here: it would duplicate a named owner (AAP §0.7.1, §0.8.1).
+Scope: this module *opens* and *encodes* images, and owns exactly one composite.  The
+built-in target must composite the overlay it is handed and no other part of the framework
+may touch an image, so :func:`composite_overlay` lives here beside :func:`open_image` and
+:func:`encode_png` rather than in the target.  Every other transformation stays with the
+owner it already has: resize, rotate, perspective warp, blur, JPEG re-encode and noise
+synthesis belong to ``qrcheck.checks.damage``, and module-grid sampling belongs to
+``qrcheck.decode.matrix``; both open their inputs through :func:`open_image`.  A second
+transform API must not be added here: it would duplicate a named owner (AAP §0.7.1,
+§0.8.1).
 
 Invariants this module keeps:
 
@@ -205,6 +212,57 @@ def decode_image(data: bytes) -> Image.Image:
     return image
 
 
+def composite_overlay(symbol: Image.Image, overlay: Image.Image) -> Image.Image:
+    """Return a new RGBA image with ``overlay`` composited centred on ``symbol``.
+
+    The one transform this module performs, and the reason it exists is a capability
+    contract: ``logo_overlay`` is a member the built-in target declares, so a request that
+    carries an overlay must reach a symbol carrying it -- a declared capability with no
+    behaviour behind it is indistinguishable from an ignored one (AAP §0.3.4).  It lives
+    here because Pillow is reachable only through this module.
+
+    The overlay keeps its own pixel size, is centred on both axes, and is clipped when it
+    is larger than the symbol in a dimension; its alpha channel is honoured, so a
+    semi-transparent overlay blends with the modules under it instead of replacing them.
+    Neither argument is mutated and no file is read or written: the symbol is converted
+    into a fresh image first, and that copy is the canvas the overlay is pasted onto.  The
+    result carries no text chunk and no timestamp, so equal inputs composite to equal
+    pixels and :func:`encode_png` stays byte-deterministic (AAP §0.5.4).
+
+    Args:
+        symbol: The rendered symbol to composite onto.  Any Pillow mode is accepted; it is
+            converted to ``RGBA``.
+        overlay: The overlay bitmap.  It is pasted with its own alpha channel as the mask,
+            so a transparent pixel leaves the symbol unchanged.
+
+    Returns:
+        A new ``RGBA`` image the size of ``symbol``.
+
+    Raises:
+        ValueError: Either argument is not a :class:`PIL.Image.Image`.  A programming
+            error rather than a finding, like this module's other type refusals.
+    """
+    if not isinstance(symbol, Image.Image):
+        raise ValueError(
+            f"composite_overlay expects a PIL.Image.Image symbol, got "
+            f"{type(symbol).__name__}"
+        )
+    if not isinstance(overlay, Image.Image):
+        raise ValueError(
+            f"composite_overlay expects a PIL.Image.Image overlay, got "
+            f"{type(overlay).__name__}"
+        )
+    # ``convert`` returns a new image even when the mode already matches, so the canvas
+    # below can be pasted onto without touching either argument.
+    base = symbol.convert("RGBA")
+    patch = overlay.convert("RGBA")
+    offset = ((base.width - patch.width) // 2, (base.height - patch.height) // 2)
+    # A negative offset is how Pillow clips an overlay that overhangs the symbol, so the
+    # centred placement needs no crop of its own.
+    base.paste(patch, offset, patch)
+    return base
+
+
 def encode_base64(data: bytes) -> str:
     """Return ``data`` base64-encoded as ASCII text, unwrapped.
 
@@ -317,6 +375,7 @@ __all__ = [
     "OpenImage",
     "PNG_MAGIC",
     "SVG_PREFIXES",
+    "composite_overlay",
     "decode_base64",
     "decode_image",
     "encode_base64",

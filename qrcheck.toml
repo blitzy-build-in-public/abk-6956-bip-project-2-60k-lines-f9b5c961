@@ -10,9 +10,12 @@
 # counted as a pass.
 #
 # Paths are relative to this file's directory, so the checkout works from any
-# working directory. Each numeric threshold, sample count and tolerance appears
-# exactly once, here; no check, test or document restates one, and the comment on
-# each names the single check or command that reads it.
+# working directory. Each numeric threshold, sample count and tolerance below is
+# the effective value a run uses; the fallback for a key this document omits is
+# declared once, as a models.DEFAULT_* constant in qrcheck/config/models.py,
+# which qrcheck/config/schema.py's table references by name. No check, test or
+# document restates a number, and the comment on each key names the single check
+# or command that reads it.
 
 # The [targets.<name>] table a run uses when --adapter is not given.
 default_adapter = "reference"

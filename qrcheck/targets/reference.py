@@ -42,18 +42,23 @@ check skip instead of run.
 
 Division of labour with the checks
 ----------------------------------
-``logo_overlay_path`` is accepted and honoured as a supported field (that is what the
-``logo_overlay`` capability declares), but the overlay is **not** composited here.
-The product's only image-library boundary is :mod:`qrcheck.evidence.mux`, so
-``RN-LOGO`` in ``qrcheck/checks/render.py`` generates, composites and measures the
-overlay bitmap and writes it as ``logo.png`` evidence.  An adapter that opened images
-with Pillow would create a second image pipeline and would break the single-owner rule
-for the evidence artefact.
+``logo_overlay_path`` is applied here.  The ``logo_overlay`` capability this target
+declares would otherwise be a claim with no behaviour behind it, and a target that
+declares a capability and ignores it is indistinguishable from one that honours it
+(AAP §0.3.4).  ``RN-LOGO`` in ``qrcheck/checks/render.py`` owns the other half: it
+generates the bitmap, writes it as ``logo.png`` evidence and measures the area it
+covers.  This target composites it, centred and at its own pixel size, through
+:func:`qrcheck.evidence.mux.composite_overlay`, the product's single image boundary, so
+no adapter opens an image with Pillow directly and every image the framework handles
+keeps one pipeline and one owner.  Only a raster artefact can carry a composite, so a
+request that asks for an overlay on a vector artefact is refused with
+:class:`~qrcheck.targets.base.TargetUnsupported` before anything is encoded or rendered.
 
-``timeout_s`` is read from configuration but is not enforceable in this adapter: it is
-an in-process function call, and the product deliberately carries no thread, signal or
-scheduler machinery, so there is nothing legitimate to interrupt.  The field matters
-for the out-of-process adapters, where it bounds a subprocess or an HTTP request.
+``timeout_s`` is not read by this adapter: its encode is a local segno call inside this
+interpreter, with no process, socket or pipe to bound, so the configured ceiling is not
+applied here.  The framework does carry a per-call watchdog -- that is what lets the
+``library`` adapter bound an in-process call -- and the out-of-process adapters bound
+their own work: ``subprocess.run(timeout=...)`` for ``cli``, ``httpx.Timeout`` for ``http``.
 
 Documented limitation, stated here so nobody mistakes it for independence
 -----------------------------------------------------------------------
@@ -68,13 +73,19 @@ agreement.  No second encoder is added: the dependency set is pinned and names n
 
 Layering
 --------
-Only ``io``, ``time`` and :mod:`typing` from the standard library, ``segno``, and the
-four modules this file may depend on: :mod:`qrcheck.targets.base`,
+Only ``io``, ``time``, :mod:`pathlib` and :mod:`typing` from the standard library,
+``segno``, and four modules imported at module scope: :mod:`qrcheck.targets.base`,
 :mod:`qrcheck.corpus.capacity`, :mod:`qrcheck.corpus.payloads` -- for
-:func:`~qrcheck.corpus.payloads.mode_of`, the product's single payload-mode
-classifier -- and :mod:`qrcheck.config.models`.  It imports no decoder, no image
-library, no transport client and none of ``qrcheck.checks``, ``qrcheck.report``,
-``qrcheck.decode`` or ``qrcheck.registry``, which is the property
+:func:`~qrcheck.corpus.payloads.mode_of`, the product's single payload-mode classifier --
+and :mod:`qrcheck.config.models`.  A fifth, :mod:`qrcheck.evidence.mux`, is imported at
+the point of use, only by the one method that composites an overlay: applying the overlay
+must go through the product's single image boundary, and importing it lazily keeps Pillow
+out of the import graph of anything that merely lists or registers checks --
+``qrcheck.registry.check`` imports this package's port for ``Capability``, and
+``qrcheck list`` pays for every module that graph reaches.  This file therefore imports
+no image library of its own, and no cycle is possible: ``mux`` imports nothing from
+``qrcheck``.  It imports no decoder, no transport client and none of ``qrcheck.checks``,
+``qrcheck.report``, ``qrcheck.decode`` or ``qrcheck.registry``, which is the property
 ``tests/unit/test_layering.py`` holds by scanning source.
 """
 
@@ -82,6 +93,7 @@ from __future__ import annotations
 
 import io
 import time
+from pathlib import Path
 from typing import Final, Literal
 
 import segno
@@ -95,6 +107,7 @@ from qrcheck.targets.base import (
     GeneratedSymbol,
     TargetContractError,
     TargetRejected,
+    TargetUnsupported,
     ensure_image_bytes,
     require_capabilities,
 )
@@ -211,10 +224,11 @@ class ReferenceAdapter:
 
     Which of the five adapter errors this class can raise: :class:`TargetRejected` for
     a request the target's own contract refuses, :class:`TargetContractError` when
-    segno or the stream writer fails for a reason that is not the request's fault, and
-    :class:`TargetUnsupported` from the capability gate.  :class:`TargetUnavailable` and
-    :class:`TargetTimeout` are deliberately never raised: this adapter is an in-process
-    call, so there is no process to spawn and nothing to time out.
+    segno, the stream writer or an image operation fails for a reason that is not the
+    request's fault, and :class:`TargetUnsupported` from the capability gate and from a
+    request that asks for an overlay on a vector artefact.  :class:`TargetUnavailable`
+    and :class:`TargetTimeout` are deliberately never raised: there is no process to
+    spawn and this adapter runs no watchdog, so no ceiling is applied to its encode.
     """
 
     def __init__(self, config: TargetConfig, *, name: str | None = None) -> None:
@@ -223,7 +237,8 @@ class ReferenceAdapter:
         Args:
             config: The resolved target record.  Only ``contrast_floor`` is read: the
                 declared capability set is deliberately ignored (this target always
-                declares all thirteen) and ``timeout_s`` is not enforceable in-process.
+                declares all thirteen) and ``timeout_s`` is not read, because the encode
+                here is a local segno call with no boundary to bound.
             name: The configured target name, used by every diagnostic.  Defaults to
                 ``config.type`` so a caller that holds only the record can still
                 construct the adapter.
@@ -249,38 +264,52 @@ class ReferenceAdapter:
         """Produce one symbol for `request`, or raise exactly one adapter error.
 
         The order is fixed: the capability gate first (it performs no I/O), then the
-        validation chain, then the encode and the render inside one timing window.  The
-        four ``declared_*`` fields carry what segno reports about the symbol it built;
-        they are the target's claim and are evidence only -- the checks read the version
-        from the sampled module grid, the EC level from the decoder and the format
-        information, and the mask from the format information.
+        validation chain, then the artefact kind and the vector-overlay refusal, then the
+        encode and the render inside one timing window.  The four ``declared_*`` fields
+        carry what segno reports about the symbol it built; they are the target's claim
+        and are evidence only -- the checks read the version from the sampled module
+        grid, the EC level from the decoder and the format information, and the mask from
+        the format information.
 
         Args:
             request: The request to satisfy, built by ``build_request`` (or, for the
                 ``IV-*`` probes, its documented out-of-contract bypass).
 
         Returns:
-            The artefact exactly as segno rendered it, with its declared metadata and the
-            encode duration in milliseconds.
+            The artefact as segno rendered it, with the requested logo overlay
+            composited when the kind is raster, its declared metadata and the encode
+            duration in milliseconds.
 
         Raises:
             TargetUnsupported: The request needs a capability this adapter did not
-                declare.  Unreachable for this target, which declares all thirteen, and
-                kept as the belt-and-braces path the port requires.
+                declare, or it asks for a ``logo_overlay`` on a vector artefact: a
+                composite needs a pixel grid, so an ``svg`` symbol cannot carry one.
+                Both are decided before anything is encoded or rendered.  The first form
+                is unreachable for this target, which declares all thirteen, and is kept
+                as the belt-and-braces path the port requires.
             TargetRejected: The request breaks the target's own contract -- an error
                 level outside L/M/Q/H, a version or mask outside its range, a
                 non-positive module size, a negative quiet zone, a malformed colour, an
                 empty payload, a payload that does not fit the pinned version, or a
                 contrast ratio below the declared floor.  The message is the contract.
             TargetContractError: segno or the stream writer failed for a reason the
-                request does not explain, or the rendered bytes are not the artefact the
-                request asked for.  Both are framework-side defects rather than target
-                verdicts.
+                request does not explain, the rendered bytes are not the artefact the
+                request asked for, or the overlay the request names cannot be read.  All
+                three are framework-side defects rather than target verdicts.
         """
         require_capabilities(self, self._required_capabilities(request))
         self._validate(request)
 
         output_format = self._effective_output_format(request)
+        if request.logo_overlay_path is not None and output_format != "png":
+            # A composite needs a pixel grid, which a vector artefact does not have.  The
+            # refusal precedes the encode so an unsupported request never reaches work it
+            # cannot be given (AAP §0.3.4).
+            raise TargetUnsupported(
+                f"adapter {self.name!r} cannot composite a 'logo_overlay' onto a "
+                f"{output_format!r} artefact: only a raster symbol has a pixel grid to "
+                "place it on"
+            )
         started = time.perf_counter()
         code = self._encode(request)
         image_bytes = ensure_image_bytes(self._render(code, request), output_format)
@@ -626,9 +655,13 @@ class ReferenceAdapter:
         a text stream -- verified against segno 1.6.6 rather than assumed.  Colours are
         passed as ``#rrggbb`` strings, the one form both writers accept.
 
-        ``logo_overlay_path`` is not applied here: the overlay is generated, composited
-        and measured by ``RN-LOGO`` through :mod:`qrcheck.evidence.mux`, the product's
-        single image-library boundary.  See the module docstring.
+        ``logo_overlay_path`` is applied here for a ``png`` artefact: the rendered bytes
+        are decoded, the overlay is opened through
+        :func:`~qrcheck.evidence.mux.open_image`, composited centred and unscaled by
+        :func:`~qrcheck.evidence.mux.composite_overlay`, and the result is re-encoded by
+        :func:`~qrcheck.evidence.mux.encode_png`, which writes no ancillary chunk and so
+        keeps the artefact byte-identical across runs.  A vector artefact cannot carry a
+        composite, and :meth:`generate` has already refused a request that asks for one.
 
         Args:
             code: The encoded symbol.
@@ -638,8 +671,9 @@ class ReferenceAdapter:
             The artefact bytes, non-empty.
 
         Raises:
-            TargetContractError: The writer failed, or produced an empty body.  Both are
-                framework-side defects rather than target verdicts.
+            TargetContractError: The writer failed, produced an empty body, or the
+                overlay the request names could not be read.  All three are framework-side
+                defects rather than target verdicts.
         """
         kind = self._effective_output_format(request)
         scale = self._effective_module_size(request)
@@ -667,5 +701,50 @@ class ReferenceAdapter:
             ) from None
         if not data:
             raise TargetContractError(f"rendering produced an empty {kind!r} body")
+        overlay_path = request.logo_overlay_path
+        if overlay_path is not None and kind == "png":
+            data = self._composite_overlay(data, overlay_path)
         return data
+
+    def _composite_overlay(self, data: bytes, overlay_path: Path) -> bytes:
+        """Composite the request's logo overlay onto the rendered symbol.
+
+        The overlay keeps the pixel size it was drawn at and lands centred on the symbol,
+        with its alpha channel honoured, so a semi-transparent bitmap blends with the
+        modules under it.  The transform and the open both belong to
+        :mod:`qrcheck.evidence.mux`, which is the one place the framework imports Pillow;
+        this method only sequences them, and it reaches that module here rather than at
+        module scope so that importing this package for anything else never loads Pillow.
+        The overlay's pixels are converted to RGBA inside the context manager, so the
+        result holds no file handle once the block ends and ``CL-ARTIFACTS`` never sees one
+        leaked.
+
+        Args:
+            data: The rendered PNG bytes to composite onto.
+            overlay_path: Path of the overlay bitmap the request names.
+
+        Returns:
+            The composited artefact, re-encoded as PNG bytes, non-empty.
+
+        Raises:
+            TargetContractError: The path cannot be read, does not hold an image Pillow
+                can open, or the rendered bytes no longer decode.  The message names the
+                path and the underlying failure.  Pillow's ``UnidentifiedImageError`` is
+                an ``OSError``, so one clause covers an unrecognised file, a truncated
+                one, a missing path and a path this process may not read; any other
+                exception type is a framework defect that must reach the runner as an
+                errored case rather than be reported as a target verdict.
+        """
+        from qrcheck.evidence.mux import composite_overlay, decode_image, encode_png, open_image
+
+        try:
+            with open_image(overlay_path) as opened:
+                overlay = opened.convert("RGBA")
+            symbol = decode_image(data)
+            return encode_png(composite_overlay(symbol, overlay))
+        except OSError as exc:
+            raise TargetContractError(
+                f"compositing overlay {str(overlay_path)!r} onto the rendered symbol "
+                f"failed: {type(exc).__name__}: {exc}"
+            ) from None
 

@@ -52,9 +52,11 @@ status, and it follows AAP §0.3.4 exactly:
                            On every other check: **failed** with reason
                            ``target_rejected`` and the same verbatim text.
 ``TargetContractError``    **failed** with reason ``contract_error``; the diagnostic is
-                           recorded verbatim and its leading 256 bytes' hex -- 512 hex
-                           characters once the diagnostic is that long, and what exists
-                           when it is not -- in ``decoded["hex_prefix"]``.
+                           recorded verbatim in ``decoded["error_text"]`` and the first
+                           256 bytes of the unusable body in ``decoded["hex_prefix"]``
+                           as 512 hex characters when the body is that long, what exists
+                           when it is shorter, and the empty string when the adapter had
+                           no body to record.
 ``TargetUnsupported``      **skipped** with reason ``unsupported_capability``: the
                            belt-and-braces path, since ``qrcheck/registry/resolve.py``
                            normally pre-resolves an unmet requirement before execution.
@@ -663,11 +665,12 @@ def case_status_for_error(
       reason ``target_rejected`` and the same verbatim text, because a target that refuses a
       request the framework considers valid has broken its contract.
     * :class:`~qrcheck.targets.base.TargetContractError` is a **failure** with reason
-      ``contract_error``; the diagnostic is recorded verbatim and its leading 256 bytes' hex
-      -- 512 hex characters once the diagnostic is that long, and what exists when it is not
-      -- in ``decoded["hex_prefix"]``.  The unusable artefact never leaves the adapter, whose
-      own diagnostic already embeds the body's leading hex, so the diagnostic is the record
-      the check can honestly keep.
+      ``contract_error``; the diagnostic is recorded verbatim in ``decoded["error_text"]`` and
+      the first 256 bytes of the unusable body in ``decoded["hex_prefix"]`` -- 512 hex
+      characters when the body is that long, what exists when it is shorter, and the empty
+      string when the adapter had no body to record.  The body's leading bytes travel on
+      :attr:`~qrcheck.targets.base.TargetContractError.body_prefix`, so a tool parsing the
+      field reads the target's bytes rather than the diagnostic's.
     * :class:`~qrcheck.targets.base.TargetUnsupported` is a **skip** with reason
       ``unsupported_capability``.  ``qrcheck/registry/resolve.py`` normally resolves an
       unmet requirement before execution, so this is the belt-and-braces path; a skip is
@@ -742,7 +745,7 @@ def case_status_for_error(
             request=projection,
             decoded={
                 "error_text": text,
-                "hex_prefix": hex_prefix(text.encode("utf-8")),
+                "hex_prefix": hex_prefix(error.body_prefix),
             },
             expected={"outcome": "usable_artefact"},
             duration_ms=duration_ms,
@@ -955,7 +958,7 @@ def record_evidence(
             ``DT-DETERMINISTIC``'s defect observable across two calls.
         damage_variants: ``(kind, png_bytes)`` pairs, each written under the name the naming
             module derives from the kind and the result's seed.
-        logo: The overlay bitmap ``RN-LOGO`` composited onto the symbol.
+        logo: The generated overlay bitmap the target composited onto the symbol.
         out_of_contract: ``True`` for an ``IV-*`` probe that sent an illegal request.
         request_extra: Further identity-adjacent facts to record beside the request.
 

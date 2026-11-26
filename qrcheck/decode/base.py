@@ -388,7 +388,12 @@ class DecodeResult:
 
     ``sampling`` extends the documented fields so a check can tell "the grid
     could not be recovered" (``reason == "sampling_failed"``) from "the symbol
-    decoded but the assertion failed".
+    decoded but the assertion failed". ``format_info`` extends them again with
+    the format-information reading itself -- the projection
+    ``qrcheck.decode.format_info.FormatInfo.as_dict()`` returns, both copies'
+    distances included -- so a check can tell "the grid could not be recovered"
+    from "the grid was recovered and its format information could not be read",
+    and a damaged-but-readable copy stays diagnosable from evidence alone.
     """
 
     payload_bytes: bytes | None
@@ -407,14 +412,16 @@ class DecodeResult:
     rejection: str | None
     metrics: Mapping[str, float]
     sampling: SampledMatrix | None = None
+    format_info: Mapping[str, Any] | None = None
 
     def __post_init__(self) -> None:
         """Normalise the mappings and make the digest unable to go stale.
 
-        ``per_decoder`` and ``metrics`` become read-only mappings with sorted
-        keys, so iteration order cannot depend on how a producer built them and
-        a result cannot be mutated after construction. When a grid is present
-        the digest is computed here if the caller passed ``None``.
+        ``per_decoder``, ``metrics`` and ``format_info`` become read-only
+        mappings with sorted keys, so iteration order cannot depend on how a
+        producer built them and a result cannot be mutated after construction.
+        When a grid is present the digest is computed here if the caller passed
+        ``None``.
 
         Raises:
             ValueError: ``agreement`` or ``polarity_applied`` is outside its
@@ -437,6 +444,12 @@ class DecodeResult:
         object.__setattr__(
             self, "metrics", types.MappingProxyType(dict(sorted(self.metrics.items())))
         )
+        if self.format_info is not None:
+            object.__setattr__(
+                self,
+                "format_info",
+                types.MappingProxyType(dict(sorted(self.format_info.items()))),
+            )
         if self.matrix is not None:
             digest = matrix_sha256(self.matrix)
             if self.matrix_sha256 is None:
@@ -473,6 +486,9 @@ class DecodeResult:
             "content_type": self.content_type,
             "ec_level_decoder": self.ec_level_decoder,
             "ec_level_format": self.ec_level_format,
+            "format_info": None
+            if self.format_info is None
+            else _sorted_dict(dict(self.format_info)),
             "mask": self.mask,
             "matrix_sha256": self.matrix_sha256,
             "metrics": _sorted_dict(

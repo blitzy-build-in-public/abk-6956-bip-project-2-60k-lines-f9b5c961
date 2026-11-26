@@ -15,6 +15,11 @@ What the port guarantees
   a target may declare, and :func:`require_capabilities` refuses an undeclared
   operation **before any I/O**, so an unsupported request never reaches a target
   and never consumes its ``timeout_s``.
+* The thirteen names are declared twice by necessity -- ``CAPABILITY_NAMES`` in
+  :mod:`qrcheck.config.models`, which this package imports and which may not
+  import this one, and :class:`Capability` here -- and the two declarations are
+  gated against each other at import, so a rename on either side fails loudly
+  instead of leaving the schema accepting a capability no adapter can express.
 * :func:`build_request` is the only legal path to a :class:`GenerateRequest`.
   Every check builds its request through it, which is what keeps one definition
   of "this request is valid" in the product.
@@ -93,7 +98,13 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Final, Literal, Protocol, runtime_checkable
 
-from qrcheck.config.models import RETURNS_KINDS, ReturnsKind, TargetConfig
+from qrcheck.config.models import (
+    CAPABILITY_NAMES,
+    METADATA_FIELD_NAMES,
+    RETURNS_KINDS,
+    ReturnsKind,
+    TargetConfig,
+)
 from qrcheck.corpus.capacity import EC_LEVELS, max_payload_bytes
 
 __all__ = [
@@ -125,10 +136,13 @@ __all__ = [
 OUTPUT_FORMATS: Final[tuple[str, ...]] = ("png", "svg")
 
 # The four metadata fields a target may report about a symbol, in the order the
-# mapping is projected.  They are the keys of ``metadata_map`` in configuration
-# and the keys :func:`apply_metadata_map` returns; every one of them is evidence
-# only, never an assertion.
-METADATA_FIELDS: Final[tuple[str, ...]] = ("version", "ec", "mask", "mode")
+# mapping is projected: the keys of ``metadata_map`` in configuration and the keys
+# :func:`apply_metadata_map` returns.  Every one of them is evidence only, never an
+# assertion.  The names themselves are declared once, as
+# ``models.METADATA_FIELD_NAMES``, because the configuration schema rejects an
+# unknown field at load time; this name is the adapter layer's alias for that one
+# declaration.
+METADATA_FIELDS: Final[tuple[str, ...]] = METADATA_FIELD_NAMES
 
 # How many leading bytes :func:`hex_prefix` renders by default: the first 256
 # bytes of a body that is not an image, recorded as 512 hex characters so the
@@ -207,6 +221,38 @@ class Capability(enum.StrEnum):
     metadata_ec = "metadata_ec"
     metadata_mask = "metadata_mask"
     metadata_mode = "metadata_mode"
+
+
+def _check_capability_vocabulary() -> bool:
+    """Fail the import when the two capability declarations hold different members.
+
+    ``qrcheck.config.models`` may not import this package, so the thirteen names
+    exist twice: ``CAPABILITY_NAMES`` there and :class:`Capability` here.  Members
+    are string-valued, so the two collections compare element for element, and this
+    gate is what makes a rename on either side fail loudly at import rather than at
+    run time -- through a schema that accepts a capability no adapter can express,
+    or an adapter declaring one the configuration cannot name.
+
+    Returns:
+        ``True``, once the two declarations are known to hold the same members.
+
+    Raises:
+        RuntimeError: The declarations differ; the message names both declaration
+            sites and every member present in only one of them.
+    """
+    drift = frozenset(Capability) ^ frozenset(CAPABILITY_NAMES)
+    if not drift:
+        return True
+    members = ", ".join(sorted(str(member) for member in drift))
+    raise RuntimeError(
+        "capability vocabulary drift: 'Capability' in qrcheck/targets/base.py and "
+        f"'CAPABILITY_NAMES' in qrcheck/config/models.py disagree on: {members}"
+    )
+
+
+# The gate runs at import, and this constant is the immutable record that it
+# passed; drift between the two declarations fails the import of this module.
+_CAPABILITY_DRIFT_GATE: Final[bool] = _check_capability_vocabulary()
 
 
 def declared_capabilities(config: TargetConfig) -> frozenset[Capability]:
@@ -288,7 +334,19 @@ class TargetContractError(TargetError):
     a field named in configuration that the response does not carry.  The
     diagnostic names the configured field path, the ``returns`` kind or the
     leading bytes' hex, so the defect is diagnosable from the report alone.
+
+    ``body_prefix`` holds the first :data:`HEX_PREFIX_LIMIT` bytes of the
+    artefact the target returned when the adapter has them, so the evidence field
+    named ``hex_prefix`` records the body itself rather than this message.  It is
+    empty when there is no body to keep -- an empty body, or a failure reported
+    about a value rather than about the response, such as an undecodable base64
+    field or a metadata path the response does not carry.  The message stays the
+    diagnostic either way.
     """
+
+    def __init__(self, message: str = "", *, body_prefix: bytes = b"") -> None:
+        super().__init__(message)
+        self.body_prefix: bytes = bytes(body_prefix[:HEX_PREFIX_LIMIT])
 
 
 class TargetUnsupported(TargetError):
@@ -1112,7 +1170,9 @@ def ensure_image_bytes(data: bytes, output_format: str) -> bytes:
     Raises:
         TargetContractError: The body is empty, unrecognisable, or recognisably a
             different format from the one requested.  The message carries the
-            leading bytes' hex so the report shows what actually arrived.
+            leading bytes' hex so the report shows what actually arrived, and the
+            refused body's leading bytes travel on the error's ``body_prefix``
+            too, so the evidence field ``hex_prefix`` records them.
         ValueError: `data` is not bytes-like.  A framework defect rather than a
             target one, since adapters pass the bytes they decoded.
     """
@@ -1125,14 +1185,16 @@ def ensure_image_bytes(data: bytes, output_format: str) -> bytes:
 
     if not body:
         raise TargetContractError(
-            f"empty image body for output format {output_format!r}"
+            f"empty image body for output format {output_format!r}",
+            body_prefix=body,
         )
 
     sniffed = _sniff_image_format(body)
     if sniffed is None:
         raise TargetContractError(
             f"image body for output format {output_format!r} is not PNG, JPEG or SVG; "
-            f"it starts with {hex_prefix(body)}"
+            f"it starts with {hex_prefix(body)}",
+            body_prefix=body,
         )
     expected: frozenset[str] | None = None
     if isinstance(output_format, str):
@@ -1140,7 +1202,8 @@ def ensure_image_bytes(data: bytes, output_format: str) -> bytes:
     if expected is not None and sniffed not in expected:
         raise TargetContractError(
             f"image body is {sniffed} but the request declared output format "
-            f"{output_format!r}; it starts with {hex_prefix(body)}"
+            f"{output_format!r}; it starts with {hex_prefix(body)}",
+            body_prefix=body,
         )
     return body
 

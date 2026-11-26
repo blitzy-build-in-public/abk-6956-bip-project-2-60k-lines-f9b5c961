@@ -88,22 +88,58 @@ A non-2xx status is always :class:`TargetContractError`, never
 channel (``cli`` and ``library`` have one through ``returns``), so a refusal and a
 crash are reported alike and the four ``IV-BAD-OPTION``/``IV-EMPTY`` probes --
 which pass only on a declared rejection -- fail against an HTTP target by design
-rather than by oversight.
+rather than by oversight.  The body that arrived travels on the error's
+``body_prefix``, so the evidence field ``hex_prefix`` records the response itself
+and not the diagnostic built from it.  That holds for every refusal of a response
+this module actually received -- a non-2xx status, a body that is not JSON or not
+UTF-8, an ``image_field`` path the response does not carry, a
+``metadata_map`` that needs an object and did not get one -- while a body with no
+bytes at all has nothing to attach.
+
+The body is read once, under a bound
+====================================
+A response body is streamed from the transport and accumulated, never fetched as
+one already-complete object, and the read stops the moment the total passes
+:data:`_MAX_RESPONSE_BODY_BYTES`.  A misbehaving loopback target is the code under
+test, so an unbounded read would let it exhaust this process' memory; the bound is
+16 MiB, orders of magnitude above any legitimate artefact (the extreme 1640x1640 px
+geometry the adapter is exercised at is about 1.6 kB, and a Version 40 symbol at
+that geometry about 21 kB), so it refuses a runaway response without refusing a
+real one.  Exceeding it is a :class:`TargetContractError` naming the
+bound, the number of bytes received, the target, the method and the URL: the
+response arrived, so it is a contract failure rather than an unreachable target.
+Everything after the read -- the status check, the JSON parse, the image
+extraction and the metadata lookup -- works on the bytes already in hand.
+
+A defect is not a target fault
+==============================
+:meth:`HttpAdapter.generate` converts the library families named in its own code
+-- ``httpx``, ``OSError``, and the JSON, base64 and text-decoding errors -- into the
+framework's adapter errors, and nothing else.  An exception outside those families
+was raised by this module or by something it calls, so it is a framework defect and
+not something the target did: it propagates out of the adapter with its traceback,
+which is what makes the runner record an ``error`` result for the case rather than
+a ``failed`` one blamed on the target.
 
 Configuration faults this module refuses itself
 ===============================================
-The schema validates the template's placeholders, the ``image_encoding`` enum and
-the loopback URL before any record is built.  Four faults it cannot decide are
+The configuration schema decides the template's shape -- a table or the JSON text of
+an object -- together with its placeholders, the ``image_encoding`` enum, the
+loopback URL and the ``metadata_map`` field names before any record exists, so a
+document that gets one of those wrong leaves as exit 2 naming the key.  What
+remains here is the belt-and-braces re-check for a record built without the loader,
+plus the one fault the schema cannot decide at all.  All four faults below are
 reported as :class:`qrcheck.config.schema.ConfigError`, so they leave as exit 2
 naming the offending key instead of as exit 3 with a traceback:
 
-* a ``request_template`` given as JSON text that does not parse or that is not a
-  JSON object (the schema's own shape is a table, and a JSON-text template is
-  still accepted so that a hand-built record cannot silently mean nothing);
+* a ``request_template`` that is neither a table nor the JSON text of an object, or
+  whose JSON text does not parse -- belt-and-braces, because the schema decides the
+  template's shape at load time;
 * a placeholder that is not one of the eight -- belt-and-braces, because the
   schema rejects one at load time;
 * a ``metadata_map`` naming a framework field outside ``version``, ``ec``,
-  ``mask`` and ``mode``;
+  ``mask`` and ``mode`` -- belt-and-braces, because the schema rejects one at load
+  time;
 * a template carrying no payload placeholder at all, since every request it could
   build would omit the payload.
 
@@ -132,9 +168,11 @@ from typing import Any, Final
 
 import httpx
 
+from qrcheck.config import models
 from qrcheck.config.models import IMAGE_ENCODINGS, TEMPLATE_FIELDS, HTTPTarget
 from qrcheck.config.schema import ConfigError
 from qrcheck.targets.base import (
+    HEX_PREFIX_LIMIT,
     METADATA_FIELDS,
     Capability,
     GenerateRequest,
@@ -175,10 +213,10 @@ _BODY_SENTINEL: Final[str] = "_body"
 _BASE64_ENCODING: Final[str] = "base64"
 _RAW_ENCODING: Final[str] = "raw"
 
-# The loopback hosts and URL schemes the transport may use.  The authoritative
-# gate is ``qrcheck.config.schema``; this module re-checks the same rule so a
-# directly constructed record cannot bypass it.
-_LOOPBACK_HOSTS: Final[frozenset[str]] = frozenset({"127.0.0.1", "localhost", "::1"})
+# The URL schemes the transport may use.  The authoritative gate is
+# ``qrcheck.config.schema``; this module re-checks the same rule -- the host
+# allow-list included, read from its one declaration in
+# ``qrcheck.config.models`` -- so a directly constructed record cannot bypass it.
 _LOOPBACK_SCHEMES: Final[frozenset[str]] = frozenset({"http", "https"})
 
 # The request format's capability member, so a request for one format requires
@@ -209,6 +247,17 @@ _INEXPRESSIBLE_FIELDS: Final[tuple[tuple[str, Capability], ...]] = (
 # readable while still showing what actually arrived.
 _STATUS_BODY_EXCERPT_BYTES: Final[int] = 500
 _JSON_BODY_EXCERPT_BYTES: Final[int] = 64
+
+# The bound on a response body, in bytes.  A loopback target is the code under
+# test, and it is untrusted: a broken or misbehaving one could otherwise stream an
+# arbitrarily large body into this process and exhaust its memory.  No legitimate
+# artefact comes near 16 MiB -- the extreme geometry the adapter is exercised at,
+# a 40 px module with a 10-module quiet zone (a 1640x1640 px PNG), is about 1.6 kB
+# and even a Version 40 symbol at that geometry is around 21 kB, because a PNG of
+# flat modules compresses.  The bound therefore refuses a runaway response without
+# refusing any real one, and a body past it is a contract error naming the bound
+# and the bytes received, never a rejection.
+_MAX_RESPONSE_BODY_BYTES: Final[int] = 16 * 1024 * 1024
 
 # One formatter for the whole module: ``string.Formatter`` is stateless, and using
 # a single instance keeps placeholder parsing identical everywhere.
@@ -267,10 +316,14 @@ def _parse_string(text: str, key: str) -> list[_ParsedLeaf]:
 def _parse_template(template: object, key_prefix: str) -> dict[str, Any]:
     """Return the request template as a mapping, from a table or from JSON text.
 
-    The configuration contract types ``request_template`` as a table, which is
-    what ``qrcheck.config.load`` builds.  JSON text is accepted as well, because
-    the documented shape of a template is a JSON object and a caller that stores
-    one as text means the same thing.
+    The configuration contract accepts the template as the JSON object it describes,
+    written as a table or as a string holding that object's JSON text.
+    ``qrcheck.config.schema`` validates either form and ``qrcheck.config.load``
+    resolves either to the one mapping the record carries, so the adapter never has to
+    tell the two apart.  This function is the belt-and-braces path for a record built
+    without the loader, accepting the JSON text as ``bytes`` or ``bytearray`` as well as
+    ``str`` for the same reason the contract accepts the text form at all: a hand-built
+    ``HTTPTarget`` cannot then mean something different from one read out of a document.
 
     Raises:
         ConfigError: The template is not a table, JSON text does not parse, or the
@@ -494,6 +547,9 @@ def _body_excerpt(body: bytes, limit: int = _STATUS_BODY_EXCERPT_BYTES) -> str:
 def _parse_response_json(body: bytes, key_prefix: str, target: str) -> object:
     """Parse a response body as JSON, naming the target and the key on failure.
 
+    The refused body travels on the error's ``body_prefix``, so a report records
+    the bytes that were not JSON rather than only the diagnostic about them.
+
     Raises:
         TargetContractError: The body is not UTF-8, or not JSON, although
             ``image_field`` names a field inside it.
@@ -504,7 +560,8 @@ def _parse_response_json(body: bytes, key_prefix: str, target: str) -> object:
         raise TargetContractError(
             f"target {target!r} answered with a body that is not UTF-8 JSON ({exc}) "
             f"although {key_prefix}.image_field names a field inside it; it starts "
-            f"with 0x{hex_prefix(body, _JSON_BODY_EXCERPT_BYTES)}"
+            f"with 0x{hex_prefix(body, _JSON_BODY_EXCERPT_BYTES)}",
+            body_prefix=body,
         ) from None
     try:
         return json.loads(text)
@@ -512,7 +569,8 @@ def _parse_response_json(body: bytes, key_prefix: str, target: str) -> object:
         raise TargetContractError(
             f"target {target!r} answered with a body that is not JSON ({exc}) although "
             f"{key_prefix}.image_field names a field inside it; it starts with "
-            f"0x{hex_prefix(body, _JSON_BODY_EXCERPT_BYTES)}"
+            f"0x{hex_prefix(body, _JSON_BODY_EXCERPT_BYTES)}",
+            body_prefix=body,
         ) from None
 
 
@@ -672,6 +730,17 @@ class HttpAdapter:
         adapter cannot honour never opens a connection and never consumes the
         configured timeout.
 
+        The ``except`` clauses below map one library family each -- ``httpx``,
+        ``OSError``, and the JSON, base64 and text-decoding errors -- so anything
+        else that escapes, an exception raised inside :meth:`_read_body`,
+        :meth:`_interpret_response`, :meth:`_carried_image`,
+        :meth:`_declared_metadata` or
+        :func:`~qrcheck.targets.base.ensure_image_bytes`, is a framework defect and
+        not a target fault.  It propagates out of this method unwrapped, which is
+        what makes the runner record an ``error`` result carrying its traceback
+        instead of a ``failed`` result blamed on the target (AAP §0.3.4 and §0.6.6
+        row 11).
+
         Raises:
             TargetUnsupported: The request needs a capability the target did not
                 declare, or pins a version, a mask or a logo overlay the request
@@ -682,8 +751,9 @@ class HttpAdapter:
             TargetContractError: A response arrived but was unusable -- a non-2xx
                 status, an empty body, a body that is not the JSON the configured
                 ``image_field`` needs, a field the configured path does not find,
-                undecodable base64, a missing metadata path, or bytes that are not
-                the requested artefact.
+                undecodable base64, a missing metadata path, bytes that are not
+                the requested artefact, or a body past the adapter's
+                :data:`_MAX_RESPONSE_BODY_BYTES` bound.
             ConfigError: The template cannot be rendered or sent as configured.
             ValueError: A framework invariant was broken before any I/O (an
                 unbuildable request, an unknown ``image_encoding``).  The request
@@ -704,15 +774,16 @@ class HttpAdapter:
         try:
             client = self._client_or_create()
             started = time.perf_counter()
-            response = client.request(
+            with client.stream(
                 self._config.method,
                 self._config.url,
                 params=params,
                 content=content,
                 headers=headers,
-            )
+            ) as response:
+                response_body = self._read_body(response)
             elapsed_ms = (time.perf_counter() - started) * 1000.0
-            return self._interpret_response(response, request, elapsed_ms)
+            return self._interpret_response(response, response_body, request, elapsed_ms)
         except (json.JSONDecodeError, binascii.Error, UnicodeDecodeError, LookupError) as exc:
             raise TargetContractError(
                 f"target {self.name!r} answered {self._config.method} {self._config.url} "
@@ -753,12 +824,6 @@ class HttpAdapter:
         except OSError as exc:
             raise TargetContractError(
                 f"target {self.name!r} failed {self._config.method} {self._config.url} "
-                f"({type(exc).__name__}: {exc})"
-            ) from None
-        except Exception as exc:
-            raise TargetContractError(
-                f"target {self.name!r} produced an unusable response to "
-                f"{self._config.method} {self._config.url} "
                 f"({type(exc).__name__}: {exc})"
             ) from None
 
@@ -820,10 +885,10 @@ class HttpAdapter:
                 f"offline and only {sorted(_LOOPBACK_SCHEMES)} are reachable"
             )
         host = parts.hostname
-        if host is None or host.lower() not in _LOOPBACK_HOSTS:
+        if host is None or host.lower() not in models.LOOPBACK_HOSTS:
             raise ValueError(
                 f"http target url {url!r} names host {host!r}; the framework is offline "
-                f"and only {sorted(_LOOPBACK_HOSTS)} are reachable"
+                f"and only {sorted(models.LOOPBACK_HOSTS)} are reachable"
             )
         if parts.username is not None or parts.password is not None:
             raise ValueError(
@@ -835,10 +900,11 @@ class HttpAdapter:
     def _check_metadata_map(self, metadata_map: Mapping[str, str]) -> None:
         """Require every ``metadata_map`` key to be one of the framework's four fields.
 
-        The schema checks the map's shape but not its keys, so without this the
-        first response would fail with a bare ``ValueError`` from the metadata
-        mapper and leave as an internal error.  A wrong framework field is a
-        configuration fault and has to read as one.
+        The authoritative check is the configuration schema's, which rejects an
+        unknown framework field at load time with exit 2 naming the key.  This is
+        belt-and-braces for a caller that builds an ``HTTPTarget`` without the
+        loader, so that such a caller still sees a configuration fault rather than
+        a bare ``ValueError`` from the metadata mapper on the first response.
 
         Raises:
             ConfigError: A key is not one of ``version``, ``ec``, ``mask`` and
@@ -906,13 +972,50 @@ class HttpAdapter:
             )
         return dict(rendered)
 
+    def _read_body(self, response: httpx.Response) -> bytes:
+        """Read a streamed response body, refusing one that passes the bound.
+
+        The response is never materialised by the transport in one piece, so a
+        target that sends more than :data:`_MAX_RESPONSE_BODY_BYTES` costs this
+        process at most the bytes up to the bound, never the whole body: the read
+        stops on the chunk that crosses it and the connection is released by the
+        caller's ``with`` block.
+
+        Raises:
+            TargetContractError: The body grew past the bound.  The diagnostic names
+                the bound, the number of bytes received, the target, the method and
+                the URL, and the bytes received so far travel on ``body_prefix``.
+        """
+        body = bytearray()
+        received = 0
+        for chunk in response.iter_bytes():
+            received += len(chunk)
+            if received > _MAX_RESPONSE_BODY_BYTES:
+                raise TargetContractError(
+                    f"target {self.name!r} answered {self._config.method} "
+                    f"{self._config.url} with a body larger than the "
+                    f"{_MAX_RESPONSE_BODY_BYTES} bytes this adapter reads from one "
+                    f"response: {received} bytes had arrived when the read was "
+                    "stopped.  A loopback target is untrusted, so the framework "
+                    "bounds the body rather than let a misbehaving one exhaust the "
+                    "process",
+                    body_prefix=bytes(body[:HEX_PREFIX_LIMIT]),
+                )
+            body += chunk
+        return bytes(body)
+
     def _interpret_response(
         self,
         response: httpx.Response,
+        body: bytes,
         request: GenerateRequest,
         elapsed_ms: float,
     ) -> GeneratedSymbol:
-        """Turn one HTTP response into a :class:`GeneratedSymbol`.
+        """Turn one HTTP response and its already-read `body` into a symbol.
+
+        `body` is what :meth:`_read_body` handed back, so nothing here asks the
+        response for its content again; `elapsed_ms` covers the request and that
+        read together.
 
         Raises:
             TargetContractError: The status is outside 2xx, the body is unusable, a
@@ -921,9 +1024,9 @@ class HttpAdapter:
         """
         status = response.status_code
         if status < 200 or status >= 300:
-            raise TargetContractError(self._status_detail(response))
-        image_bytes, parsed = self._carried_image(response.content, request)
-        metadata = self._declared_metadata(parsed)
+            raise TargetContractError(self._status_detail(response, body), body_prefix=body)
+        image_bytes, parsed = self._carried_image(body, request)
+        metadata = self._declared_metadata(parsed, body)
         return GeneratedSymbol(
             image_bytes=image_bytes,
             output_format=request.output_format,
@@ -967,7 +1070,8 @@ class HttpAdapter:
             detail = exc.args[0] if exc.args else str(exc)
             raise TargetContractError(
                 f"{self._key_prefix}.image_field names '{field}', which the response "
-                f"from target {self.name!r} does not provide: {detail}"
+                f"from target {self.name!r} does not provide: {detail}",
+                body_prefix=body,
             ) from None
         artefact = self._carried_bytes(value, field)
         return ensure_image_bytes(artefact, request.output_format), parsed
@@ -989,8 +1093,11 @@ class HttpAdapter:
             f"image_encoding must be one of {', '.join(IMAGE_ENCODINGS)}; got {encoding!r}"
         )
 
-    def _declared_metadata(self, parsed: object | None) -> dict[str, Any]:
+    def _declared_metadata(self, parsed: object | None, body: bytes) -> dict[str, Any]:
         """Return the metadata the target declared, through the configured map.
+
+        `body` is the response body `parsed` came from, kept so a contract error can
+        carry it as evidence.
 
         Raises:
             TargetContractError: A configured path is absent from the response or
@@ -1004,12 +1111,17 @@ class HttpAdapter:
             raise TargetContractError(
                 f"{self._key_prefix}.metadata_map names metadata in the response, but "
                 f"the response from target {self.name!r} is a "
-                f"{type(parsed).__name__} rather than a JSON object"
+                f"{type(parsed).__name__} rather than a JSON object",
+                body_prefix=body,
             )
         return apply_metadata_map(parsed, metadata_map)
 
-    def _status_detail(self, response: httpx.Response) -> str:
-        """Describe an unusable status in one diagnostic naming what arrived."""
+    def _status_detail(self, response: httpx.Response, body: bytes) -> str:
+        """Describe an unusable status in one diagnostic naming what arrived.
+
+        `body` is the response body already read, so the excerpt comes from the
+        bytes in hand and the response is not asked for its content again.
+        """
         status = response.status_code
         detail = (
             f"target {self.name!r} answered HTTP {status} to {self._config.method} "
@@ -1022,7 +1134,7 @@ class HttpAdapter:
                 if location
                 else "; a redirect without a Location header, which the adapter does not follow"
             )
-        excerpt = _body_excerpt(response.content)
+        excerpt = _body_excerpt(body)
         if excerpt:
             detail += f"; body starts {excerpt}"
         return (

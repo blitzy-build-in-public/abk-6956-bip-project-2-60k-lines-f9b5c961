@@ -18,8 +18,9 @@ The submodules stay importable for the interfaces that need the parts this faça
 publish: ``qrcheck.config.schema.validate``, ``qrcheck.config.schema.apply_defaults`` and
 ``qrcheck.config.schema.SCHEMA`` for the raw-document entry points, and the
 ``qrcheck.config.models`` vocabularies (``AdapterType``, ``CapabilityName``, ``ReturnsKind``,
-``ImageEncoding``, ``HttpMethod``, ``SVGRasterizer`` and their ``*_NAMES`` tuples) together
-with its ``DEFAULT_*`` constants for the callers that build records directly.
+``ImageEncoding``, ``HttpMethod``, ``SVGRasterizer``, ``MetadataFieldName`` and their
+``*_NAMES`` tuples) together with its ``DEFAULT_*`` constants and its ``LOOPBACK_HOSTS``
+allow-list for the callers that build records directly.
 """
 
 from qrcheck.config.load import load_config

@@ -26,7 +26,14 @@ D2 ``truncated_payload``
     truncated payload still occupies the same version, so ``SY-VERSION-MIN`` keeps
     D1 as its single cause and no other check sees a difference.  The eight synthetic
     ``SY-MATRIX-EQUIV`` payloads are 64 bytes or shorter by construction, so the
-    injection never reaches them.
+    injection never reaches them.  The predicate itself is
+    :func:`qrcheck.corpus.capacity.truncation_keeps_version`, and the corpus builder's
+    witness check calls the same function, so the injection and the proof that it is
+    observable are one rule rather than two that could disagree.  This target evaluates
+    it at the level the symbol is encoded at, which is the reading the cascade
+    containment requires: only that level keeps the shortened symbol on the version the
+    whole one occupies, while at the requested level the cut would move a payload across
+    a version boundary and put a check that must pass at risk.
 D3 ``missing_quiet_zone``
     Renders a quiet zone of one module where four or more were requested, and sizes
     the image from the zone actually drawn.  Caught by ``RN-QUIET-ZONE``;
@@ -72,14 +79,18 @@ format-information layout, so every symbol-geometry assertion would be wrong.  T
 module therefore contains no encoding path of its own; it changes only the six
 protected hooks named below, two of which carry D1 and two of which carry D2 and D5.
 
-Single declaration of the defects
----------------------------------
-:data:`DEFECTS` is the one declaration of what each injection does and what it is
-expected to break.  ``qrcheck/registry/expectations.py`` reads it to build
-``SELF_CHECK_TARGETS``, and ``tests/integration/test_defective_run.py`` asserts **set
-equality** between the check IDs that failed or errored and that declared set.  The
-expected set itself is not declared here: it is derived, so a defect cannot drift
-from the failures it claims.
+What this table declares, and what is declared beside it
+--------------------------------------------------------
+:data:`DEFECTS` is the declaration of what each injection does and what it is expected
+to break, and :func:`expected_failing_ids` derives the failing set from it, refusing to
+return unless that set is exactly the nine IDs the acceptance criteria name.  It is not
+the declaration a consumer reads.  ``qrcheck/registry/expectations.py`` declares the
+per-defect expectation sets itself, deliberately: it must not import a concrete adapter,
+because ``qrcheck list`` imports ``qrcheck.registry`` on every invocation and this
+target imports segno.  The two declarations are therefore independent, and they are kept
+in agreement by the integration gate -- ``tests/integration/test_defective_run.py``
+asserts **set equality** between the check IDs that failed or errored and
+``SELF_CHECK_TARGETS["defective"]`` -- so an edit on one side never moves the other.
 
 State, and why it lives on the instance
 ---------------------------------------
@@ -119,7 +130,7 @@ from types import MappingProxyType
 from typing import Final
 
 from qrcheck.config.models import TargetConfig
-from qrcheck.corpus.capacity import max_payload_bytes, minimal_version
+from qrcheck.corpus.capacity import max_payload_bytes, truncation_keeps_version
 from qrcheck.targets.base import GenerateRequest
 from qrcheck.targets.reference import ReferenceAdapter
 
@@ -158,7 +169,9 @@ _MASK_PATTERN_COUNT: Final[int] = 8
 # encodes at (the requested one, or a step below it in the direction of more capacity) holds
 # at least as much data as the level this clamp is measured against, it fits that level too.
 # What a *request* may lawfully ask for is a different question, settled in the payload's own
-# mode by the port's build_request and the conforming target's own capacity rule.
+# mode by the port's build_request and the conforming target's own capacity rule.  D5's clamp
+# is what reads this constant, and D2's window makes the same byte-mode choice inside
+# ``capacity.truncation_keeps_version``.
 _BYTE_MODE: Final[str] = "byte"
 
 # The nine check IDs §0.4.2 declares this target must fail.  It is only the comparison
@@ -184,10 +197,12 @@ _EXPECTED_FAILING_IDS: Final[frozenset[str]] = frozenset(
 class Defect:
     """One injection: what the code does, what catches it, and why the fallout is bounded.
 
-    The record is data rather than documentation so the registry and the tests can
-    read it: ``qrcheck/registry/expectations.py`` unions :attr:`caught_by` with
-    :attr:`consequential` to declare what a ``--adapter defective`` run must fail, and
-    a test can assert each entry against the evidence a failing check records.
+    The record is data rather than documentation, so the tests and
+    :func:`expected_failing_ids` read it rather than restating each injection's catches.
+    The consumer table is a separate declaration: ``qrcheck/registry/expectations.py``
+    declares its own per-defect expectation sets and never imports this one, and the
+    integration gate proves the two equal, so an edit on one side does not move the
+    other.  A test can assert each entry against the evidence a failing check records.
 
     Attributes:
         name: The injection's stable identifier, as §0.4.2 writes it.
@@ -370,9 +385,9 @@ class DefectiveAdapter(ReferenceAdapter):
     :class:`~qrcheck.targets.base.TargetUnsupported` from the capability gate.
     :class:`~qrcheck.targets.base.TargetUnavailable` and
     :class:`~qrcheck.targets.base.TargetTimeout` are never raised, because this target
-    is an in-process call with no process to spawn and nothing to time out.  The one
-    deliberate hole is D5: at a pinned version an over-capacity payload is accepted and
-    truncated rather than refused.
+    spawns no process and runs no watchdog, so no ceiling is applied to its encode.  The
+    one deliberate hole is D5: at a pinned version an over-capacity payload is accepted
+    and truncated rather than refused.
     """
 
     def __init__(self, config: TargetConfig, *, name: str | None = None) -> None:
@@ -386,7 +401,8 @@ class DefectiveAdapter(ReferenceAdapter):
         Args:
             config: The resolved target record.  Only ``contrast_floor`` is read: the
                 capability set is declared in full by the target itself, and
-                ``timeout_s`` is not enforceable in-process.
+                ``timeout_s`` is not read, because the encode here is a local segno call
+                with no boundary to bound.
             name: The configured target name, used by every diagnostic.  Defaults to
                 ``config.type``, which is ``"defective"`` for this record.
 
@@ -450,13 +466,16 @@ class DefectiveAdapter(ReferenceAdapter):
 
         1. **D2, the 64-byte window.**  A payload longer than the window is cut to it
            when the full length still selects the same version at the level actually
-           encoded.  The predicate is evaluated against
-           :mod:`qrcheck.corpus.capacity` at request time, so the affected record set is
-           derived rather than listed, and a payload whose truncation would cross a
-           version boundary is left intact.  Measuring at the *effective* level is what
-           makes the injection cost nothing but the payload: the truncated symbol then
-           occupies exactly the version the untruncated one would have, so no
-           version-asserting check that must keep passing can detect the cut.
+           encoded.  The rule is
+           :func:`qrcheck.corpus.capacity.truncation_keeps_version`, the same function
+           the corpus builder's witness check calls, so the injection and the assertion
+           that it stays observable cannot drift apart.  It is evaluated at request time,
+           so the affected record set is derived rather than listed, and a payload whose
+           truncation would cross a version boundary is left intact.  Measuring at the
+           *effective* level is what makes the injection cost nothing but the payload:
+           the truncated symbol then occupies exactly the version the untruncated one
+           would have, so no version-asserting check that must keep passing can detect
+           the cut.
         2. **D5, the capacity clamp.**  With a version pinned, a payload above that
            version's capacity at the level the request names is cut to the capacity and
            encoded, where the conforming target refuses it with ``data too large for
@@ -485,10 +504,10 @@ class DefectiveAdapter(ReferenceAdapter):
         """
         payload = request.payload
         ec_level = self._effective_ec(request)
-        if len(payload) > _TRUNCATION_WINDOW_BYTES:
-            window_version = minimal_version(_TRUNCATION_WINDOW_BYTES, ec_level, _BYTE_MODE)
-            if window_version == minimal_version(len(payload), ec_level, _BYTE_MODE):
-                payload = payload[:_TRUNCATION_WINDOW_BYTES]
+        if len(payload) > _TRUNCATION_WINDOW_BYTES and truncation_keeps_version(
+            len(payload), _TRUNCATION_WINDOW_BYTES, ec_level
+        ):
+            payload = payload[:_TRUNCATION_WINDOW_BYTES]
 
         version = request.version
         if version is not None:

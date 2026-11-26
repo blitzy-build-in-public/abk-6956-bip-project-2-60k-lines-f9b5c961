@@ -12,11 +12,12 @@ with ``Capability(name)``, and because that enumeration is string-valued the
 converted set compares and hashes equal to the ``frozenset[str]`` kept here, so
 capability intersection and containment work across the seam unchanged.
 
-Every configurable threshold is declared exactly once, as a ``DEFAULT_*``
+Every configurable threshold has one fallback, declared as a ``DEFAULT_*``
 constant below.  ``qrcheck.config.schema`` references these names instead of
 restating the numbers, and no check module carries a numeric threshold
-literal, so changing a limit means changing one declaration plus the
-acceptance criterion that reads it.
+literal; the effective value a run uses is the committed ``qrcheck.toml``'s, so
+changing a limit means changing that file's entry plus the acceptance criterion
+that reads it.
 
 The dataclasses are plain frozen records: they validate nothing, read neither
 TOML nor the filesystem, and perform no I/O.  Validation is the gate in
@@ -90,12 +91,19 @@ CapabilityName = Literal[
     "metadata_mode",
 ]
 
+# A ``metadata_map`` key: the four framework metadata fields a target may report
+# about a symbol.  The set is closed, because a field the framework does not know
+# cannot be carried into evidence, so the schema rejects any other key at load
+# time and ``qrcheck.targets.base`` aliases this tuple as ``METADATA_FIELDS``.
+MetadataFieldName = Literal["version", "ec", "mask", "mode"]
+
 ADAPTER_TYPE_NAMES: Final[tuple[str, ...]] = get_args(AdapterType)
 RETURNS_KINDS: Final[tuple[str, ...]] = get_args(ReturnsKind)
 HTTP_METHODS: Final[tuple[str, ...]] = get_args(HttpMethod)
 IMAGE_ENCODINGS: Final[tuple[str, ...]] = get_args(ImageEncoding)
 SVG_RASTERIZERS: Final[tuple[str, ...]] = get_args(SVGRasterizer)
 CAPABILITY_NAMES: Final[tuple[str, ...]] = get_args(CapabilityName)
+METADATA_FIELD_NAMES: Final[tuple[str, ...]] = get_args(MetadataFieldName)
 
 # The eight placeholders an HTTP ``request_template`` may interpolate.  The
 # schema validates every template leaf against this tuple and the HTTP adapter
@@ -112,10 +120,25 @@ TEMPLATE_FIELDS: Final[tuple[str, ...]] = (
 )
 
 # ---------------------------------------------------------------------------
+# Outbound allow-list
+# ---------------------------------------------------------------------------
+
+# The only hosts the framework may ever talk to.  This list is the product's
+# single outbound control -- an HTTP target is accepted only when its host is one
+# of these, which is what makes the tool verifiably offline rather than merely
+# configured to be -- so it is declared exactly once, here, and read by both
+# layers that enforce it: ``qrcheck.config.schema`` when a document is validated
+# and ``qrcheck.targets.http`` when an ``HTTPTarget`` is built without the
+# loader.  Neither layer restates a host name, so the online/offline boundary
+# cannot widen in one place while staying closed in the other.
+LOOPBACK_HOSTS: Final[tuple[str, ...]] = ("127.0.0.1", "localhost", "::1")
+
+# ---------------------------------------------------------------------------
 # Threshold defaults
 #
 # Each constant is the fallback for exactly one configuration key, used when
-# ``qrcheck.toml`` omits it, and is the only place that value is written down.
+# ``qrcheck.toml`` omits it, and is the one place the fallback is written down;
+# the effective value a run uses is that file's whenever it supplies the key.
 # ``qrcheck.config.schema`` builds its table from these names rather than
 # retyping the numbers.
 # ---------------------------------------------------------------------------
@@ -292,13 +315,15 @@ class HTTPTarget(TargetConfig):
     """A ``type = "http"`` target reached over loopback HTTP.
 
     ``request_template`` is the parsed TOML table whose string leaves carry
-    placeholders drawn from ``TEMPLATE_FIELDS``; ``image_field`` is the dotted
-    path to the image inside the response, or ``_body`` for the raw body;
-    ``image_encoding`` says how that field carries the image.  The request and
-    response shape of a vendor lives entirely in this record, which is what
-    keeps the HTTP adapter free of hard-coded field names.  Constructing it
-    raises nothing; a non-loopback host and an unknown placeholder are rejected
-    by ``qrcheck.config.schema.validate``.
+    placeholders drawn from ``TEMPLATE_FIELDS``; a ``request_template`` written as a
+    JSON-object string is parsed into the same read-only mapping by
+    ``qrcheck.config.load``, so the record has one shape either way.  ``image_field``
+    is the dotted path to the image inside the response, or ``_body`` for the raw
+    body; ``image_encoding`` says how that field carries the image.  The request and
+    response shape of a vendor lives entirely in this record, which is what keeps the
+    HTTP adapter free of hard-coded field names.  Constructing it raises nothing; a
+    non-loopback host and an unknown placeholder are rejected by
+    ``qrcheck.config.schema.validate``.
     """
 
     url: str
@@ -371,7 +396,10 @@ __all__ = [
     "HttpMethod",
     "IMAGE_ENCODINGS",
     "ImageEncoding",
+    "LOOPBACK_HOSTS",
     "LibraryTarget",
+    "METADATA_FIELD_NAMES",
+    "MetadataFieldName",
     "PerformanceLimits",
     "RETURNS_KINDS",
     "RenderConfig",

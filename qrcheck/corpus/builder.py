@@ -98,8 +98,10 @@ MD_CHARSET_CLASSES: tuple[str, ...] = (
 
 # The length the ``truncated_payload`` defect cuts a longer payload back to. The corpus must
 # hold at least one ``MD-CHARSET`` record whose truncation to this many bytes does not move
-# its EC-M version, or the defect is silently inert -- the injection would shorten the
-# payload without changing the symbol's version, and no check would see it.
+# its Version at every error-correction level where that is possible, or the defect is
+# silently inert -- the injection would shorten the payload without changing the symbol's
+# version, and no check would see it. Which levels those are is decided by the predicate
+# itself, never by a list here; see ``_verify_truncation_witness``.
 # The eight synthetic ``SY-MATRIX-EQUIV`` payloads are built by ``qrcheck/checks/symbol.py``
 # and are 64 bytes or shorter by construction, so the injection can never reach them; that is
 # another module's case set and is deliberately not represented here.
@@ -418,25 +420,45 @@ def _verify_truncation_witness(records: Sequence[CorpusRecord]) -> None:
     """Raise CorpusError unless a record makes the truncating defect observable.
 
     The ``truncated_payload`` defect cuts a payload longer than ``_TRUNCATION_BYTES`` back to
-    exactly that many bytes. It stays observable only where the shortened payload still needs
-    the same Version at the run's EC level M, so that ``RT-ROUNDTRIP`` and ``MD-CHARSET``
-    fail on the payload and ``SY-VERSION-MIN`` keeps its single cause. At least one
-    ``MD-CHARSET`` record must witness that, or the injection would be inert.
+    exactly that many bytes, under the rule ``capacity.truncation_keeps_version`` -- the same
+    function the defect evaluates, so the witness cannot be computed by a second predicate
+    that drifts from the injection. It stays observable only where the shortened payload
+    still needs the same Version at the error-correction level in use, so that
+    ``RT-ROUNDTRIP`` and ``MD-CHARSET`` fail on the payload and ``SY-VERSION-MIN`` keeps its
+    single cause.
+
+    At least one ``MD-CHARSET`` record must therefore witness the cut at every level in
+    ``capacity.EC_LEVELS`` where a witness is arithmetically possible. A level is impossible
+    when the window is itself the byte capacity of a Version there: the very next byte
+    already needs the following Version, so no payload longer than the window can keep its
+    version -- at EC H the 64-byte window fills Version 7 exactly. That condition is read
+    from the same predicate applied to the shortest longer payload, never from a list of
+    levels, so the clause cannot pass by silently excusing a level that could have been
+    witnessed.
     """
-    witnesses: list[str] = []
+    witnesses: dict[str, list[str]] = {}
     for record in records:
         if record.class_name not in MD_CHARSET_CLASSES:
             continue
         payload = record.payload_bytes
         if len(payload) <= _TRUNCATION_BYTES:
             continue
-        if _needs_same_ec_m_version(payload, payload[:_TRUNCATION_BYTES]):
-            witnesses.append(record.id)
-    if not witnesses:
+        for ec in capacity.EC_LEVELS:
+            if capacity.truncation_keeps_version(len(payload), _TRUNCATION_BYTES, ec):
+                witnesses.setdefault(ec, []).append(record.id)
+    possible = [
+        ec
+        for ec in capacity.EC_LEVELS
+        if capacity.truncation_keeps_version(_TRUNCATION_BYTES + 1, _TRUNCATION_BYTES, ec)
+    ]
+    missing = [ec for ec in possible if not witnesses.get(ec)]
+    if missing:
         raise CorpusError(
-            f"no MD-CHARSET record longer than {_TRUNCATION_BYTES} bytes keeps its EC-M "
-            f"version when truncated to {_TRUNCATION_BYTES} bytes, so the truncated_payload "
-            f"defect would be inert (classes searched: {MD_CHARSET_CLASSES})"
+            f"no MD-CHARSET record longer than {_TRUNCATION_BYTES} bytes keeps its Version "
+            f"when truncated to {_TRUNCATION_BYTES} bytes at EC {', '.join(missing)}, so the "
+            f"truncated_payload defect would be inert there (classes searched: "
+            f"{MD_CHARSET_CLASSES}; levels witnessed: "
+            f"{', '.join(ec for ec in capacity.EC_LEVELS if witnesses.get(ec)) or 'none'})"
         )
 
 
@@ -573,23 +595,6 @@ def _id_matches_class(record_id: str, class_name: str) -> bool:
 def _id_key(record: CorpusRecord) -> str:
     """Return the key the corpus is ordered by: the record id, ascending."""
     return record.id
-
-
-def _needs_same_ec_m_version(full: bytes, truncated: bytes) -> bool:
-    """Return whether both payloads need the same Version at EC M, in their own mode.
-
-    Each side is measured in the mode its own bytes imply, which is what a target would do,
-    and a payload too large for Version 40 at EC M is reported as no witness rather than as
-    a match -- ``minimal_version`` answers ``None`` there, and comparing two ``None`` values
-    would make the clause pass without a single usable record.
-    """
-    full_version = capacity.minimal_version(len(full), "M", payloads.mode_of(full))
-    truncated_version = capacity.minimal_version(
-        len(truncated), "M", payloads.mode_of(truncated)
-    )
-    if full_version is None or truncated_version is None:
-        return False
-    return full_version == truncated_version
 
 
 def _required_wire_str(raw: Mapping[str, object], key: str) -> str:

@@ -84,9 +84,11 @@ _HEBREW_RANGE: tuple[int, int] = (0x05D0, 0x05EB)
 _ARABIC_RANGE: tuple[int, int] = (0x0621, 0x064B)
 
 # utf8-multibyte payload byte lengths. The first band is 65-84 bytes on purpose: at EC M a
-# 64-byte payload fits Version 5, whose byte capacity is 84, so truncating any payload in
-# that band to 64 bytes keeps the SAME EC-M version. That is the predicate the truncating
-# defect is detected through; the longer bands exercise larger symbols and version
+# 64-byte payload fits Version 5, whose byte capacity is 84, so a payload in that band stays
+# inside one Version when it is cut back to 64 bytes, which is where the corpus builder's
+# truncation witness is found. Which records actually witness the cut is decided by
+# ``capacity.truncation_keeps_version`` at the error-correction level the defective target
+# encodes at, never by this comment; the longer bands exercise larger symbols and version
 # information blocks. A fixed ASCII prefix of ``_UTF8_PREFIX_BYTES`` bytes starts every
 # payload, so mode is byte from the first byte onward.
 _UTF8_MULTIBYTE_BANDS: tuple[tuple[int, int], ...] = ((65, 84), (85, 140), (141, 200))
@@ -316,9 +318,10 @@ def _utf8_multibyte(run_seed: int, index: int) -> PayloadDraft:
     two-, a three- and a four-byte code point before drawing further widths from the same
     three ranges, so all three UTF-8 widths appear and the four-byte coverage the charset
     check asserts is guaranteed rather than probable. The byte length lands inside one of
-    ``_UTF8_MULTIBYTE_BANDS``; the first band exists so that truncating the payload to 64
-    bytes keeps the same EC-M version, which is what makes the truncating defect observable
-    instead of version-shifting.
+    ``_UTF8_MULTIBYTE_BANDS``; the first band exists so that a payload in it can be cut
+    back to the 64-byte window without moving to a smaller Version, which is what makes the
+    truncating defect observable instead of version-shifting, while
+    ``capacity.truncation_keeps_version`` decides record by record whether the cut applies.
     """
     rng = _rng(run_seed, "utf8-multibyte", index)
     low, high = _UTF8_MULTIBYTE_BANDS[index % len(_UTF8_MULTIBYTE_BANDS)]

@@ -47,10 +47,17 @@ Layering
 --------
 The one fact this writer needs that the result model does not carry is a check's family,
 which is the ``classname`` suffix. That family is owned by
-:mod:`qrcheck.registry.check`, the single owner of check identity, and it is looked up
-there - never re-derived from an identifier prefix and never tabulated here. The lookup is
-deferred into :func:`_family_for` so that this module can be imported without pulling the
-registry, and through it the target port, into a process that only wants to write XML.
+:mod:`qrcheck.registry.check`, the single owner of check identity, and it is read from
+there rather than tabulated here: from the contract
+:data:`~qrcheck.registry.check.REGISTRY` holds for the identifier, and otherwise from
+:data:`~qrcheck.registry.check.FAMILY_BY_PREFIX`, which maps the identifier's own prefix
+segment - ``RT`` in ``RT-ROUNDTRIP`` - to its family. The second source is what makes the
+answer independent of import order: the registry is populated only as a side effect of the
+check family modules importing, while the prefix table is a constant of the registry module
+itself, so a process that merely writes XML still emits ``classname="qrcheck.<family>"``
+instead of a placeholder (AAP §0.3.4). Both lookups are deferred into :func:`_family_for`
+so that this module can be imported without pulling the registry, and through it the target
+port, into such a process.
 
 Nothing here prints, logs, reads a clock, the environment or the filesystem, and nothing
 retries. The only effect is the file :func:`write_junit` is handed.
@@ -98,9 +105,11 @@ _TRACEBACK_KEY: Final[str] = "traceback"
 _SUITE_NAME: Final[str] = "qrcheck"
 _CLASSNAME_PREFIX: Final[str] = "qrcheck."
 
-# The family reported for an identifier the registry does not hold. Unreachable in a real
-# run (every executed identifier is registered), but a writer must never be the thing that
-# loses a run's results, so an unregistered identifier degrades its ``classname`` instead.
+# The family reported for an identifier whose prefix appears in neither the registry nor
+# ``FAMILY_BY_PREFIX``. Unreachable for the twenty-one registered identifiers: each of
+# their nine prefixes is a key of that table, which resolves whether or not the check
+# family modules have imported. A writer must nevertheless never be the thing that loses a
+# run's results, so a stranger degrades its ``classname`` rather than failing the document.
 _UNKNOWN_FAMILY: Final[str] = "unknown"
 
 
@@ -211,26 +220,51 @@ def _seconds(milliseconds: float) -> str:
 def _family_for(check_id: str) -> str:
     """Return the check family that owns ``check_id``, or ``"unknown"`` for a stranger.
 
-    The registry is imported **inside** this function on purpose. It is the single owner of
-    check identity (AAP §0.8.1), and it depends on :mod:`qrcheck.report.model`; importing it
-    at module scope from a report module would close the report-to-registry cycle as soon as
-    the registry needs a report symbol at run time, and would drag the target port into
-    every process that merely writes XML. Deferring the import keeps the dependency one-way
-    and costs one module lookup for the whole run.
+    The family is resolved in this order:
+
+    1. A contract registered under ``check_id`` supplies it outright. Registration rejects
+       an identifier whose prefix belongs to another family
+       (:class:`~qrcheck.registry.check.CheckContract`), so a registered family and the
+       prefix table below can never disagree, and the identifier's own declaration is read
+       first.
+    2. Otherwise :data:`~qrcheck.registry.check.FAMILY_BY_PREFIX` supplies the family of the
+       identifier's own prefix segment: the text before the first ``-``, so ``RT`` for
+       ``RT-ROUNDTRIP``. :data:`~qrcheck.registry.check.REGISTRY` is populated only as a
+       side effect of the check family modules importing, whereas that table is a constant
+       of the registry module itself, so this step is what gives a process that has not
+       imported them the real family instead of a placeholder (AAP §0.3.4).
+
+    Both sources are read from :mod:`qrcheck.registry.check`, the single owner of check
+    identity (AAP §0.8.1), which is why no identifier-to-family table is kept here. The
+    import is **inside** this function on purpose: that module depends on
+    :mod:`qrcheck.report.model`, so importing it at module scope from a report module would
+    close the report-to-registry cycle as soon as the registry needs a report symbol at run
+    time, and would drag the target port into every process that merely writes XML.
+    Deferring the import keeps the dependency one-way and costs one module lookup for the
+    whole run.
 
     Args:
         check_id: The check identifier a result carries.
 
     Returns:
-        The owning family name, which becomes the JUnit ``classname`` suffix, or
-        ``"unknown"`` when no contract is registered under ``check_id``. The fallback exists
-        because a report writer must never lose a run's results over a lookup; in a real run
-        it is unreachable, since every executed identifier is registered.
+        The owning family name - one of :data:`~qrcheck.registry.check.FAMILY_NAMES` for
+        any of the twenty-one registered identifiers - which becomes the JUnit ``classname``
+        suffix. ``"unknown"`` is returned only for an identifier whose prefix segment is in
+        neither source, plus a non-``str`` identifier, which has no prefix to look up; both
+        are unreachable for a registered check, and the fallback exists so a report writer
+        never loses a run's results over a lookup.
     """
-    from qrcheck.registry.check import REGISTRY
+    from qrcheck.registry.check import FAMILY_BY_PREFIX, REGISTRY
 
     contract = REGISTRY.get(check_id)
-    return _UNKNOWN_FAMILY if contract is None else contract.family
+    if contract is not None:
+        return contract.family
+    if not isinstance(check_id, str):
+        # ``CaseResult`` does not restrict the field to ``str``; such a value has no
+        # prefix segment and degrades exactly as it did while the registry was the only
+        # source, rather than raising out of the writer.
+        return _UNKNOWN_FAMILY
+    return FAMILY_BY_PREFIX.get(check_id.split("-", 1)[0], _UNKNOWN_FAMILY)
 
 
 def _failure_body(case: CaseResult) -> str:

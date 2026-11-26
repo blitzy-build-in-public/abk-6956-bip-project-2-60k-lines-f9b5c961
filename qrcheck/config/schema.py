@@ -9,11 +9,13 @@ anywhere else.
 
 Two rules shape the code below:
 
-* Every default *value* is declared once, as a ``models.DEFAULT_*`` constant, and
+* Every fallback *value* is declared once, as a ``models.DEFAULT_*`` constant, and
   every entry of :data:`SCHEMA` references that name rather than restating a
   number.  This module owns the *table* -- which key, which type, which
-  validator, which default constant -- never a copy of a default.  A threshold
-  therefore changes in one place plus the acceptance criterion that reads it.
+  validator, which default constant -- never a copy of a value.  The value a run
+  uses is the committed ``qrcheck.toml``'s whenever that document supplies the
+  key, and the ``models.DEFAULT_*`` fallback only when it omits it, so a
+  threshold is retuned in ``qrcheck.toml`` plus the criterion that reads it.
 * The document's structure is derived from the group paths of :data:`SCHEMA`
   instead of being listed a second time.  A top-level table exists because some
   group path starts with its name, and a child of ``[checks]`` exists because a
@@ -47,6 +49,7 @@ neither public function mutates its argument.
 from __future__ import annotations
 
 import datetime
+import json
 import math
 import string
 import urllib.parse
@@ -57,7 +60,14 @@ from typing import Any, Final
 
 from qrcheck.config import models
 
-__all__ = ["ConfigError", "KeySpec", "SCHEMA", "apply_defaults", "validate"]
+__all__ = [
+    "ConfigError",
+    "KeySpec",
+    "SCHEMA",
+    "apply_defaults",
+    "request_template_object",
+    "validate",
+]
 
 
 # ---------------------------------------------------------------------------
@@ -381,8 +391,11 @@ def _check_arg_template(value: str) -> str | None:
 def _check_str_map(value: Mapping[str, str]) -> str | None:
     """Require a table of non-empty strings to non-empty strings.
 
-    Shape only: which framework field names exist is not a closed set in the
-    contract, and interpreting a mapping is the shared resolution in
+    Shape and nothing else: this is the whole rule for a mapping whose keys are
+    genuinely free form, and its remaining user is ``kwargs_map``, which names
+    whatever keyword arguments the configured callable takes.  A mapping whose
+    keys are a closed vocabulary gets :func:`_check_metadata_map` instead, and
+    interpreting either mapping is the shared resolution in
     ``qrcheck.targets.base``, so no vocabulary is invented here.
     """
     for key, mapped in value.items():
@@ -391,6 +404,35 @@ def _check_str_map(value: Mapping[str, str]) -> str | None:
         if not isinstance(mapped, str) or not mapped.strip():
             return f"the value for '{key}' must be a non-empty string, got {mapped!r}"
     return None
+
+
+def _check_metadata_names(value: Mapping[str, str]) -> str | None:
+    """Require every ``metadata_map`` key to be one of the four framework fields.
+
+    ``metadata_map`` is the one configured mapping whose keys are not free form: a
+    symbol's metadata is reported under ``version``, ``ec``, ``mask`` and ``mode``
+    and the framework has nowhere to put a field it does not know, so a mapping
+    naming anything else cannot be honoured by any adapter.  The vocabulary is
+    declared once, as ``models.METADATA_FIELD_NAMES``, and enforced here so the
+    fault is the exit-2 configuration error the contract promises rather than a
+    later adapter construction failure.
+    """
+    unknown = sorted(set(value) - set(models.METADATA_FIELD_NAMES))
+    if not unknown:
+        return None
+    names = ", ".join(repr(name) for name in unknown)
+    return (
+        f"names unknown framework field(s) {names}; "
+        f"expected any of {', '.join(models.METADATA_FIELD_NAMES)}"
+    )
+
+
+# A ``metadata_map`` is validated shape first and vocabulary second: ``_all_of``
+# keeps :func:`_check_str_map` the whole rule for ``kwargs_map`` while a metadata
+# mapping is additionally held to the closed field set.
+_check_metadata_map: Final[Callable[[Any], str | None]] = _all_of(
+    _check_str_map, _check_metadata_names
+)
 
 
 def _check_image_field(value: str) -> str | None:
@@ -408,10 +450,10 @@ def _check_image_field(value: str) -> str | None:
     return None
 
 
-# The only hosts the framework may ever talk to.  A target that is not on this
-# list cannot be reached by the product at all, which is what makes the tool
-# verifiably offline rather than merely configured to be.
-_LOOPBACK_HOSTS: Final[tuple[str, ...]] = ("127.0.0.1", "localhost", "::1")
+# The loopback allow-list -- the product's only outbound control -- is declared
+# once, as ``models.LOOPBACK_HOSTS``, because ``qrcheck.targets.http`` enforces
+# the same rule at construction; neither layer restates a host, so the offline
+# boundary cannot widen on one side while staying closed on the other.
 
 
 def _check_url(value: str) -> str | None:
@@ -436,8 +478,11 @@ def _check_url(value: str) -> str | None:
     if parts.username is not None or parts.password is not None:
         return "url must not carry a username or password; configuration holds no credentials"
     host = parts.hostname
-    if host is None or host.lower() not in _LOOPBACK_HOSTS:
-        return f"url host '{host or ''}' is not a loopback host; allowed: {sorted(_LOOPBACK_HOSTS)}"
+    if host is None or host.lower() not in models.LOOPBACK_HOSTS:
+        return (
+            f"url host '{host or ''}' is not a loopback host; "
+            f"allowed: {sorted(models.LOOPBACK_HOSTS)}"
+        )
     return None
 
 
@@ -456,8 +501,61 @@ class _LeafError(Exception):
         self.fragment = fragment
 
 
-def _check_request_template(value: Mapping[str, Any]) -> str | None:
+def request_template_object(value: Mapping[str, Any] | str) -> dict[str, Any]:
+    """Return an HTTP ``request_template`` as the JSON object it describes.
+
+    A template is sent as a JSON body, so its documented shape is a JSON object
+    and the contract accepts that object written either way: as a parsed TOML
+    table, which is copied, or as a string holding the object's JSON text, which
+    is parsed.  Both forms resolve to the same plain ``dict``, so
+    ``qrcheck.config.load`` builds one record shape for the HTTP adapter and the
+    adapter never has to tell the two apart.  This is the one parse the schema's
+    validator and the loader share, so a template accepted at configuration time
+    cannot be refused when the adapter is constructed.  Keys and nested values are
+    kept exactly as written and nothing is rewritten; the returned top-level mapping
+    is a new ``dict``, while a nested table or array it holds is the same object as
+    the argument's -- a shallow copy, not a deep one -- so a caller that needs
+    private nested structure has to copy it.  The product relies on nothing mutating
+    a resolved template, which ``qrcheck.config.load`` states in its
+    ``_per_type_options`` paragraph on ``request_template``.  Interpreting a string
+    leaf as a placeholder belongs to :func:`_walk_template`, which runs over this
+    result.
+
+    Args:
+        value: The configured template, a table or a JSON-object string.
+
+    Returns:
+        A new ``dict`` holding the template's JSON object.
+
+    Raises:
+        _LeafError: ``value`` is neither a table nor a string, the string is not
+            valid JSON, or the JSON text is not an object.  :func:`validate`
+            attaches it to the key's dotted path, so the exit-2 diagnostic reads
+            ``targets.<name>.request_template: is not valid JSON: ...`` and names
+            the line to fix.  No adapter error is raised or produced here: this is
+            a configuration fault, decided before any target is constructed.
+    """
+    if isinstance(value, Mapping):
+        return dict(value)
+    if isinstance(value, str):
+        try:
+            body = json.loads(value)
+        except json.JSONDecodeError as exc:
+            raise _LeafError("", f"is not valid JSON: {exc}") from None
+        if not isinstance(body, Mapping):
+            raise _LeafError("", f"must be a JSON object, got {_kind(body)}")
+        return dict(body)
+    raise _LeafError("", f"expected a table or a JSON object string, got {_kind(value)}")
+
+
+def _check_request_template(value: Mapping[str, Any] | str) -> str | None:
     """Require every string leaf of the template to name a known placeholder.
+
+    The template arrives as a table or as a JSON-object string, and both are
+    resolved by :func:`request_template_object` before the walk below, so a text
+    template is held to exactly the rule a table is: an unknown placeholder inside
+    one is reported at its own leaf (``targets.<name>.request_template.payload``)
+    rather than at the whole value, and a non-finite number is refused there too.
 
     The template is sent as JSON, so the walk accepts exactly what JSON carries:
     tables, arrays, strings, numbers, booleans and null.  A TOML datetime is
@@ -470,7 +568,7 @@ def _check_request_template(value: Mapping[str, Any]) -> str | None:
     ``models.TEMPLATE_FIELDS``.  Escaped braces (``{{``/``}}``) yield no field and
     are literal text.
     """
-    _walk_template(value, "")
+    _walk_template(request_template_object(value), "")
     return None
 
 
@@ -552,9 +650,12 @@ RENDER: Final[Mapping[str, KeySpec]] = _group(
     ),
 )
 
-# [checks.performance]: PF-ENCODE and PF-DECODE read every number here, so a
-# floor changes in ``models`` alone.  A count may be an integer only; a latency or
-# a throughput floor may be written either way and is cast to float by ``load.py``.
+# [checks.performance]: PF-ENCODE and PF-DECODE read the values declared here.
+# Each default below is a ``models.DEFAULT_*`` fallback this table references by
+# name instead of restating the number; the effective value a run uses is the
+# committed ``qrcheck.toml``'s, so a floor is retuned in that file plus the
+# criterion that reads it.  A count may be an integer only; a latency or a
+# throughput floor may be written either way and is cast to float by ``load.py``.
 PERFORMANCE: Final[Mapping[str, KeySpec]] = _group(
     KeySpec(
         "encode_p95_ms", (float, int), models.DEFAULT_ENCODE_P95_MS, _check_minimum(0, strict=True)
@@ -661,7 +762,7 @@ TARGET_LIBRARY: Final[Mapping[str, KeySpec]] = _group(
     KeySpec("callable", (str,), _REQUIRED, _check_callable),
     KeySpec("kwargs_map", (dict,), _REQUIRED, _check_str_map),
     KeySpec("returns", (str,), _REQUIRED, _check_membership(models.RETURNS_KINDS)),
-    KeySpec("metadata_map", (dict,), _EMPTY_MAPPING, _check_str_map),
+    KeySpec("metadata_map", (dict,), _EMPTY_MAPPING, _check_metadata_map),
 )
 
 # type = "cli": an argv-only subprocess.
@@ -670,17 +771,20 @@ TARGET_CLI: Final[Mapping[str, KeySpec]] = _group(
     KeySpec("payload_arg", (str,), _REQUIRED, _check_arg_template),
     KeySpec("output_arg", (str,), _REQUIRED, _check_arg_template),
     KeySpec("returns", (str,), _REQUIRED, _check_membership(models.RETURNS_KINDS)),
-    KeySpec("metadata_map", (dict,), _EMPTY_MAPPING, _check_str_map),
+    KeySpec("metadata_map", (dict,), _EMPTY_MAPPING, _check_metadata_map),
 )
 
 # type = "http": a loopback request whose vendor shape lives entirely here.
 TARGET_HTTP: Final[Mapping[str, KeySpec]] = _group(
     KeySpec("url", (str,), _REQUIRED, _check_url),
     KeySpec("method", (str,), _REQUIRED, _check_membership(models.HTTP_METHODS)),
-    KeySpec("request_template", (dict,), _REQUIRED, _check_request_template),
+    # A template is the JSON object the adapter sends, so it is accepted as a table
+    # or as that object's JSON text; ``_check_request_template`` parses both into the
+    # one mapping it walks, and the loader parses it through the same helper.
+    KeySpec("request_template", (dict, str), _REQUIRED, _check_request_template),
     KeySpec("image_field", (str,), _REQUIRED, _check_image_field),
     KeySpec("image_encoding", (str,), _REQUIRED, _check_membership(models.IMAGE_ENCODINGS)),
-    KeySpec("metadata_map", (dict,), _EMPTY_MAPPING, _check_str_map),
+    KeySpec("metadata_map", (dict,), _EMPTY_MAPPING, _check_metadata_map),
 )
 
 # The two built-in self-check targets take only the common keys, so a configurable

@@ -531,6 +531,9 @@ class CliAdapter:
 
         A rejection is raised only for output matching one of the two declared
         spellings, because a fabricated one would make the ``IV-*`` checks vacuous.
+        The child's stdout is the response that arrived, so the contract error
+        carries those bytes on its ``body_prefix``, which the evidence field
+        ``hex_prefix`` records.
 
         Raises:
             TargetRejected: The target declared a rejection, in its own words.
@@ -544,7 +547,8 @@ class CliAdapter:
         raise TargetContractError(
             f"target {self.name!r} exited with status {completed.returncode} and declared no "
             f"rejection; stderr tail: {_tail(stderr_text)!r}; "
-            f"stdout tail: {_tail(stdout_text)!r}"
+            f"stdout tail: {_tail(stdout_text)!r}",
+            body_prefix=completed.stdout,
         )
 
     def _read_artefact(
@@ -797,6 +801,10 @@ def _tail(text: str) -> str:
 def _json_object(stdout: bytes, name: str, keys: list[str]) -> dict[str, object]:
     """Parse the target's stdout as the one JSON object its ``metadata_map`` reads.
 
+    The stdout bytes are the response that arrived, so each refusal of bytes that
+    arrived carries them on its ``body_prefix``, which the evidence field
+    ``hex_prefix`` records; an empty stdout has no body to keep.
+
     Raises:
         TargetContractError: stdout is empty, is not UTF-8, is not JSON, or is a
             JSON value that is not an object -- naming the configured fields that
@@ -813,17 +821,20 @@ def _json_object(stdout: bytes, name: str, keys: list[str]) -> dict[str, object]
     except UnicodeDecodeError:
         raise TargetContractError(
             f"target {name!r} wrote stdout that is not UTF-8, but metadata_map reads "
-            f"{configured} from it; it starts with {hex_prefix(stdout)}"
+            f"{configured} from it; it starts with {hex_prefix(stdout)}",
+            body_prefix=stdout,
         ) from None
     except json.JSONDecodeError as exc:
         raise TargetContractError(
             f"target {name!r} wrote stdout that is not JSON ({exc.msg} at character "
-            f"{exc.pos}), but metadata_map reads {configured} from it"
+            f"{exc.pos}), but metadata_map reads {configured} from it",
+            body_prefix=stdout,
         ) from None
     if not isinstance(parsed, dict):
         raise TargetContractError(
             f"target {name!r} wrote a JSON {type(parsed).__name__} to stdout, but "
-            f"metadata_map reads {configured} from an object"
+            f"metadata_map reads {configured} from an object",
+            body_prefix=stdout,
         )
     return parsed
 

@@ -25,7 +25,7 @@ The closed artefact set, in the order this module writes it (AAP §0.3.4):
 ``symbol.png`` / ``symbol.svg``  the target's artefact, byte for byte as received
 ``symbol-repeat.png``          ``DT-DETERMINISTIC``'s second call of the same request
 ``damage-<kind>-<seed>.png``   one damaged variant, named so that it is re-derivable
-``logo.png``                   the overlay ``RN-LOGO`` composited onto the symbol
+``logo.png``                   the overlay bitmap the target composited onto the symbol
 =============================  ====================================================
 
 Nothing else may ever be written: no manifest, no index, no README and no per-directory
@@ -44,8 +44,9 @@ error result - whose ``decoded`` holds only a traceback - into a framework failu
 
 Guarantees
 ----------
-* **Byte form.** Both JSON artefacts go through
-  :func:`qrcheck.report.json_report.write_canonical_json`: sorted keys, two-space indent,
+* **Byte form.** Both JSON artefacts are serialised by
+  :func:`qrcheck.report.json_report.dumps_canonical` and written by
+  :func:`qrcheck.report.json_report.write_canonical_text`: sorted keys, two-space indent,
   UTF-8 with one trailing newline. Neither carries a timestamp, a duration, a hostname or
   an absolute path, which is what makes ``request.json`` and ``decoded.json`` byte-identical
   for the same case and seed (AAP §0.5.4). Nothing here adds a field of its own that could
@@ -55,8 +56,12 @@ Guarantees
   files are written directly. Nothing is appended, deleted or renamed, and no temporary
   file exists at any moment - a temporary file inside ``report_dir`` is exactly what
   ``CL-ARTIFACTS`` looks for.
-* **Validation before I/O.** Every artefact name and format is resolved before the case
-  directory is created, so a malformed request raises without leaving a partial directory.
+* **Validation before I/O.** Every artefact name, every artefact's bytes, and both JSON
+  bodies are resolved before the case directory is created: the texts are serialised and
+  encoded, and each image byte string is captured, first. A malformed case therefore raises
+  with no evidence directory at all - not even one holding ``request.json`` alone - and the
+  only exception that can follow the directory's creation is an :exc:`OSError` from the
+  filesystem itself.
 * **No adapter or decoder dependency.** ``symbol`` and ``repeat_symbol`` are duck-typed on
   ``image_bytes: bytes`` and ``output_format: str`` (``"png"`` or ``"svg"``, the
   :class:`qrcheck.targets.base.GeneratedSymbol` shape) and that type is imported for type
@@ -66,15 +71,19 @@ Guarantees
 
 Failure modes
 -------------
-Three, none of them retried and none logged (AAP §0.5.6):
+Four, none of them retried and none logged (AAP §0.5.6). The first three are caller defects
+and are raised before anything is written:
 
 * :exc:`ValueError` from this module or from :mod:`qrcheck.evidence.naming` when the
   artefact request itself is malformed - an unknown symbol format, a non-PNG repetition, an
   undeclared damage kind. Each message names the offending value.
 * :exc:`TypeError` when a persisted mapping holds a value the canonical writer cannot
-  serialise, or a supplied artefact's ``image_bytes`` is not bytes-like. Both are caller
-  defects, and they fail here rather than being stringified into a plausible-looking
-  artefact.
+  serialise, or a supplied artefact's ``image_bytes`` is not bytes-like. Both fail here
+  rather than being stringified into a plausible-looking artefact, and the message names
+  the artefact at fault.
+* :exc:`UnicodeEncodeError` when a persisted mapping holds a character UTF-8 cannot encode,
+  such as the lone surrogate an HTTP target's JSON metadata can carry in. It is the same
+  class of caller defect and is likewise raised before the directory exists.
 * :exc:`OSError` (including :exc:`PermissionError`) from the filesystem, propagated
   untouched. ``qrcheck.cli.run`` is the single place that turns an unwritable ``report_dir``
   into exit code 3.
@@ -96,13 +105,82 @@ from qrcheck.evidence.naming import (
     damage_artifact_name,
     symbol_artifact_name,
 )
-from qrcheck.report.json_report import write_canonical_json
+from qrcheck.report.json_report import dumps_canonical, write_canonical_text
 from qrcheck.report.model import CaseResult, Status
 
 if TYPE_CHECKING:  # Imported for type checking only; see the module docstring.
     from qrcheck.targets.base import GeneratedSymbol
 
 __all__ = ["EvidenceStore"]
+
+
+def _artifact_bytes(name: str, value: Any) -> bytes:
+    """Return the bytes to write for artefact ``name``, or raise :exc:`TypeError`.
+
+    ``Path.write_bytes`` accepted any object the buffer protocol exposes - ``bytes``,
+    ``bytearray``, ``memoryview`` and the array-likes a check may hand over - and this
+    function keeps exactly that set, so no caller that worked before stops working. The
+    conversion is deliberately ``bytes(memoryview(value))`` and never ``bytes(value)``:
+    the latter would turn an ``int`` into that many NUL bytes and write a
+    plausible-looking artefact instead of reporting the defect.
+
+    The copy it returns is the snapshot that is later written, so the file receives the
+    bytes the caller supplied at the moment of the call, taken before the case directory
+    exists, with no re-encoding and no image round-trip.
+
+    Args:
+        name: The artefact name the bytes will be filed under, so that the message names
+            what the caller has to fix.
+        value: The artefact's bytes exactly as the caller supplied them.
+
+    Returns:
+        Those bytes.
+
+    Raises:
+        TypeError: ``value`` is not bytes-like. The message names ``name`` and the type
+            that arrived.
+    """
+    try:
+        return bytes(memoryview(value))
+    except (TypeError, ValueError):
+        # A non-buffer object and a released ``memoryview`` both fail here; neither is
+        # bytes this store can persist, and either is a caller defect.
+        raise TypeError(
+            f"artefact {name} holds image bytes that are not bytes-like, got "
+            f"{type(value).__name__}"
+        ) from None
+
+
+def _canonical_text(name: str, payload: Any) -> str:
+    """Return the canonical JSON text for artefact ``name``, or raise :exc:`TypeError`.
+
+    The serialisation itself belongs to :func:`qrcheck.report.json_report.dumps_canonical`,
+    the product's only JSON formatter; this function adds the artefact name to the
+    diagnostic so that a caller who persisted an unserialisable value is told which file it
+    was for, not merely which type was refused.
+
+    Args:
+        name: The artefact name the text is destined for, so that the message names it.
+        payload: The projection to serialise.
+
+    Returns:
+        The canonical text, without a trailing newline.
+
+    Raises:
+        TypeError: ``payload`` holds a value that is not JSON-serialisable. The message
+            names ``name`` and then the value the writer refused.
+        UnicodeEncodeError: the text holds a character UTF-8 cannot encode, such as a lone
+            surrogate. Raised before anything is written.
+    """
+    try:
+        text = dumps_canonical(payload)
+        # Encoded here as well as in write_canonical_text, although the text is what is
+        # returned: proving it encodes is what lets record() create the case directory
+        # knowing neither write that follows can fail on encoding.
+        text.encode("utf-8")
+    except TypeError as exc:
+        raise TypeError(f"artefact {name}: {exc}") from exc
+    return text
 
 
 class EvidenceStore:
@@ -171,6 +249,10 @@ class EvidenceStore:
           order given, with ``case_result.seed`` in the name.
         * ``logo.png`` - only when ``logo`` is given.
 
+        Nothing is created until every artefact above is ready: the names are resolved,
+        both JSON bodies are serialised and encoded, and each image byte string is
+        captured first, so a case this method refuses leaves no directory behind.
+
         The caller applies the returned value with
         ``dataclasses.replace(case_result, evidence_dir=returned)``; this method never
         mutates the (frozen) result it is given.
@@ -189,8 +271,8 @@ class EvidenceStore:
                 naming module derives from ``kind`` and ``case_result.seed``. Normally one
                 pair per case; ``DM-SEEDED`` passes the variant it re-derived from the
                 recorded seed so that it lands under the same name as ``DM-RESILIENCE``'s.
-            logo: The overlay bitmap ``RN-LOGO`` composited onto the symbol, persisted so
-                the covered area can be re-measured.
+            logo: The generated overlay bitmap the target composited onto the symbol,
+                persisted so the covered area can be re-measured.
 
         Returns:
             The case directory relative to ``report_dir`` as a posix path, such as
@@ -202,12 +284,17 @@ class EvidenceStore:
             ValueError: ``symbol.output_format`` or ``repeat_symbol.output_format`` is
                 neither ``"png"`` nor ``"svg"`` (the repetition must be PNG), or a damage
                 kind is not one of the declared kinds. Nothing has been written when this
-                is raised: every name and format is resolved first.
+                is raised: every name is resolved first.
             TypeError: a supplied artefact's ``image_bytes`` is not bytes-like, or a
-                mapping persisted here holds a value that is not JSON-serialisable. Both
-                are caller defects, and the writer refuses them before opening a file.
+                mapping persisted here holds a value that is not JSON-serialisable. The
+                message names the artefact at fault, and nothing has been written when it
+                is raised.
+            UnicodeEncodeError: a mapping persisted here holds a character UTF-8 cannot
+                encode, such as a lone surrogate carried in by a target's JSON metadata.
+                Raised before the case directory exists, so no evidence is left behind.
             OSError: the case directory cannot be created or an artefact cannot be
-                written. Propagated untouched for ``qrcheck.cli.run`` to map to exit 3.
+                written - the only failure that follows the directory's creation.
+                Propagated untouched for ``qrcheck.cli.run`` to map to exit 3.
         """
         if case_result.status is Status.PASSED:
             # The policy branch: a green case leaves the filesystem alone.
@@ -216,26 +303,28 @@ class EvidenceStore:
         case_dir = case_evidence_dir(
             self.report_dir, case_result.check_id, case_result.case_id, case_result.reason
         )
-        # Resolve every artefact name, and thereby every closed-set guard, before the
-        # directory exists: a malformed request must not leave a partial case behind.
-        # The order of this plan is the order the files are written, and the legal damage
-        # kinds are validated by the naming module, which owns that set.
+        # Resolve every artefact name, and capture its bytes, before the directory
+        # exists: a malformed request must not leave a partial case behind. The order of
+        # this plan is the order the files are written, and the legal damage kinds are
+        # validated by the naming module, which owns that set.
         binaries: list[tuple[str, bytes]] = []
         if symbol is not None:
-            binaries.append((symbol_artifact_name(symbol.output_format), symbol.image_bytes))
+            artifact_name = symbol_artifact_name(symbol.output_format)
+            binaries.append((artifact_name, _artifact_bytes(artifact_name, symbol.image_bytes)))
         if repeat_symbol is not None:
             if repeat_symbol.output_format != "png":
                 raise ValueError(
                     f"artefact {SYMBOL_REPEAT_PNG} holds a PNG, got "
                     f"repeat_symbol.output_format {repeat_symbol.output_format!r}"
                 )
-            binaries.append((SYMBOL_REPEAT_PNG, repeat_symbol.image_bytes))
-        binaries.extend(
-            (damage_artifact_name(kind, case_result.seed), png_bytes)
-            for kind, png_bytes in damage_variants
-        )
+            binaries.append(
+                (SYMBOL_REPEAT_PNG, _artifact_bytes(SYMBOL_REPEAT_PNG, repeat_symbol.image_bytes))
+            )
+        for kind, png_bytes in damage_variants:
+            artifact_name = damage_artifact_name(kind, case_result.seed)
+            binaries.append((artifact_name, _artifact_bytes(artifact_name, png_bytes)))
         if logo is not None:
-            binaries.append((LOGO_PNG, logo))
+            binaries.append((LOGO_PNG, _artifact_bytes(LOGO_PNG, logo)))
 
         # The envelope is spread last so that it wins a collision with the request
         # projection: check_id, case_id and seed are the identity of the case.
@@ -246,13 +335,19 @@ class EvidenceStore:
             "seed": case_result.seed,
         }
 
+        # Both bodies are serialised, and encoded, before the directory exists: a value
+        # the canonical writer cannot serialise, or a lone surrogate it cannot encode,
+        # must not leave a case directory holding request.json alone.
+        request_text = _canonical_text(REQUEST_JSON, request_payload)
+        decoded_text = _canonical_text(DECODED_JSON, dict(case_result.decoded))
+
         # Deterministic overwrite: exist_ok keeps a second write of the same case from
         # failing, and every file is written directly rather than through a temporary
         # file and a rename (a temporary file under report_dir would be an artefact
         # outside the closed set, which is what CL-ARTIFACTS inspects for).
         case_dir.mkdir(parents=True, exist_ok=True)
-        write_canonical_json(request_payload, case_dir / REQUEST_JSON)
-        write_canonical_json(dict(case_result.decoded), case_dir / DECODED_JSON)
+        write_canonical_text(request_text, case_dir / REQUEST_JSON)
+        write_canonical_text(decoded_text, case_dir / DECODED_JSON)
         for artifact_name, artifact_bytes in binaries:
             (case_dir / artifact_name).write_bytes(artifact_bytes)
 

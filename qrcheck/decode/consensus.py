@@ -3,11 +3,13 @@
 Every check in the product reads exactly one decoded-evidence object, and this
 module is what assembles it. The pipeline it owns, in order:
 
-1. **Bytes to pixels.** Pillow opens the artefact the target returned into an
-   ``RGB`` array for the primary decoder and an ``L`` grayscale array for the
-   secondary one, which is the form that decoder's own documentation asks for.
-   The handle closes before this module returns, because ``CL-ARTIFACTS``
-   asserts that nothing the framework touched is still open.
+1. **Bytes to pixels.** ``qrcheck.evidence.mux`` -- the framework's owner of the
+   image byte path -- opens the artefact the target returned, any alpha band is
+   composited over an opaque backdrop, and the pixels become one ``H x W``
+   grayscale array that both decoders and the grid sampler read. The image closes
+   once that array exists, because ``CL-ARTIFACTS`` asserts that nothing the
+   framework touched is still open, and an artefact whose longer side is above the
+   ceiling this module declares is refused before a single pixel is decoded.
 2. **Passes.** The primary decoder is run on the artefact as generated, and the
    secondary decoder too when it is installed. For an inverted request both
    decoders run a second time on the 255-inverted copy.
@@ -15,7 +17,11 @@ module is what assembles it. The pipeline it owns, in order:
    produced one, is authoritative for all twenty-one checks.
 4. **Grid.** The module grid is sampled from the symbol's normalised polarity
    and its format information read, which is the only source of the version, the
-   mask and the second, decoder-independent EC-level reading.
+   mask and the second, decoder-independent EC-level reading. The reading itself is
+   recorded on the result -- both copies' distances and the number of bits each
+   needed corrected included -- so "the grid could not be recovered" and "the grid
+   was recovered and its format information could not be read" are two different
+   pieces of evidence rather than one missing mask.
 5. **Classification.** The two answers are compared into one ``agreement`` value.
 
 The rules below are contract, not implementation detail (AAP §0.3.2).
@@ -65,11 +71,19 @@ is recorded as ``primary_only``. This never loosens the primary's authority -- i
 only declines to let a corroborator that cannot speak about bytes contradict
 bytes.
 
-Imports: the four decode-layer modules this pipeline joins, the single product
-dependency ``qrcheck.targets.base`` (for ``GenerateRequest`` and nothing else),
-the standard library, ``numpy`` and ``Pillow``. No concrete adapter is imported,
-and nothing here comes from ``qrcheck.checks``, ``qrcheck.report``,
-``qrcheck.registry``, ``qrcheck.evidence`` or ``qrcheck.config``.
+Imports: the four decode-layer modules this pipeline joins, ``qrcheck.evidence.mux``
+and ``qrcheck.config.models``, the standard library, ``numpy`` and ``Pillow``.
+``GenerateRequest`` is imported for its annotations only, under ``TYPE_CHECKING``,
+so importing this module does not load ``qrcheck.targets`` -- whose package import
+pulls in ``click``, ``httpx`` and ``segno`` -- which is the same guard
+``qrcheck/decode/__init__.py`` applies to the same name (AAP §0.7.1). The two
+non-annotation additions are ownership rather than convenience: ``mux`` owns every
+byte the framework turns into an image, so the pixel decode is delegated to it
+instead of being repeated here (AAP §0.8.1), and ``config.models`` declares the
+reference decode size ``decode_image_px`` exactly once, which is the budget this
+module's artefact ceiling is derived from (AAP §0.6.2). No concrete adapter is
+imported, and nothing here comes from ``qrcheck.checks``, ``qrcheck.report`` or
+``qrcheck.registry``.
 
 It raises nothing for target-supplied data: unreadable bytes, an SVG artefact, a
 symbol neither decoder can read, and a grid that cannot be sampled all come back
@@ -81,12 +95,14 @@ from __future__ import annotations
 
 import dataclasses
 import io
+import re
 from collections.abc import Sequence
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 import numpy
 from PIL import Image
 
+from qrcheck.config.models import DEFAULT_DECODE_IMAGE_PX
 from qrcheck.decode import base, format_info, matrix, opencv, zxing
 from qrcheck.decode.base import (
     PRIMARY_DECODER,
@@ -97,7 +113,10 @@ from qrcheck.decode.base import (
     Polarity,
     SampledMatrix,
 )
-from qrcheck.targets.base import GenerateRequest
+from qrcheck.evidence.mux import decode_image
+
+if TYPE_CHECKING:  # pragma: no cover - annotation resolution only, never executed
+    from qrcheck.targets.base import GenerateRequest
 
 __all__ = [
     "contrast_ratio",
@@ -142,6 +161,29 @@ _SVG_REASON: Final = (
     "artefact is SVG, not a raster image: it must be rasterized before it can be "
     "decoded, which is the SVG rendering check's job"
 )
+
+#: The opaque backdrop an artefact's alpha band is composited over before its pixels are
+#: measured. ``rsvg-convert`` rasterises segno's SVG, which paints no background, into an
+#: ``RGBA`` image whose transparent pixels store ``(0, 0, 0)``; dropping that band instead
+#: of compositing it would turn a conforming symbol into a solid black image.
+_RASTER_BACKDROP: Final = (255, 255, 255, 255)
+
+#: The largest per-side pixel dimension this pipeline decodes from an untrusted artefact:
+#: eight times the reference decode size ``[checks.performance] decode_image_px``, whose
+#: single declaration ``qrcheck.config.models`` owns (AAP §0.6.2), so 4000 px per side.
+#: A Version-40 symbol is 177 modules plus an 8-module quiet zone, which at the 10 px per
+#: module the framework's own requests reach is 1850 px, and a rotated copy of it needs a
+#: square root of two more, so the ceiling accepts the largest symbol this framework ever
+#: asks for while refusing one that would expand the colour, grayscale and float64
+#: luminance copies into gigabytes of memory a target dictated (AAP §0.1.3, §0.3.4).
+_MAX_ARTEFACT_SIDE_PX: Final = 8 * DEFAULT_DECODE_IMAGE_PX
+
+#: An object address inside a diagnostic. Pillow names the buffer it could not identify by
+#: its ``repr`` -- ``cannot identify image file <_io.BytesIO object at 0x7f...>`` -- and that
+#: address changes with every run, so it must not reach ``decoded.json``, which is required
+#: to be byte-identical for the same case and seed (AAP §0.5.4, §0.5.5). Only the address
+#: is replaced; every other character of the library's message is recorded verbatim.
+_VOLATILE_ADDRESS: Final = re.compile(r"0x[0-9a-fA-F]+")
 
 
 def _channels(rgb: object, label: str) -> tuple[int, int, int]:
@@ -354,31 +396,65 @@ def _looks_like_svg(raw: bytes) -> bool:
     return head[:_SIGNATURE_LENGTH].lower().startswith(_SVG_SIGNATURES)
 
 
-def _rasterise(image_bytes: bytes) -> tuple[numpy.ndarray, numpy.ndarray]:
-    """Open target bytes as the two arrays the decoders need.
+def _grayscale_pixels(image: Image.Image) -> numpy.ndarray:
+    """Return ``image`` as the single ``H x W`` ``uint8`` grayscale array decoded from.
 
-    Pillow decodes the artefact inside a ``with`` block, so the file handle and
-    the decoded buffer are released before this function returns: ``CL-ARTIFACTS``
-    asserts that the framework leaves no descriptor open, and an artefact this
-    pipeline opened is the only kind it could be blamed for.
+    An image that carries an alpha band -- an ``"A"`` among its bands, or a
+    ``transparency`` entry in its ``info``, which is how a palette image states its
+    alpha -- is composited over :data:`_RASTER_BACKDROP` and only then converted, so
+    a transparent pixel is measured as that backdrop rather than as the black zeroes
+    its band happens to store. Every other image is converted directly, which is the
+    same reduction without the composite.
 
-    The primary decoder takes the ``RGB`` array as produced, and the secondary
-    decoder takes a grayscale array, which is the form its own module asks for --
-    a three-channel array reaches OpenCV as BGR, so a coloured symbol would be
-    measured through swapped channels. Both are private compact copies, so no
-    consumer can mutate a buffer another one holds.
+    One grayscale array is what both decoders read, so neither binding's
+    three-channel order is ever exercised: ``zxing-cpp`` documents its three-byte
+    input as ``BGR`` and OpenCV reads colour as ``BGR``, and a single convention the
+    framework states for itself cannot disagree with either of them.
+    """
+    if "A" in image.getbands() or "transparency" in image.info:
+        rgba = image.convert("RGBA")
+        backdrop = Image.new("RGBA", rgba.size, _RASTER_BACKDROP)
+        gray_image = Image.alpha_composite(backdrop, rgba).convert("L")
+    else:
+        gray_image = image.convert("L")
+    return numpy.array(gray_image, dtype=numpy.uint8, copy=True)
+
+
+def _rasterise(image_bytes: bytes) -> numpy.ndarray:
+    """Open target bytes as the one grayscale array the decoders and the grid read.
+
+    The pixel decode is delegated to :func:`qrcheck.evidence.mux.decode_image`, the
+    framework's owner of the image byte path (AAP §0.8.1), so this pipeline keeps no
+    second way to turn an artefact into pixels. The image it returns is closed in a
+    ``finally`` once the array exists, so neither the decoded buffer nor a descriptor
+    outlives the call: ``CL-ARTIFACTS`` asserts that the framework leaves nothing
+    open, and an artefact this pipeline opened is the only kind it could be blamed
+    for.
+
+    The artefact's dimensions are read from its header first, in an open that parses
+    the header and decodes no pixel, and two refusals happen before anything is
+    allocated per pixel. An image with no pixels at all is refused, and so is one
+    whose longer side is above :data:`_MAX_ARTEFACT_SIDE_PX`, because a
+    target-supplied artefact is untrusted (AAP §0.1.3) and the grayscale and
+    ``float64`` luminance copies this pipeline builds grow with its pixel count: an
+    unbounded dimension would let a small compressed file exhaust the runner instead
+    of producing the recorded contract failure AAP §0.3.4 requires. :func:`_grayscale_pixels`
+    then composites any alpha band over an opaque backdrop, so a symbol on a
+    transparent background is measured as drawn rather than as its band's zeroes.
 
     Args:
         image_bytes: The artefact exactly as the target returned it.
 
     Returns:
-        ``(rgb, gray)``: ``H x W x 3`` and ``H x W`` ``uint8`` arrays.
+        An ``H x W`` ``uint8`` grayscale array -- a private compact copy, so no
+        consumer can mutate a buffer another one holds.
 
     Raises:
         ValueError: ``image_bytes`` is not a bytes-like object -- a caller defect
             rather than a fact about a target.
-        _UnreadableRaster: the bytes are an SVG artefact, are not an image Pillow
-            can open, or describe an image with no pixels. All three are facts
+        _UnreadableRaster: the bytes are an SVG artefact, are not an image Pillow can
+            open, describe an image with no pixels, describe one above the per-side
+            ceiling, or cannot be reduced to a pixel array. All of these are facts
             about target output and are recorded, never raised at a caller.
     """
     if not isinstance(image_bytes, (bytes, bytearray, memoryview)):
@@ -386,24 +462,37 @@ def _rasterise(image_bytes: bytes) -> tuple[numpy.ndarray, numpy.ndarray]:
     raw = bytes(image_bytes)
     if _looks_like_svg(raw):
         raise _UnreadableRaster(_SVG_REASON)
+    image: Image.Image | None = None
     try:
-        with Image.open(io.BytesIO(raw)) as image:
-            rgb = numpy.array(image.convert("RGB"), dtype=numpy.uint8, copy=True)
-            gray = numpy.array(image.convert("L"), dtype=numpy.uint8, copy=True)
+        with Image.open(io.BytesIO(raw)) as probe:
+            width, height = probe.size
+        if width <= 0 or height <= 0:
+            raise _UnreadableRaster("image bytes describe an image with no pixels")
+        if max(width, height) > _MAX_ARTEFACT_SIDE_PX:
+            raise _UnreadableRaster(
+                f"artefact is {width}x{height} pixels, above the "
+                f"{_MAX_ARTEFACT_SIDE_PX} px per-side ceiling this framework decodes"
+            )
+        image = decode_image(raw)
+        return _grayscale_pixels(image)
+    except _UnreadableRaster:
+        raise
     except Exception as exc:  # noqa: BLE001 - target bytes must never abort a run
         # Deliberately broad, and the only catch of this width in the module.
         # Every way Pillow can refuse hostile or broken bytes -- UnidentifiedImageError,
         # a truncated stream's OSError, a decompression-bomb guard -- must become one
         # recorded outcome, because a check reports on a target's misbehaviour rather
         # than dying of it. The library's own text is preserved so the cause stays
-        # diagnosable from decoded.json.
+        # diagnosable from decoded.json; only the run-varying object address is
+        # replaced, by _VOLATILE_ADDRESS, so the recorded evidence stays
+        # byte-identical across runs.
         raise _UnreadableRaster(
             "image bytes are not a raster image Pillow can open: "
-            f"{type(exc).__name__}: {exc}"
+            f"{type(exc).__name__}: {_VOLATILE_ADDRESS.sub('0x...', str(exc))}"
         ) from exc
-    if rgb.size == 0 or gray.size == 0:
-        raise _UnreadableRaster("image bytes describe an image with no pixels")
-    return rgb, gray
+    finally:
+        if image is not None:
+            image.close()
 
 
 def _authoritative(
@@ -608,7 +697,11 @@ def decode_symbol(
         when the secondary decoder succeeded -- that case is ``secondary_only`` and
         must fail downstream rather than pass on the secondary's strength.
         ``ec_level_decoder`` and ``ec_level_format`` are recorded independently and
-        never reconciled.
+        never reconciled. ``format_info`` carries the format-information reading
+        itself -- both copies' distances and the bit errors corrected -- and is
+        ``None`` both when no grid could be sampled and when a sampled grid's two
+        copies were both beyond the correction radius; ``sampling.reason`` tells
+        those two apart.
 
     Raises:
         ValueError: ``image_bytes`` is not bytes, or ``request`` carries no
@@ -620,11 +713,11 @@ def decode_symbol(
     secondary_ok = base.secondary_available() if secondary is None else bool(secondary)
 
     try:
-        rgb, gray = _rasterise(image_bytes)
+        gray = _rasterise(image_bytes)
     except _UnreadableRaster as exc:
         return _unreadable_result(str(exc), secondary_ok)
 
-    primary_original = zxing.read_primary(rgb, polarity="original")
+    primary_original = zxing.read_primary(gray, polarity="original")
     secondary_original = (
         opencv.read_secondary(gray, polarity="original") if secondary_ok else None
     )
@@ -632,15 +725,16 @@ def decode_symbol(
     # An inverted request is decoded twice, with both decoders, on the artefact as
     # generated and on its 255-inverted copy (§0.3.2, IM-4): the framework owns
     # polarity normalisation rather than relying on a decoder's inversion support,
-    # and the normalised copy is also what the grid is sampled from below.
-    inverted_rgb: numpy.ndarray | None = None
+    # and the normalised copy is also what the grid is sampled from below. One
+    # inverted copy is built and both decoders and the sampler read it.
+    inverted_gray: numpy.ndarray | None = None
     primary_inverted: zxing.PrimaryReading | None = None
     secondary_inverted: opencv.SecondaryReading | None = None
     if inverted:
-        inverted_rgb = invert_image(rgb)
-        primary_inverted = zxing.read_primary(inverted_rgb, polarity="inverted")
+        inverted_gray = invert_image(gray)
+        primary_inverted = zxing.read_primary(inverted_gray, polarity="inverted")
         if secondary_ok:
-            secondary_inverted = opencv.read_secondary(invert_image(gray), polarity="inverted")
+            secondary_inverted = opencv.read_secondary(inverted_gray, polarity="inverted")
 
     polarity_applied, authority = _authoritative(primary_original, primary_inverted)
     primary_outcome = _merge_outcome(
@@ -658,13 +752,14 @@ def decode_symbol(
     if position is None and secondary_outcome is not None:
         position = secondary_outcome.position
     sampling: SampledMatrix = matrix.sample_matrix(
-        rgb if inverted_rgb is None else inverted_rgb,
+        gray if inverted_gray is None else inverted_gray,
         position,
         straight_qrcode=_rectified((secondary_original, secondary_inverted), polarity_applied),
     )
 
     mask: int | None = None
     ec_level_format: str | None = None
+    format_details: format_info.FormatInfo | None = None
     if sampling.matrix is not None:
         format_details = format_info.decode_format_info(sampling.matrix)
         if format_details is not None:
@@ -698,5 +793,6 @@ def decode_symbol(
         rejection=None,
         metrics={},
         sampling=sampling,
+        format_info=None if format_details is None else format_details.as_dict(),
     )
 

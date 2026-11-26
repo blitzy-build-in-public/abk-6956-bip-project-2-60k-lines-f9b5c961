@@ -132,6 +132,15 @@ code, pre, .command {
 
 a { color: #1b5fb0; }
 
+a:hover {
+  color: #13457f;
+  text-decoration-thickness: 2px;
+}
+
+a:active {
+  color: #0d2f57;
+}
+
 a:focus-visible {
   outline: 3px solid #1b5fb0;
   outline-offset: 2px;
@@ -307,6 +316,10 @@ figcaption {
   font-style: italic;
 }
 
+.evidence-unreadable {
+  color: #6b4b00;
+}
+
 .skips { padding-inline-start: 1.25rem; }
 
 .skips li { margin-block-end: 0.25rem; }
@@ -345,9 +358,11 @@ footer {
 """
 
 
-# The paragraph a detail block carries when a case legitimately recorded no image - a
-# declared rejection has no symbol, and a partially written evidence tree may be missing
-# one - so the block stays complete either way instead of failing the writer.
+# The paragraph a detail block carries when the case recorded no image artefact at all: a
+# declared rejection has no symbol, and a listed directory may legitimately hold no image
+# artefact. An artefact that exists but cannot be read is never reported as this - that is a
+# read failure, and the block states it as one (see _render_images), as it does for a
+# directory that cannot be listed, which has no listing to be absent from.
 _NO_IMAGE: str = '<p class="no-image">no image recorded for this case</p>'
 
 
@@ -654,14 +669,47 @@ def _render_images(evidence_root: Path, case: CaseResult) -> list[str]:
     this writer must not surface something the product never promised to write. An SVG
     goes through a ``data:`` URI inside an image element too: that context is what makes a
     target-supplied vector inert.
+
+    The image area degrades rather than raising, but it says which of three facts it is
+    reporting, because a reader triaging a failure reads this block to learn what the run
+    actually recorded:
+
+    * nothing - ``case.evidence_dir is None``, or a listing that holds no image artefact -
+      renders :data:`_NO_IMAGE`;
+    * a listed artefact whose bytes cannot be read renders one
+      :func:`_unreadable_paragraph` naming that artefact and the exception class, and every
+      artefact that did read is still rendered;
+    * a directory that cannot be listed renders one :func:`_unreadable_paragraph` naming the
+      exception class.
+
+    Only the exception's class name reaches the document - never its message, its file name
+    or a path - so the text stays locale-independent and carries nothing absolute
+    (AAP §0.5.5), and the block remains a deterministic function of the evidence tree
+    (AAP §0.5.4).
     """
     if case.evidence_dir is None:
         return [_NO_IMAGE]
     directory = evidence_root / case.evidence_dir
+    try:
+        names = _image_artifact_names(directory)
+    except OSError as error:
+        return [
+            _unreadable_paragraph(
+                f"evidence directory could not be listed ({type(error).__name__})"
+            )
+        ]
     figures: list[str] = []
-    for name in _image_artifact_names(directory):
-        data = _read_artifact(directory / name)
-        if data is None:
+    unreadable: list[str] = []
+    for name in names:
+        try:
+            data = _read_artifact(directory / name)
+        except OSError as error:
+            unreadable.append(
+                _unreadable_paragraph(
+                    f"image present but could not be read ({name}: "
+                    f"{type(error).__name__})"
+                )
+            )
             continue
         figures += [
             '<figure class="evidence-image">',
@@ -669,23 +717,21 @@ def _render_images(evidence_root: Path, case: CaseResult) -> list[str]:
             f"<figcaption>{_esc(name)}</figcaption>",
             "</figure>",
         ]
-    if not figures:
+    if not figures and not unreadable:
         return [_NO_IMAGE]
-    return figures
+    return figures + unreadable
 
 
 def _image_artifact_names(directory: Path) -> list[str]:
     """Return the image artefact names in ``directory``, sorted.
 
     The listing is sorted so the document is identical on every run and on every
-    filesystem (AAP §0.5.3). A missing or unreadable directory yields an empty list rather
-    than an exception: the report must survive a partially written evidence tree, and a
-    case that legitimately recorded no image must still get its block.
+    filesystem (AAP §0.5.3). A directory that cannot be listed lets its ``OSError`` reach
+    :func:`_render_images`, which states the failure in the block it renders: a directory
+    that is absent or unreadable and a directory that holds no image are different facts
+    about a run, and only the caller holds the block a reader has to be told in.
     """
-    try:
-        entries = sorted(entry.name for entry in directory.iterdir() if entry.is_file())
-    except OSError:
-        return []
+    entries = sorted(entry.name for entry in directory.iterdir() if entry.is_file())
     return [name for name in entries if _is_image_artifact(name)]
 
 
@@ -696,17 +742,25 @@ def _is_image_artifact(name: str) -> bool:
     return is_evidence_artifact(name)
 
 
-def _read_artifact(path: Path) -> bytes | None:
-    """Return the bytes of an artefact, or ``None`` when it cannot be read.
+def _read_artifact(path: Path) -> bytes:
+    """Return the bytes of the artefact at ``path``.
 
-    Only ``OSError`` is caught, and only around this read: a vanished, truncated or
-    permission-denied artefact degrades the block to its stated "no image" paragraph,
-    while a defect of the writer's own - a non-serialisable mapping, say - still raises.
+    An artefact that cannot be read - permission denied, gone between the listing and this
+    read, or an I/O error - lets its ``OSError`` reach :func:`_render_images`, which names
+    the artefact and the exception class in the block rather than reporting the run as
+    having recorded no image. Nothing else is caught, so a defect of the writer's own still
+    propagates instead of becoming report content.
     """
-    try:
-        return path.read_bytes()
-    except OSError:
-        return None
+    return path.read_bytes()
+
+
+def _unreadable_paragraph(text: str) -> str:
+    """Return the one-line paragraph that states a degraded image area.
+
+    The caller builds ``text`` from an artefact's file name and an exception class only, and
+    it reaches the document through :func:`_esc` like every other dynamic fragment.
+    """
+    return f'<p class="evidence-unreadable">{_esc(text)}</p>'
 
 
 def _render_skipped(run_result: RunResult) -> list[str]:

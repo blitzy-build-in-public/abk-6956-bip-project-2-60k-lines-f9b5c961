@@ -22,7 +22,7 @@ capacity arithmetic — the corpus builder and the oracle test above all — doe
 in an image or decoding stack.
 """
 
-# The public surface is exactly these nine names; everything else here is private.
+# The public surface is exactly these ten names; everything else here is private.
 __all__ = [
     "EC_LEVELS",
     "MODES",
@@ -33,6 +33,7 @@ __all__ = [
     "data_codewords",
     "max_payload_bytes",
     "minimal_version",
+    "truncation_keeps_version",
 ]
 
 # ISO/IEC 18004 §7.5: the four error-correction levels, in descending order of data
@@ -251,6 +252,46 @@ def minimal_version(length: int, ec: str, mode: str) -> int | None:
         if max_payload_bytes(version, ec, mode) >= length:
             return version
     return None
+
+
+def truncation_keeps_version(length: int, window: int, ec: str) -> bool:
+    """Return whether cutting a `length`-byte payload back to `window` bytes keeps its version.
+
+    This function is the single home of the ``truncated_payload`` predicate, so the target
+    that shortens a payload and the corpus check that proves the shortening is observable
+    are one rule rather than two that can drift apart.
+
+    Both lengths are measured in "byte" mode, because the window and the payload are byte
+    counts and byte mode is the most expensive way to carry a character: a length that fits
+    at a version in byte mode fits at that version in every mode, so a truncation measured
+    this way can only be conservative about keeping the version, never optimistic.
+
+    The level is an argument rather than a constant because the two callers answer the
+    question at different levels. The truncation defect is specified as applying to a
+    payload "whose full length still selects the same version at the requested
+    error-correction level", while the same specification's cascade-containment requirement
+    -- the shortened payload must still occupy the version the whole one occupies, so that
+    a version assertion keeps a single cause -- can only hold at the level the symbol is
+    actually encoded at. This predicate answers at whichever level its caller passes, and
+    each caller passes the level it measures at.
+
+    Returns True when ``minimal_version(window, ec, "byte")`` equals
+    ``minimal_version(length, ec, "byte")``: both lengths select the same Model 2 version at
+    `ec`. Returns False when either length overflows even Version 40, where
+    ``minimal_version`` answers None -- two overflows are never treated as a match. A
+    `window` of 0 is legal and answers "the empty payload keeps its version" for every
+    `length` that fits Version 1.
+
+    Raises ValueError, naming the offending value, when `length` or `window` is not a
+    non-negative integer or `ec` is not one of `EC_LEVELS`: the validation is
+    :func:`minimal_version`'s own, so this function cannot disagree with it about what a
+    length or a level is.
+    """
+    window_version = minimal_version(window, ec, "byte")
+    payload_version = minimal_version(length, ec, "byte")
+    if window_version is None or payload_version is None:
+        return False
+    return window_version == payload_version
 
 
 def _version_group(version: int) -> int:
