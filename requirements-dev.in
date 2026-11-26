@@ -1,12 +1,20 @@
-# Development-only tooling (test runner, coverage gates, lock regeneration).
+# pip-compile input for requirements-dev.lock (generated, never hand-edited):
+#   pip-compile --allow-unsafe --generate-hashes \
+#       --output-file=requirements-dev.lock requirements-dev.in
 # It pins the runtime set too (via -r requirements.in) so this lock is a superset
 # that installs on its own with --require-hashes and cannot disagree with
-# requirements.lock about a shared transitive pin (pip-tools pulls click).
-# Regenerate with: pip-compile --generate-hashes --allow-unsafe \
-#                     --output-file=requirements-dev.lock requirements-dev.in
-# pip-tools 7.5.3 requires pip==24.0 in the generation environment (see requirements.in).
+# requirements.lock about a shared transitive pin (pip-tools pulls click from
+# requirements.in; pip-tools 7.5.3 mis-renders this header under click 8.5).
+# Regeneration environment: CPython 3.11 with pip==24.0 and pip-tools==7.5.3.
+# pip-tools 7.5.3 imports pip._internal.utils.compat.stdlib_pkgs, which pip 25 removed,
+# so pip==24.0 is pinned below for the lock-regeneration environment only.
+# Installing this lock therefore replaces the ambient pip with 24.0: intentional, not drift.
+# Nothing here is a runtime dependency of the distribution: none belongs in
+# [project].dependencies or a dev extra.
 -r requirements.in
-pytest==8.2.2
-pytest-cov==5.0.0
-coverage==7.6.1
-pip-tools==7.5.3
+pytest==8.2.2               # the request's runner, and the only one with native JUnit XML
+pytest-cov==5.0.0           # coverage measurement; --cov-fail-under=85 is declared in ci.yml
+coverage==7.6.1             # engine behind pytest-cov; per-package --fail-under=90 in ci.yml
+pip-tools==7.5.3            # regenerates both locks with --generate-hashes
+pip==24.0                   # regeneration environment only: pip-tools 7.5.3 imports pip._internal
+                            # and fails with "cannot import name 'stdlib_pkgs'" on newer pip
