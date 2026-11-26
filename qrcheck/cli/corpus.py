@@ -27,9 +27,9 @@ The outcome is the documented exit-code vocabulary of :mod:`qrcheck.cli.exit`:
   ``qrcheck.toml``, a negative seed, a destination that is a directory, a parent that is not a
   writable directory, or an existing destination whose content differs and no ``--force``.
   Nothing has been written when this code is returned;
-* ``3`` -- the write itself failed, or the corpus could not be built at all, which is a
-  framework defect rather than a user error; the diagnostic names the path or the failing
-  invariant.
+* ``3`` -- the write itself failed, the report directory could not be prepared, or the corpus
+  could not be built at all, which is a framework defect rather than a user error; the
+  diagnostic names the path or the failing invariant.
 
 Exactly one line reaches standard output, free of timings and of any path the caller did not
 name: ``seed=<n> records=<count> status=<written|unchanged|forced>``.
@@ -71,6 +71,10 @@ _TEMP_SUFFIX: Final[str] = ".jsonl"
 _STATUS_WRITTEN: Final[str] = "written"
 _STATUS_UNCHANGED: Final[str] = "unchanged"
 _STATUS_FORCED: Final[str] = "forced"
+
+# The umask assumed when the process's own cannot be read, which is the macOS path: 0o022 is
+# the conventional default, so the mode derived from it is the 0o644 a plain open() creates.
+_FALLBACK_UMASK: Final[int] = 0o022
 
 
 class _DiffersWithoutForce(Exception):
@@ -130,12 +134,12 @@ def build(
         click.echo(f"qrcheck corpus build: cannot prepare the report directory: {exc}", err=True)
         return EXIT_INTERNAL
     except OSError as exc:
-        # PermissionError included, and every other remaining read failure: only report_dir
-        # faults are environment faults, and those are exit 3 rather than a configuration
-        # error.
-        click.echo(
-            f"qrcheck corpus build: cannot read configuration {config_path}: {exc}", err=True
-        )
+        # The only OSError the loader lets through is the report_dir mkdir and writability
+        # probe (PermissionError included): every configuration-read fault is converted into
+        # a ConfigError before it leaves that module, so nothing here is a read failure. A
+        # report directory the process cannot write is an environment fault, hence exit 3,
+        # and str() of the OSError already names the directory.
+        click.echo(f"qrcheck corpus build: cannot prepare the report directory: {exc}", err=True)
         return EXIT_INTERNAL
 
     run_seed = config.seed if seed is None else seed
@@ -147,8 +151,11 @@ def build(
 
     destination = Path(out) if out is not None else config.corpus_path
     # The path as the caller named it, so a diagnostic repeats what has to change instead of
-    # an absolute path derived from it; the configured default is already absolute.
-    label = out if out is not None else str(destination)
+    # an absolute path derived from it; the configured default is already absolute. An empty
+    # --out -- the shape a shell produces for an unset variable -- names no path, so it falls
+    # back to the destination it resolves to, which is the working directory: every message
+    # built from the label names the entry the caller has to change.
+    label = str(destination) if not out else out
 
     problem = _unusable_destination(destination)
     if problem is not None:
@@ -239,6 +246,42 @@ def _regenerate(records: Sequence[CorpusRecord], destination: Path, *, force: bo
         temporary.unlink(missing_ok=True)
 
 
+def _process_umask() -> int:
+    """Return the umask this process applies, without changing it.
+
+    ``os.umask`` is the only POSIX call that reports the mask, and it reports it by *setting*
+    it first, so the mask is ``0000`` for the two syscalls it takes to put it back and any
+    file another writer created in that window would be world-writable. The kernel publishes
+    the value in the ``Umask:`` field of ``/proc/self/status`` instead, which is one read that
+    touches no process state and therefore has nothing for a concurrent writer to observe.
+
+    Args:
+        No arguments: the process this function runs in is the one being inspected.
+
+    Returns:
+        The octal mask currently applied. ``0o022`` when the field cannot be read or carries
+        no octal number, which is what a platform without ``/proc/self/status`` -- macOS, one
+        of the supported platforms -- reports, and whose ``0o666 & ~mask`` is the ``0o644``
+        a plain ``open()`` produces under the conventional default.
+
+    Raises:
+        Nothing. A missing or unreadable field file and an unparseable field both fall back to
+        ``0o022``, so a caller derives a mode on every supported platform.
+    """
+    try:
+        status = Path("/proc/self/status").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return _FALLBACK_UMASK
+    for line in status.splitlines():
+        field, _, value = line.partition(":")
+        if field == "Umask":
+            try:
+                return int(value.strip(), 8)
+            except ValueError:
+                return _FALLBACK_UMASK
+    return _FALLBACK_UMASK
+
+
 def _place(temporary: Path, destination: Path) -> None:
     """Give ``temporary`` the mode ``destination`` should keep, then move it into place.
 
@@ -251,12 +294,10 @@ def _place(temporary: Path, destination: Path) -> None:
     if destination.exists():
         mode = stat.S_IMODE(destination.stat().st_mode)
     else:
-        # The umask is read by setting it: Python exposes no getter, and this is the
-        # documented way to learn the value. The window is two syscalls wide in a
-        # single-threaded command, and the mask is restored before anything else happens.
-        current = os.umask(0)
-        os.umask(current)
-        mode = 0o666 & ~current
+        # The mask comes from /proc/self/status through _process_umask, never from
+        # os.umask: reading it that way would set it to 0000 and restore it, leaving a
+        # window in which a concurrently created file is world-writable.
+        mode = 0o666 & ~_process_umask()
     os.chmod(temporary, mode)
     os.replace(temporary, destination)
 

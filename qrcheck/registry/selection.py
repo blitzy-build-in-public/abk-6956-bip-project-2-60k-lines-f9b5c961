@@ -92,10 +92,12 @@ class SelectionError(ValueError):
     than merely loud:
 
     * :attr:`selector` holds the selector **verbatim**, exactly as the caller typed it,
-      so ``qrcheck run`` can echo it back unchanged (AAP §0.3.4, §0.6.6 row 1). The
-      token-level errors quote the whole selector for the same reason: a caller reading
-      ``--checks RT-ROUNDTRP,SY-*`` needs to see what they typed, and ``detail`` names
-      the offending token;
+      so ``qrcheck run`` can echo it back unchanged (AAP §0.3.4, §0.6.6 row 1). A
+      token-level error quotes the whole selection whenever the caller's selection is
+      known -- :func:`select` passes it down to :func:`matches` -- because a caller
+      reading ``--checks RT-ROUNDTRP,SY-*`` needs to see what they typed, and
+      ``detail`` names the offending token either way. Called on its own,
+      :func:`matches` has no enclosing selection to quote and echoes the token;
     * the message starts with that echo, then the detail, so a one-line stderr sentence is
       both reproducible from the command line and specific about the defect.
 
@@ -284,7 +286,9 @@ def parse_selection(
     return Selection(checks=selector, class_globs=class_globs)
 
 
-def matches(contract: CheckContract, token: str) -> bool:
+def matches(
+    contract: CheckContract, token: str, *, selector: str | None = None
+) -> bool:
     """Return whether the single ``--checks`` token `token` selects `contract`.
 
     The three token forms are decided here and nowhere else, which is what keeps the
@@ -306,14 +310,19 @@ def matches(contract: CheckContract, token: str) -> bool:
         contract: The registered check the token is tested against.
         token: One token of a ``--checks`` list, already stripped of surrounding
             whitespace.
+        selector: The enclosing ``--checks`` selection this token was taken from,
+            echoed verbatim in a :class:`SelectionError`; ``None`` means the token is
+            all the caller supplied, so the token itself is echoed.
 
     Returns:
         ``True`` when the token selects `contract`, ``False`` when it does not.
 
     Raises:
         SelectionError: The token is a family selector naming a family outside
-            :data:`~qrcheck.registry.check.FAMILY_NAMES`; the error's selector is the
-            token itself.
+            :data:`~qrcheck.registry.check.FAMILY_NAMES`. The error's selector is
+            `selector` -- the whole selection the token came from -- when one was
+            supplied, and the token itself when :func:`matches` was called on its own;
+            the detail names the offending token either way.
     """
     candidate = token.strip()
     if not candidate:
@@ -322,8 +331,9 @@ def matches(contract: CheckContract, token: str) -> bool:
         family = candidate[len(_FAMILY_PREFIX) :].strip()
         if family not in FAMILY_NAMES:
             raise SelectionError(
-                candidate,
-                f"unknown check family {family!r}; the families are {list(FAMILY_NAMES)}",
+                candidate if selector is None else selector,
+                f"unknown check family {family!r} in token {candidate!r};"
+                f" the families are {list(FAMILY_NAMES)}",
             )
         return contract.family == family
     if any(character in candidate for character in _GLOB_CHARS):
@@ -349,7 +359,8 @@ def select(
     * a token selects nothing -- reported as ``unknown token <token>``. Dropping it
       silently would let a check stop executing while the run still reported a clean
       pass, the vacuous suite AAP §0.4.1 forbids;
-    * a family selector names an unknown family, raised by :func:`matches`;
+    * a family selector names an unknown family, raised by :func:`matches` with this
+      selector quoted in the error and the offending token named in its detail;
     * nothing at all is selected -- an empty selector made only of commas, or a registry
       with no checks in it -- reported as ``matched no registered check``. A run that
       would execute nothing is a failure to report, never a clean result.
@@ -385,7 +396,7 @@ def select(
         hits = [
             contract
             for contract in contracts.values()
-            if matches(contract, candidate)
+            if matches(contract, candidate, selector=selector)
         ]
         if not hits:
             raise SelectionError(selector, f"unknown token {candidate!r}")

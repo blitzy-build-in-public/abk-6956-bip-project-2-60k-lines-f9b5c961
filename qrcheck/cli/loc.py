@@ -16,7 +16,8 @@ outcome is the documented exit-code contract:
   ``qrcheck loc --limit $((count - 1))`` fail rather than pass;
 * ``2`` - the configuration file cannot be used, the counted path is missing or is
   not a directory, or the limit is not a positive integer;
-* ``3`` - an I/O error interrupted the read of a path that exists.
+* ``3`` - an I/O error interrupted the read of a path that exists, or the ``report_dir``
+  probe could not create a writable report directory; the diagnostic names the path.
 
 The counted root is the directory holding the configuration file, so the committed
 ``qrcheck.toml`` at the repository root counts the repository itself whichever
@@ -100,10 +101,12 @@ def loc(
         click.echo(f"qrcheck loc: cannot prepare the report directory: {exc}", err=True)
         return EXIT_INTERNAL
     except OSError as exc:
-        # PermissionError included, and every other remaining read failure: only
-        # report_dir faults are environment faults, which the loader lets through
-        # as OSError, and those are exit 3 rather than a configuration error.
-        click.echo(f"qrcheck loc: cannot read configuration {config_path}: {exc}", err=True)
+        # PermissionError included: every configuration-read fault has already been
+        # converted into a ConfigError inside the loader, so the only OSError left
+        # is the report_dir mkdir and writability probe, which the loader lets
+        # through as an environment fault and which is therefore exit 3. The
+        # exception text names the directory that has to change.
+        click.echo(f"qrcheck loc: cannot prepare the report directory: {exc}", err=True)
         return EXIT_INTERNAL
 
     # The configuration file's directory is the repository root for the committed

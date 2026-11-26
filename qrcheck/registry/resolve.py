@@ -29,8 +29,11 @@ produces no other:
   configuration error an unknown capability *name* is (the configuration schema
   rejects that far earlier, where it is wrong in itself).
 * :attr:`~qrcheck.report.model.Reason.MISSING_DEPENDENCY` -- the check needs an
-  optional runtime dependency the host does not provide (the SVG rasterizer, the
-  platform handle directory), so its assertion could not be made at all.
+  optional runtime dependency the host does not provide (the SVG rasterizer), so its
+  assertion could not be made at all.  The platform file-descriptor directory is not
+  one of these: that check reports the handle half per case as
+  ``unsupported_platform`` while its temporary-file half still asserts (AAP §0.8.1),
+  which a whole-check skip here would drop.
 
 A capability shortfall outranks a missing dependency: a check whose target cannot even
 produce the artefact would not become runnable by installing the missing tool, so one

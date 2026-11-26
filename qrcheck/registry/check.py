@@ -79,7 +79,6 @@ __all__ = [
     "CheckContract",
     "CheckDecorator",
     "CheckRegistrationError",
-    "DEPENDENCY_PLATFORM_HANDLES",
     "DEPENDENCY_PRIMARY_DECODER",
     "DEPENDENCY_SECONDARY_DECODER",
     "DEPENDENCY_SVG_RASTERIZER",
@@ -169,23 +168,37 @@ FAMILY_BY_PREFIX: Final[Mapping[str, str]] = MappingProxyType(
 # A check declares *what it needs*, never *what provides it*: ``checks/*`` may not
 # import a decoder or the rasterizer's discovery logic, and the availability of each
 # token is resolved once per run by the runner and carried in
-# :attr:`RunContext.availability`.  The vocabulary is closed at four because a token
-# exists only where the plan names a tool or a platform fact -- the primary decoder
-# (zxing-cpp) and the SVG rasterizer, both of which degrade rather than block when
-# absent, the secondary decoder (opencv) whose absence makes the run report
-# single-decoder mode, and the platform file-descriptor directory that
-# ``CL-ARTIFACTS`` needs in order to inspect open handles at all.
+# :attr:`RunContext.availability`.
+#
+# A missing primary decoder (zxing-cpp) blocks the run: ``qrcheck doctor`` and
+# ``qrcheck run`` exit 2, naming zxing-cpp and the interpreter/platform, before any
+# check runs, and ``RT-ROUNDTRIP`` is never silently skipped (AAP §0.3.5, §0.6.6
+# row 3, §0.7.2 row 1). The check still declares
+# :data:`DEPENDENCY_PRIMARY_DECODER`, because that is the honest record of what it
+# needs -- notably ``PF-DECODE`` and ``CL-ARTIFACTS``, which decode but need nothing
+# from the target -- and resolution can never turn that record into a skip, because a
+# run without the primary decoder never reaches resolution.
+#
+# Only two tools degrade. The secondary decoder (opencv) leaves the run in
+# single-decoder mode, reported as ``primary_only``. The SVG rasterizer makes
+# ``RN-SVG`` report ``skipped`` with reason ``missing_dependency`` and the discovery
+# order it attempted.
+#
+# The vocabulary is closed at three, one per runtime tool whose availability a check
+# can depend on. There is deliberately no token for the platform file-descriptor
+# directory: a declared token can only produce a whole-check ``missing_dependency``
+# skip, whereas ``CL-ARTIFACTS`` reports its handle half per case as
+# ``unsupported_platform`` while its temporary-file half still asserts
+# (AAP §0.8.1).
 DEPENDENCY_PRIMARY_DECODER: Final[str] = "primary-decoder"
 DEPENDENCY_SECONDARY_DECODER: Final[str] = "secondary-decoder"
 DEPENDENCY_SVG_RASTERIZER: Final[str] = "svg-rasterizer"
-DEPENDENCY_PLATFORM_HANDLES: Final[str] = "platform-handles"
 
 DEPENDENCY_TOKENS: Final[frozenset[str]] = frozenset(
     {
         DEPENDENCY_PRIMARY_DECODER,
         DEPENDENCY_SECONDARY_DECODER,
         DEPENDENCY_SVG_RASTERIZER,
-        DEPENDENCY_PLATFORM_HANDLES,
     }
 )
 
@@ -213,10 +226,13 @@ class Case:
 
     Exactly two fields, deliberately.  ``case_id`` is the stable name the case is
     filed under -- ``corpus:<record-id>`` for a corpus-driven case,
-    ``synthetic:<name>`` for one the framework constructs -- and it is half of the
-    failure identifier :func:`qrcheck.report.model.failure_id` derives, so it is
-    also the evidence directory name.  ``execute`` produces that case's result when
-    the runner calls it with the run's :class:`RunContext`.
+    ``synthetic:<name>`` for one the framework constructs -- and it is the case
+    component of the failure identifier :func:`qrcheck.report.model.failure_id`
+    derives, hence part of the leaf of
+    ``<report_dir>/evidence/<check-id>/<failure-id>/``, never the leaf itself: two
+    checks share a case identifier such as ``corpus:url-000`` and the ``<check-id>``
+    segment above the leaf is what separates them.  ``execute`` produces that case's
+    result when the runner calls it with the run's :class:`RunContext`.
 
     The callable is never invoked by this module or by a check's ``cases``
     generator: a check yields every case up front and the runner decides which of
@@ -262,10 +278,13 @@ class RunContext:
 
     ``availability`` maps the :data:`DEPENDENCY_*` tokens to whether that dependency
     was found for this run, and an **absent key means unavailable**.  The default is
-    the safe direction on purpose: a forgotten probe makes a dependent check report
-    ``skipped`` with reason ``missing_dependency``, which the zero-skip reference gate
-    fails loudly, instead of letting the check run against something that was never
-    there and count as a pass.
+    the safe direction on purpose: a forgotten probe makes a check that depends on a
+    degrading dependency report ``skipped`` with reason ``missing_dependency``, which
+    the zero-skip reference gate fails loudly, instead of letting the check run against
+    something that was never there and count as a pass.  A missing primary decoder
+    never reaches this mapping at all: ``qrcheck doctor`` and ``qrcheck run`` exit 2
+    naming zxing-cpp first, so that token is a declaration of what a check needs
+    rather than a skip path.
 
     The instance is frozen: a check cannot change what another check sees.
     """
