@@ -47,7 +47,9 @@ from qrcheck.cli.exit import (
     exit_code_for,
 )
 from qrcheck.cli.main import main
+from qrcheck.evidence.naming import EVIDENCE_DIR_NAME
 from qrcheck.registry.check import REGISTRY, Case, CheckContract
+from qrcheck.registry.resolve import CAPABILITY_CASE_ID
 from qrcheck.report import HTML_FILENAME, JUNIT_FILENAME, SUMMARY_FILENAME
 from qrcheck.report.model import (
     TRACEBACK_KEY,
@@ -511,6 +513,24 @@ def test_exit_zero_when_the_only_selected_check_is_skipped(
             Reason.UNSUPPORTED_CAPABILITY.value,
         )
     ]
+    (entry,) = summary["results"]
+    evidence_dir = entry["evidence_dir"]
+    assert isinstance(evidence_dir, str) and evidence_dir, (
+        f"a skipped-with-reason case records its evidence directory; got {evidence_dir!r}"
+    )
+    assert not Path(evidence_dir).is_absolute(), evidence_dir
+    case_dir = report_dir / evidence_dir
+    assert sorted(path.name for path in case_dir.iterdir()) == ["decoded.json", "request.json"], (
+        f"a whole-check skip produced no symbol, so {case_dir} holds the two JSON artefacts"
+    )
+    request = json.loads((case_dir / "request.json").read_text(encoding="utf-8"))
+    assert (request["check_id"], request["case_id"], request["seed"]) == (
+        CAPABILITY_SKIP_CHECK,
+        CAPABILITY_CASE_ID,
+        summary["seed"],
+    ), f"request.json does not identify the case the skip belongs to: {request!r}"
+    decoded = json.loads((case_dir / "decoded.json").read_text(encoding="utf-8"))
+    assert isinstance(decoded, dict), f"decoded.json does not hold a JSON object: {decoded!r}"
     # The skip was decided before execution, so no request ever reached the target.
     assert stub_adapter.requests == []
     for artefact in REPORT_ARTEFACTS:
@@ -915,6 +935,72 @@ def test_exit_three_outranks_exit_one_when_a_run_both_fails_and_errors(
         Status.ERROR.value,
         Status.FAILED.value,
     }
+
+
+# --------------------------------------------------------------------------- #
+# A reused report root describes exactly one run
+# --------------------------------------------------------------------------- #
+
+
+def evidence_tree(report_dir: Path) -> list[str]:
+    root = report_dir / EVIDENCE_DIR_NAME
+    return sorted(path.relative_to(root).as_posix() for path in root.rglob("*"))
+
+
+def test_a_second_run_into_one_report_root_replaces_the_evidence_tree(
+    invoke_cli: Callable[..., Any],
+    monkeypatch: pytest.MonkeyPatch,
+    stub_adapter: Any,
+    patch_decode: Any,
+    make_decode_result: Callable[..., Any],
+    report_dir: Path,
+) -> None:
+    """A passing run into a root the previous run filled leaves no evidence directory behind."""
+    patch_decode(make_decode_result(payload_bytes=STUBBED_PAYLOAD))
+    install_adapter(monkeypatch, stub_adapter)
+    failing = invoke_cli("run", "--checks", "RT-ROUNDTRIP", "--class", CLASS_FILTER)
+    assert failing.exit_code == EXIT_FAILED
+    assert evidence_tree(report_dir), f"the failing run filed no evidence under {report_dir}"
+
+    def echo(_image_bytes: bytes, request: Any, **_kwargs: Any) -> Any:
+        """Return the decoded evidence of a conforming decoder for `request`."""
+        return make_decode_result(payload_bytes=request.payload)
+
+    monkeypatch.setattr("qrcheck.decode.decode_symbol", echo)
+    passing = invoke_cli("run", "--checks", "RT-ROUNDTRIP", "--class", CLASS_FILTER)
+
+    assert passing.exit_code == EXIT_OK
+    summary = read_summary(report_dir)
+    assert summary["counts"]["failed"] == summary["counts"]["error"] == 0
+    assert summary["counts"]["passed"] > 0
+    assert {entry["evidence_dir"] for entry in summary["results"]} == {None}
+    assert all((report_dir / name).is_file() for name in REPORT_ARTEFACTS)
+    assert evidence_tree(report_dir) == [], f"stale evidence survived in {report_dir}"
+
+
+def test_a_run_that_exits_two_leaves_the_previous_report_and_evidence_untouched(
+    invoke_cli: Callable[..., Any],
+    monkeypatch: pytest.MonkeyPatch,
+    stub_adapter: Any,
+    patch_decode: Any,
+    make_decode_result: Callable[..., Any],
+    report_dir: Path,
+) -> None:
+    """A rejected run clears nothing, because exit code 2 writes no report at all."""
+    patch_decode(make_decode_result(payload_bytes=STUBBED_PAYLOAD))
+    install_adapter(monkeypatch, stub_adapter)
+    first = invoke_cli("run", "--checks", "RT-ROUNDTRIP", "--class", CLASS_FILTER)
+    assert first.exit_code == EXIT_FAILED
+    summary_before = (report_dir / SUMMARY_FILENAME).read_bytes()
+    tree_before = evidence_tree(report_dir)
+    assert tree_before
+
+    rejected = invoke_cli("run", "--checks", "NOPE-*")
+    empty = invoke_cli("run", "--checks", "RT-ROUNDTRIP", "--class", "no-such-class-*")
+
+    assert rejected.exit_code == empty.exit_code == EXIT_CONFIG
+    assert (report_dir / SUMMARY_FILENAME).read_bytes() == summary_before
+    assert evidence_tree(report_dir) == tree_before
 
 
 # --------------------------------------------------------------------------- #

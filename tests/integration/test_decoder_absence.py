@@ -1,4 +1,4 @@
-"""The two decoder-absence rows of the state-handling table, held as gates.
+"""The absent-dependency rows of the state-handling table, held as gates.
 
 AAP §0.6.6 names this module for two rows and AAP §0.7.2 fixes the distinction between them.
 Row 3: ``zxing-cpp`` is the authority for every round-trip assertion, so its absence is
@@ -11,6 +11,9 @@ single-decoder mode, every decoded result records ``agreement == "primary_only"`
 ``per_decoder`` entry (or two, the second at status ``error``, when the decoder is installed but
 unusable), the evidence a failing case writes shows the same decoder set, and ``index.html``
 states the degradation.
+
+A third degradation is held here too (AAP §0.3.5, §0.7.2): with no SVG rasterizer, ``RN-SVG``
+skips whole, carrying its discovery order and its evidence directory, and never counts as a pass.
 
 Absence is forced honestly: nothing is uninstalled and nothing inside the product is patched. A
 ``None`` entry in ``sys.modules`` makes ``import zxingcpp`` raise :exc:`ImportError` and
@@ -30,9 +33,9 @@ No test here skips for an absent decoder: every supported platform has a wheel (
 a genuinely missing one means a broken environment and must surface as a loud failure naming the
 distribution and ``requirements.lock``. There is no ``xfail``, no retry and no ``pytest-mock``
 (AAP §0.4.3, §0.5.6); no threshold is restated (§0.12); every run is bounded by a
-``--checks``/``--class`` selection over the twelve ``otp`` records, so the module carries no
-``e2e`` marker; and every artefact lands under the test's ``tmp_path`` with a fresh report root
-per test.
+``--checks`` selection, narrowed by ``--class`` where the selected check walks the corpus, so the
+module carries no ``e2e`` marker; and every artefact lands under the test's ``tmp_path`` with a
+fresh report root per test.
 """
 
 from __future__ import annotations
@@ -48,6 +51,7 @@ from typing import Any, Final
 
 import pytest
 
+from qrcheck.checks.render import SVG_RASTERIZER_AUTO_ORDER
 from qrcheck.cli.exit import EXIT_CONFIG, EXIT_FAILED, EXIT_OK
 from qrcheck.decode import (
     PRIMARY_DECODER,
@@ -85,6 +89,9 @@ DECODER_WRAPPERS: Final[tuple[str, str]] = (
 STATUS_OK: Final[str] = "ok"
 STATUS_MISSING: Final[str] = "missing"
 STATUS_DEGRADED: Final[str] = "degraded"
+
+STATUS_SKIPPED: Final[str] = "skipped"
+REASON_MISSING_DEPENDENCY: Final[str] = "missing_dependency"
 
 #: The status a decoder records in ``per_decoder`` when it could not be run at all, which is what a
 #: present-but-unimportable binding leaves behind: consensus asked it, and it answered with an
@@ -135,6 +142,10 @@ EC_CHECK: Final[str] = "SY-EC-MATCH"
 #: A check that needs no target at all, used to prove the primary-decoder refusal is not
 #: specific to the one check whose name mentions a round trip.
 TARGET_INDEPENDENT_CHECK: Final[str] = "CL-ARTIFACTS"
+
+#: The check whose only optional dependency is the SVG rasterizer, and the token it names.
+SVG_CHECK: Final[str] = "RN-SVG"
+RASTERIZER_TOKEN: Final[str] = "svg-rasterizer"
 
 #: The two built-in targets by the names the configuration declares.
 REFERENCE_TARGET: Final[str] = "reference"
@@ -192,19 +203,35 @@ def module_absent(monkeypatch: pytest.MonkeyPatch, module: str) -> None:
         monkeypatch.delitem(sys.modules, wrapper, raising=False)
 
 
-def workspace(write_config: Callable[..., Path], directory: Path, *, target: str) -> Workspace:
+def rasterizer_absent(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make every rasterizer candidate unusable, whatever this host has installed.
+
+    Only the per-candidate probe is replaced, so the declared order still runs and is recorded.
+    """
+    monkeypatch.setattr("qrcheck.checks.render._probe_rasterizer", lambda _name: False)
+
+
+def workspace(
+    write_config: Callable[..., Path],
+    directory: Path,
+    *,
+    target: str,
+    render: Mapping[str, Any] | None = None,
+) -> Workspace:
     """Write a complete configuration document for ``target`` under ``directory``.
 
     The document carries every declared default the fixture emits and points ``report_dir`` at a
     fresh root, so a run started from it sees the committed thresholds for everything this module
     does not choose and writes nothing outside ``directory``. ``run`` still passes ``--adapter``
     explicitly, so the document's ``default_adapter`` and the run can never disagree silently.
+    ``render`` overrides the ``[render]`` table, so a test states the rasterizer setting.
     """
     report_dir = directory / REPORT_DIR_NAME
     config = write_config(
         directory / CONFIG_FILE_NAME,
         default_adapter=target,
         report_dir=report_dir,
+        render=render,
     )
     return Workspace(config=config, report_dir=report_dir)
 
@@ -831,6 +858,67 @@ def test_reference_run_uses_both_decoders_when_present(
         f"{HTML_FILENAME} carries the single-decoder banner although both decoders ran, so "
         f"the notice is emitted unconditionally and states nothing about this run"
     )
+
+
+# ---------------------------------------------------------------------------
+# The third degradation: no SVG rasterizer, so RN-SVG cannot rasterize
+# ---------------------------------------------------------------------------
+
+
+def test_rn_svg_skips_with_the_discovery_order_it_attempted(
+    run_cli: Callable[..., Any],
+    write_config: Callable[..., Path],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An absent rasterizer skips ``RN-SVG`` and the skip names the order it walked.
+
+    AAP §0.3.5 and §0.7.2: the rasterizer degrades to ``skipped``/``missing_dependency`` with the
+    discovery order it attempted, and AAP §0.3.4 requires evidence for the skip. Breaks if the
+    order stops reaching the result or the degradation becomes a failure, an error or a pass.
+    """
+    rasterizer_absent(monkeypatch)
+    space = workspace(
+        write_config, tmp_path, target=REFERENCE_TARGET, render={"svg_rasterizer": "auto"}
+    )
+
+    result = invoke(run_cli, space, "run", "--adapter", REFERENCE_TARGET, "--checks", SVG_CHECK)
+    assert result.exit_code == EXIT_OK, (
+        f"the run exited {result.exit_code} with no usable rasterizer; a skip is neither a "
+        f"failure nor an error, so the run completes; {diagnostic(result)}"
+    )
+    summary = load_summary(space, result)
+    counts = summary["counts"]
+    assert counts == {"passed": 0, "failed": 0, "skipped": 1, "error": 0}, (
+        f"the degraded run's tallies are {counts!r}; a whole-check skip counts once, nowhere else"
+    )
+    entries = results_of(summary)
+    assert len(entries) == 1, f"{SVG_CHECK} contributed {len(entries)} results, not one skip"
+    (entry,) = entries
+    assert entry["check_id"] == SVG_CHECK
+    assert entry["case_id"] == "synthetic:capability", entry["case_id"]
+    assert entry["status"] == STATUS_SKIPPED, entry["status"]
+    assert entry["reason"] == REASON_MISSING_DEPENDENCY, entry["reason"]
+    assert entry["expected"] == {"missing": [RASTERIZER_TOKEN]}, entry["expected"]
+    attempted = list(SVG_RASTERIZER_AUTO_ORDER)
+    assert entry["decoded"] == {"attempted": attempted}, (
+        f"the skip's decoded payload is {entry['decoded']!r}; AAP §0.3.5 requires the discovery "
+        f"order it attempted, which discovery walks as {attempted}"
+    )
+
+    evidence_dir = entry["evidence_dir"]
+    assert isinstance(evidence_dir, str) and evidence_dir, (
+        f"a skipped-with-reason case records its evidence directory (AAP §0.3.4); got "
+        f"{evidence_dir!r}"
+    )
+    assert not Path(evidence_dir).is_absolute(), evidence_dir
+    case_dir = space.report_dir / evidence_dir
+    names = sorted(path.name for path in case_dir.iterdir())
+    assert names == ["decoded.json", "request.json"], (
+        f"a whole-check skip produced no symbol, so {case_dir} holds {names}"
+    )
+    persisted = json.loads((case_dir / "decoded.json").read_text(encoding="utf-8"))
+    assert persisted == entry["decoded"], f"{case_dir} decoded.json holds {persisted!r}"
 
 
 # ---------------------------------------------------------------------------

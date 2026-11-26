@@ -209,14 +209,15 @@ def run_suite(
         SelectionError: The ``--checks`` selector matches no check (raised by
             :func:`qrcheck.registry.selection.select`), which is exit code 2 upstream.
         OSError: The report directory cannot take the evidence of a case this layer reports,
-            which is exit code 3 upstream.
+            or the previous run's evidence tree cannot be removed, which is exit code 3
+            upstream.
     """
     started_at = datetime.datetime.now(datetime.timezone.utc)
     # Idempotent: the family modules register themselves while they import, and calling this
     # again re-binds the modules Python already holds rather than registering a second set.
     load_families()
-    availability = _probe_availability(config)
-    _require_primary_decoder(availability)
+    probes = _probe_availability(config)
+    _require_primary_decoder(probes.available)
     # Before the corpus is read and long before an evidence store or a report exists: a broken
     # installation is an exit-2 environment error, not thirty fabricated generator defects.
     _require_blocking_dependencies()
@@ -232,12 +233,22 @@ def run_suite(
         corpus=corpus,
         ec_level=ec_level,
         seed=seed,
-        availability=MappingProxyType(availability),
+        availability=MappingProxyType(probes.available),
         evidence=evidence,
     )
     selected = select(REGISTRY, selection.checks)
-    resolution = resolve(selected, capabilities, availability)
-    results: list[CaseResult] = list(skip_case_results(resolution, seed))
+    resolution = resolve(
+        selected,
+        capabilities,
+        probes.available,
+        attempted=probes.attempted,
+    )
+    # After every exit-2 fault is decided: a reused root then holds this run alone (AAP §0.3.4).
+    evidence.clear()
+    # AAP §0.3.4 requires evidence for a skipped-with-reason case, which only this layer stores.
+    results: list[CaseResult] = [
+        _with_evidence(evidence, result) for result in skip_case_results(resolution, seed)
+    ]
     try:
         results.extend(_walk(resolution, context, fail_fast=fail_fast))
     finally:
@@ -273,8 +284,16 @@ def run_suite(
 # ---------------------------------------------------------------------------
 
 
-def _probe_availability(config: Config) -> dict[str, bool]:
-    """Return whether each runtime dependency a check may declare is available.
+@dataclasses.dataclass(frozen=True, slots=True)
+class _Probes:
+    """What the host provides, and the order each ordered probe walked to find out."""
+
+    available: dict[str, bool]
+    attempted: dict[str, tuple[str, ...]]
+
+
+def _probe_availability(config: Config) -> _Probes:
+    """Return whether each runtime dependency a check may declare is available, and what was tried.
 
     Three probes, all of them facts about the host rather than about the target, and none of
     them touching the target: adding a probe encode here would make every declared
@@ -286,7 +305,7 @@ def _probe_availability(config: Config) -> dict[str, bool]:
       single-decoder mode instead of failing it;
     * the SVG rasterizer comes from the product's only rasterizer discovery, resolved against
       the ``[render] svg_rasterizer`` setting so that ``auto`` and a forced name both land
-      here.
+      here; it is the one dependency probed in an ordered candidate list.
 
     The keys are the :data:`qrcheck.registry.check.DEPENDENCY_TOKENS` values, which is what
     :func:`qrcheck.registry.resolve.resolve` reads and what
@@ -296,15 +315,18 @@ def _probe_availability(config: Config) -> dict[str, bool]:
         config: The resolved configuration; only its ``render`` table is read.
 
     Returns:
-        A mapping with one entry per dependency token, in token-name order.
+        The availability per token in token-name order, and the rasterizer's discovery order.
     """
     decoders = decoder_availability()
     rasterizer = discover_svg_rasterizer(config.render)
-    return {
-        DEPENDENCY_PRIMARY_DECODER: bool(decoders.primary),
-        DEPENDENCY_SECONDARY_DECODER: bool(decoders.secondary),
-        DEPENDENCY_SVG_RASTERIZER: bool(rasterizer.available),
-    }
+    return _Probes(
+        available={
+            DEPENDENCY_PRIMARY_DECODER: bool(decoders.primary),
+            DEPENDENCY_SECONDARY_DECODER: bool(decoders.secondary),
+            DEPENDENCY_SVG_RASTERIZER: bool(rasterizer.available),
+        },
+        attempted={DEPENDENCY_SVG_RASTERIZER: rasterizer.attempted},
+    )
 
 
 def _require_primary_decoder(availability: Mapping[str, bool]) -> None:
@@ -709,8 +731,9 @@ def _with_evidence(store: EvidenceStore, result: CaseResult) -> CaseResult:
     The one place this module writes anything, and it writes through the store rather than
     naming a file: the layout, the closed artefact set and the sanitization belong to
     :mod:`qrcheck.evidence.naming` and the persistence policy to
-    :class:`~qrcheck.report.evidence.EvidenceStore`.  Only the results **this** layer builds
-    take this path; a result a check returned already carries the directory
+    :class:`~qrcheck.report.evidence.EvidenceStore`.  Results **this** layer builds take this
+    path: target-loss, internal-error and pre-execution skips (AAP §0.3.4).  A result a check
+    returned already carries the directory
     :func:`qrcheck.checks.support.record_evidence` gave it, together with artefacts -- the
     symbol, the damaged variants, the overlay -- that this layer does not hold.
 

@@ -2,12 +2,14 @@
 
 Held here over the whole 8-record by 7-kind matrix of AAP §0.8.1: ``results[].seed`` and
 ``decoded.damage[]`` in ``summary.json`` (§0.6.1 #4), the single derivation point §0.5.2
-promises, and the byte-identical ``damage-<kind>-<seed>.png`` of §0.5.4 -- observed through
-the damage module's public seam, never a second copy of a transform. A clean run writes no
-evidence, so the artefact half is observed by a probe whose ``[checks.damage]`` values are
-strictly harsher than the committed defaults, which can only add damage and so cannot mask a
-defect. Marker ``e2e``: the matrix needs both checks, so ``-m "not e2e"`` deselects it, and
-nothing here skips, retries or mocks."""
+promises, the byte-identical ``damage-<kind>-<seed>.png`` of §0.5.4, and -- across two runs of
+one failing selection -- the same sorted evidence listing with byte-identical ``request.json``
+and ``decoded.json`` (§0.5.3 row 8, §0.5.4) -- observed through the damage module's public seam,
+never a second copy of a transform. A clean run writes no evidence, so the artefact half is
+observed by a probe whose ``[checks.damage]`` values are strictly harsher than the committed
+defaults, which can only add damage and so cannot mask a defect. Marker ``e2e``: the matrix needs
+both checks, so ``-m "not e2e"`` deselects it, and nothing here skips, retries or mocks.
+"""
 
 from __future__ import annotations
 
@@ -17,7 +19,7 @@ import os
 import re
 import subprocess
 import sys
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
@@ -29,7 +31,13 @@ from qrcheck.checks import damage as damage_checks
 from qrcheck.config.load import load_config
 from qrcheck.config.models import DEFAULT_SEED, Config
 from qrcheck.config.seeding import derive_seed
-from qrcheck.evidence.naming import DAMAGE_KINDS, damage_artifact_name
+from qrcheck.evidence.naming import (
+    DAMAGE_KINDS,
+    DECODED_JSON,
+    EVIDENCE_DIR_NAME,
+    REQUEST_JSON,
+    damage_artifact_name,
+)
 from qrcheck.registry.selection import parse_selection
 from qrcheck.report.model import CaseResult, RunResult, Status
 from qrcheck.runner import run_suite
@@ -922,4 +930,140 @@ def test_rerunning_the_same_seed_rederives_the_same_variant(
         f"process derived {expected}, so a damaged image is not reproducible from the "
         f"recorded parts alone"
     )
+
+
+@dataclass(frozen=True, slots=True)
+class _Probe:
+    report_root: Path
+    results: Mapping[str, dict[str, Any]]
+
+
+def _harsh_probe(
+    factory: pytest.TempPathFactory,
+    write: Callable[..., Path],
+    run_cli: Callable[..., Any],
+    *,
+    label: str,
+) -> _Probe:
+    """Run the stricter-only ``DM-RESILIENCE`` probe into a report root of its own.
+
+    Raises:
+        AssertionError: the probe did not exit 1, so it wrote no failure evidence to compare.
+    """
+    config = _probe_config(
+        factory, write, label=label, seed=_RUN_SEED, damage=_HARSHER_DAMAGE
+    )
+    outcome = run_cli(
+        "run", "--adapter", _REFERENCE, "--ec", _EC_LEVEL, "--checks", _RESILIENCE,
+        config=config.path, in_process=False,
+    )
+    assert outcome.exit_code == 1, (
+        f"the {label} probe exited {outcome.exit_code}, so it wrote no failure evidence to "
+        f"compare; stderr: {outcome.stderr[-2000:]!r}"
+    )
+    return _Probe(config.report_dir, _by_case_id(_read_summary(config.report_dir), _RESILIENCE))
+
+
+def _recorded_dirs(tree: _Probe, case_ids: Sequence[str]) -> dict[str, str]:
+    """Return each case's recorded ``evidence_dir``, after proving it names a real directory.
+
+    Raises:
+        AssertionError: a non-passing case recorded a null, absolute or unreachable evidence path.
+    """
+    recorded: dict[str, str] = {}
+    for case_id in case_ids:
+        entry = tree.results[case_id]
+        evidence_dir = entry["evidence_dir"]
+        if evidence_dir is None:
+            raise AssertionError(
+                f"case {case_id}: the {entry['status']!r} case recorded evidence_dir=null, "
+                f"so its run wrote no evidence for a case that did not pass"
+            )
+        if Path(evidence_dir).is_absolute():
+            raise AssertionError(
+                f"case {case_id}: the recorded evidence_dir {evidence_dir!r} is absolute, "
+                f"which AAP §0.5.5 forbids in an artefact"
+            )
+        if not (tree.report_root / evidence_dir).is_dir():
+            raise AssertionError(
+                f"case {case_id}: {evidence_dir!r} is not a directory under its run's report "
+                f"root, so the run describes evidence it never wrote"
+            )
+        recorded[case_id] = str(evidence_dir)
+    return recorded
+
+
+def _evidence_listing(tree: _Probe) -> list[str]:
+    """Return every path under the evidence root, relative posix and sorted (AAP §0.5.3)."""
+    root = tree.report_root / EVIDENCE_DIR_NAME
+    return sorted(path.relative_to(root).as_posix() for path in root.rglob("*"))
+
+
+def test_evidence_listing_and_bodies_are_byte_identical_across_two_runs(
+    tmp_path_factory: pytest.TempPathFactory,
+    write_config: Callable[..., Path],
+    run_cli: Callable[..., Any],
+) -> None:
+    """Catch an evidence tree, or an evidence body, that a second run of the same case changes.
+
+    AAP §0.5.3 row 8, §0.5.4 row 2: byte-stable listing and bodies for one case and seed.
+    """
+    first = _harsh_probe(tmp_path_factory, write_config, run_cli, label="evidence-first")
+    second = _harsh_probe(tmp_path_factory, write_config, run_cli, label="evidence-second")
+
+    assert len(first.results) == _EXPECTED_CASES and len(second.results) == _EXPECTED_CASES, (
+        f"the two probes reported {len(first.results)} and {len(second.results)} "
+        f"DM-RESILIENCE cases, expected {_EXPECTED_CASES} each"
+    )
+    first_tuples = sorted(
+        (entry["check_id"], entry["case_id"], entry["status"], entry["reason"])
+        for entry in first.results.values()
+    )
+    second_tuples = sorted(
+        (entry["check_id"], entry["case_id"], entry["status"], entry["reason"])
+        for entry in second.results.values()
+    )
+    assert first_tuples == second_tuples, (
+        f"the two runs describe different cases: only in the first "
+        f"{sorted(set(first_tuples) - set(second_tuples))[:5]}, only in the second "
+        f"{sorted(set(second_tuples) - set(first_tuples))[:5]}"
+    )
+    failing = sorted(c for c, entry in first.results.items() if entry["status"] != "passed")
+    assert failing, (
+        f"neither probe failed a case among {len(first.results)}, so neither wrote evidence "
+        f"and this test would compare two empty trees"
+    )
+
+    first_dirs = _recorded_dirs(first, failing)
+    second_dirs = _recorded_dirs(second, failing)
+    moved = {
+        case_id: (first_dirs[case_id], second_dirs[case_id])
+        for case_id in failing
+        if first_dirs[case_id] != second_dirs[case_id]
+    }
+    assert not moved, (
+        f"a failing case got a different evidence directory in the two runs, so the layout is "
+        f"not a function of the case: {moved}"
+    )
+
+    first_listing = _evidence_listing(first)
+    second_listing = _evidence_listing(second)
+    difference = sorted(set(first_listing) ^ set(second_listing))[:5]
+    assert first_listing == second_listing, (
+        f"the two runs' evidence trees are not the same tree: {len(first_listing)} entries in "
+        f"the first, {len(second_listing)} in the second; differing entries: {difference}"
+    )
+
+    for case_id in failing:
+        for name in (REQUEST_JSON, DECODED_JSON):
+            first_path = first.report_root / first_dirs[case_id] / name
+            second_path = second.report_root / second_dirs[case_id] / name
+            assert first_path.is_file() and second_path.is_file(), (
+                f"case {case_id}: {name} is missing, so there is nothing to compare"
+            )
+            first_body, second_body = first_path.read_bytes(), second_path.read_bytes()
+            assert first_body == second_body, (
+                f"case {case_id}: {name} differs across two runs at seed {_RUN_SEED} and EC "
+                f"level {_EC_LEVEL}: {len(first_body)} vs {len(second_body)} bytes"
+            )
 

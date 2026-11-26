@@ -11,8 +11,8 @@ describe a run that never happened:
 * the nine family modules, their identifier ownership and every check's requirements are the
   plan's;
 * an unmet capability is ``unsupported_capability``, a missing dependency
-  ``missing_dependency``, with the capability reason outranking and ``passed`` staying at zero
-  (AAP §0.6.6 row 9);
+  ``missing_dependency`` carrying the discovery order it was probed in (AAP §0.3.5, §0.7.2),
+  with the capability reason outranking and ``passed`` staying at zero (AAP §0.6.6 row 9);
 * each built-in target's expected failing set is the declared one and ``list --json`` lists
   them.
 
@@ -266,6 +266,8 @@ _DEFECTIVE_TARGET: Final[str] = "defective"
 # is asserted -- the point is that a skip carries the run's seed rather than a default -- so it
 # is the product's own configured default and nothing is read from the clock.
 _SEED: Final[int] = 20240101
+
+_ATTEMPTED_ORDER: Final[tuple[str, ...]] = ("rsvg-convert", "resvg")
 
 # A child process that imports the nine family modules in the reverse of ``FAMILY_MODULES`` order
 # and prints the registered identifiers. ``importlib`` caches modules, so importing a family
@@ -656,8 +658,12 @@ def test_a_capability_shortfall_resolves_to_a_skip_and_never_to_a_pass() -> None
     assert result.case_id == CAPABILITY_CASE_ID == "synthetic:capability", (
         "a pre-execution skip has the one case identifier the plan fixes for it"
     )
-    assert result.evidence_dir is None, "a case that produced no artefact gets no directory"
-    assert result.request == {} and result.decoded == {}, "a skip carries no request or decode"
+    assert result.evidence_dir is None, (
+        "this function is pure; the runner's evidence store attaches the directory (AAP §0.3.4)"
+    )
+    assert result.request == {} and result.decoded == {}, (
+        "a capability shortfall carries no request and no decode evidence"
+    )
     assert result.expected == {"missing": [missing.value]}, "the cause must reach the result"
     assert result.seed == _SEED, "a skip must carry the run's seed"
 
@@ -694,6 +700,66 @@ def test_a_missing_runtime_dependency_resolves_to_a_missing_dependency_skip() ->
     counts = Counts.from_results(skip_case_results(resolution, seed=_SEED))
     assert counts.skipped == 1
     assert counts.passed == 0, "a skipped result must never be counted as a pass"
+
+
+def test_a_missing_dependency_skip_records_the_discovery_order_it_attempted() -> None:
+    contract = get_check("RN-SVG")
+    unavailable = {
+        token: token != DEPENDENCY_SVG_RASTERIZER for token in sorted(DEPENDENCY_TOKENS)
+    }
+
+    resolution = resolve(
+        [contract],
+        capabilities={Capability.svg},
+        availability=unavailable,
+        attempted={DEPENDENCY_SVG_RASTERIZER: _ATTEMPTED_ORDER},
+    )
+    outcome = resolution.skipped[0]
+    assert outcome.reason is Reason.MISSING_DEPENDENCY
+    assert outcome.attempted == _ATTEMPTED_ORDER, "the order is carried as it was walked"
+
+    result = skip_case_results(resolution, seed=_SEED)[0]
+    assert result.decoded == {"attempted": list(_ATTEMPTED_ORDER)}, result.decoded
+    assert result.expected == {"missing": [DEPENDENCY_SVG_RASTERIZER]}, result.expected
+
+
+def test_a_capability_shortfall_records_no_discovery_order() -> None:
+    contract = get_check("RN-SVG")
+    nothing_available = {token: False for token in sorted(DEPENDENCY_TOKENS)}
+
+    resolution = resolve(
+        [contract],
+        capabilities=frozenset(),
+        availability=nothing_available,
+        attempted={DEPENDENCY_SVG_RASTERIZER: _ATTEMPTED_ORDER},
+    )
+    outcome = resolution.skipped[0]
+    assert outcome.reason is Reason.UNSUPPORTED_CAPABILITY
+    assert outcome.attempted == (), "installing the rasterizer would not make the target runnable"
+    assert skip_case_results(resolution, seed=_SEED)[0].decoded == {}, (
+        "a capability shortfall carries no decode evidence, so its decoded stays empty"
+    )
+
+
+def test_an_attempted_order_must_name_declared_tokens_and_candidate_names() -> None:
+    contract = get_check("RN-SVG")
+    unavailable = {
+        token: token != DEPENDENCY_SVG_RASTERIZER for token in sorted(DEPENDENCY_TOKENS)
+    }
+    unknown_token = "svg-rasteriser"
+    with pytest.raises(ValueError) as unnamed:
+        resolve(
+            [contract], capabilities={Capability.svg}, availability=unavailable,
+            attempted={unknown_token: _ATTEMPTED_ORDER},
+        )
+    assert unknown_token in str(unnamed.value), f"the refusal must name {unknown_token!r}"
+
+    with pytest.raises(ValueError) as not_a_name:
+        resolve(
+            [contract], capabilities={Capability.svg}, availability=unavailable,
+            attempted={DEPENDENCY_SVG_RASTERIZER: (1,)},  # type: ignore[dict-item]
+        )
+    assert DEPENDENCY_SVG_RASTERIZER in str(not_a_name.value), not_a_name.value
 
 
 def test_a_capability_shortfall_outranks_a_missing_runtime_dependency() -> None:
@@ -743,14 +809,14 @@ def test_a_target_declaring_nothing_leaves_only_the_capability_free_checks_runna
 # A malformed resolution argument is named, never turned into a skip
 
 # One field broken per row. A skip that names no cause, carries a reason no resolution may
-# produce, or lists no missing requirement is indistinguishable from a check that was quietly
-# weakened, so all three are refused where the record is built.
+# produce, lists no missing requirement or reports a non-collection order is refused here.
 _MALFORMED_SKIPS: Final[tuple[tuple[Mapping[str, object], str], ...]] = (
     ({"check_id": ""}, "check_id"),
     ({"reason": "nonsense"}, "not a Reason"),
     ({"reason": Reason.VALUE_MISMATCH}, Reason.VALUE_MISMATCH.value),
     ({"missing": ()}, "names no missing"),
     ({"missing": DEPENDENCY_SVG_RASTERIZER}, "collection"),
+    ({"attempted": DEPENDENCY_SVG_RASTERIZER}, "collection of candidate names"),
 )
 
 

@@ -122,7 +122,10 @@ Three forces decide the structure, and each is a requirement rather than a prefe
 2. probe what the host provides — both reference decoders and the SVG rasterizer — with zero target invocations, and refuse to start when the blocking primary decoder is absent or cannot be imported, or when any other pinned runtime dependency cannot be imported;
 3. load the corpus and apply the `--class` filter, refusing to start when the filter leaves nothing;
 4. build the one `RunContext` the checks of this run share;
-5. resolve the `--checks` selection against the adapter's declared capabilities, so every check is decided runnable or skipped **before** the first case runs;
+5. resolve the `--checks` selection against the adapter's declared capabilities, so every check is
+   decided runnable or skipped **before** the first case runs, then remove, before this run writes
+   anything, any evidence tree a previous run left under this report root, so that the root
+   describes this run alone;
 6. walk the runnable checks in check-identifier order and each check's cases in case-identifier order, containing every per-case fault;
 7. apply the one-error-result-per-check policy when the target is lost;
 8. accumulate one `RunResult` and close the adapter exactly once, whatever happened during the walk.

@@ -1483,16 +1483,22 @@ def _run_svg(
         "rasterizer_configured": status.configured,
     }
     if not status.available:
-        return support.skip(
-            RN_SVG,
-            case_id,
-            reason=Reason.MISSING_DEPENDENCY,
-            expected={
-                **expected,
-                "rasterizer_attempted": list(status.attempted),
-                "rasterizer": status.name,
-            },
-            decoded={"rasterizer": status.as_dict()},
+        # A skipped-with-reason case is persisted like a failure (AAP §0.3.4), so the
+        # per-case half of the rasterizer gate leaves the same evidence the whole-check
+        # skip does rather than only a record in summary.json.
+        return support.record_evidence(
+            ctx,
+            support.skip(
+                RN_SVG,
+                case_id,
+                reason=Reason.MISSING_DEPENDENCY,
+                expected={
+                    **expected,
+                    "rasterizer_attempted": list(status.attempted),
+                    "rasterizer": status.name,
+                },
+                decoded={"rasterizer": status.as_dict()},
+            ),
         )
     started = time.perf_counter()
     request = support.build(

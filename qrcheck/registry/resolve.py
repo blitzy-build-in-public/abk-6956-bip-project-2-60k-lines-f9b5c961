@@ -22,7 +22,9 @@ check needs an optional runtime dependency the host does not provide, such as th
 The platform file-descriptor directory is not one of these: that check reports the handle half per
 case as ``unsupported_platform`` while its temporary-file half still asserts (AAP §0.8.1), which a
 whole-check skip would drop. A capability shortfall outranks a missing dependency, so a check short
-of both is skipped once with the capability reason.
+of both is skipped once with the capability reason. The discovery order a
+missing dependency was probed in travels with the skip as :attr:`SkipOutcome.attempted`, so a
+report states what was tried, not only what is absent (AAP §0.3.5, §0.7.2).
 
 A skip is a real outcome, never a flavoured pass: it is counted in its own integer of
 :class:`~qrcheck.report.model.Counts` and can never produce a passing exit code, and since the
@@ -136,32 +138,57 @@ _AVAILABILITY_FORMS: Final[str] = (
 )
 
 
+def _candidate_order(context: str, value: object) -> tuple[str, ...]:
+    """Return the discovery order `value` holds, kept as given rather than sorted.
+
+    Raises:
+        ValueError: `value` is a string or is not iterable, or holds an entry that is not
+            a non-empty ``str``.
+    """
+    if isinstance(value, str) or not isinstance(value, Iterable):
+        raise ValueError(
+            f"{context}={value!r}, which is not a collection of candidate names; a single "
+            f"name would be read as its characters"
+        )
+    order = tuple(value)
+    for candidate in order:
+        if not isinstance(candidate, str) or not candidate.strip():
+            raise ValueError(
+                f"{context} holds the candidate {candidate!r}, which is not a non-empty "
+                f"str; a discovery order is a sequence of candidate names"
+            )
+    return order
+
+
 @dataclass(frozen=True, slots=True)
 class SkipOutcome:
-    """One check that will not execute, why, and which requirements it lacks.
+    """One check that will not execute, why, which requirements it lacks, and what was tried.
 
-    Three fields, each a public surface that reaches an artefact: ``check_id`` names the check,
+    Four fields, each a public surface that reaches an artefact: ``check_id`` names the check,
     ``reason`` is the machine-readable cause ``summary.json`` and the JUnit ``<skipped
-    message="..."/>`` carry, and ``missing`` lists the absent requirements -- capability names for
-    an ``unsupported_capability`` skip, dependency tokens for a ``missing_dependency`` one -- so a
-    reader learns what to add rather than only that something was skipped. Construction normalises
-    and validates: ``missing`` is sorted and de-duplicated, ``reason`` is narrowed to a
-    :class:`~qrcheck.report.model.Reason` member, and a skip that names no cause raises
-    :exc:`ValueError`, because an unexplained skip is exactly the quiet gap the zero-skip reference
-    gate exists to catch.
+    message="..."/>`` carry, ``missing`` lists the absent requirements -- capability names for an
+    ``unsupported_capability`` skip, dependency tokens for a ``missing_dependency`` one -- and
+    ``attempted`` is the discovery order walked for a dependency the host offers through an ordered
+    candidate list (AAP §0.3.5, §0.7.2), so a reader learns what to add and what was tried.
+    Construction normalises and validates: ``missing`` is sorted and de-duplicated, ``reason`` is
+    narrowed to a :class:`~qrcheck.report.model.Reason` member, ``attempted`` is kept as walked, and
+    a skip that names no cause raises :exc:`ValueError`, because an unexplained skip is exactly the
+    quiet gap the zero-skip reference gate exists to catch.
     """
 
     check_id: str
     reason: Reason
     missing: tuple[str, ...]
+    attempted: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
-        """Validate the record and normalise ``reason`` and ``missing``.
+        """Validate the record and normalise ``reason``, ``missing`` and ``attempted``.
 
         Raises:
             ValueError: ``check_id`` is not a non-empty ``str``, ``reason`` is outside
                 :class:`~qrcheck.report.model.Reason` or is not one of the two skip
-                reasons, or ``missing`` is empty or is not a collection of names.
+                reasons, ``missing`` is empty or is not a collection of names, or
+                ``attempted`` is not a collection of non-empty names.
         """
         check_id = self.check_id
         if not isinstance(check_id, str) or not check_id.strip():
@@ -192,8 +219,12 @@ class SkipOutcome:
                 f"requirement; an unexplained skip is indistinguishable from a check that "
                 f"was quietly weakened"
             )
+        attempted = _candidate_order(
+            f"skip of check {check_id!r} declares attempted", self.attempted
+        )
         object.__setattr__(self, "reason", reason)
         object.__setattr__(self, "missing", missing)
+        object.__setattr__(self, "attempted", attempted)
 
 
 @dataclass(frozen=True)
@@ -318,6 +349,37 @@ def _available_dependencies(source: AvailabilitySource) -> Mapping[str, bool]:
     )
 
 
+def _attempted_orders(
+    attempted: Mapping[str, Iterable[str]] | None,
+) -> dict[str, tuple[str, ...]]:
+    """Return the discovery orders `attempted` describes, keyed by dependency token.
+
+    A token absent from the mapping has no order to record; a key outside the vocabulary is
+    refused.
+
+    Raises:
+        TypeError: `attempted` is not a mapping.
+        ValueError: A key is not one of the declared dependency tokens, or an order is not a
+            collection of non-empty candidate names.
+    """
+    if attempted is None:
+        return {}
+    if not isinstance(attempted, Mapping):
+        raise TypeError(
+            f"attempted must be a mapping of dependency token to the discovery order "
+            f"walked for it, got {type(attempted).__name__}"
+        )
+    orders: dict[str, tuple[str, ...]] = {}
+    for token, candidates in attempted.items():
+        if token not in DEPENDENCY_TOKENS:
+            raise ValueError(
+                f"attempted names {token!r}, which is not a declared dependency token; the "
+                f"vocabulary is {sorted(DEPENDENCY_TOKENS)}"
+            )
+        orders[token] = _candidate_order(f"attempted[{token!r}]", candidates)
+    return orders
+
+
 def unmet_capabilities(
     contract: CheckContract,
     capabilities: CapabilitySource = None,
@@ -358,6 +420,8 @@ def resolve(
     selected: Iterable[CheckContract] | Mapping[str, CheckContract],
     capabilities: CapabilitySource = None,
     availability: AvailabilitySource = None,
+    *,
+    attempted: Mapping[str, Iterable[str]] | None = None,
 ) -> Resolution:
     """Split `selected` into the checks that can run and the checks that cannot.
 
@@ -375,16 +439,20 @@ def resolve(
     :data:`~qrcheck.registry.check.DEPENDENCY_TOKENS` values, an object exposing ``as_mapping()`` or
     ``available(dependency)``, or ``None`` for nothing available --
     :class:`qrcheck.decode.base.DecoderAvailability` exposes neither method, so the runner
-    translates its probes into a mapping before calling here. Nothing is mutated, no adapter is
-    touched, no probe is run and no result is built, so the executed set is knowable before the
-    first case runs; the resolution returned has both tuples sorted by check identifier. Raises
+    translates its probes into a mapping before calling here, while ``attempted`` is a mapping
+    from a dependency token to the ordered candidate list walked for it, copied into a
+    ``missing_dependency`` skip (AAP §0.3.5, §0.7.2). Nothing is mutated, no adapter is touched,
+    no probe is run and no result is built, so the executed set is knowable before the first case
+    runs; the resolution returned has both tuples sorted by check identifier. Raises
     :exc:`TypeError` when an element of `selected` is not a
-    :class:`~qrcheck.registry.check.CheckContract` or `capabilities`/`availability` is not in an
-    accepted form, and :exc:`ValueError` when a declared capability name is not a
-    :class:`Capability` member.
+    :class:`~qrcheck.registry.check.CheckContract` or `capabilities`/`availability`/`attempted`
+    is not in an accepted form, and :exc:`ValueError` when a declared capability name is not a
+    :class:`Capability` member, `attempted` names a token no check may declare, or an order holds
+    a non-name.
     """
     declared = _declared_capabilities(capabilities)
     available = _available_dependencies(availability)
+    orders = _attempted_orders(attempted)
     contracts: Iterable[CheckContract]
     if isinstance(selected, Mapping):
         contracts = selected.values()
@@ -419,6 +487,12 @@ def resolve(
                     check_id=contract.id,
                     reason=Reason.MISSING_DEPENDENCY,
                     missing=missing,
+                    # The search walked for each absent dependency (AAP §0.3.5, §0.7.2).
+                    attempted=tuple(
+                        candidate
+                        for token in missing
+                        for candidate in orders.get(token, ())
+                    ),
                 )
             )
             continue
@@ -433,15 +507,14 @@ def skip_case_results(resolution: Resolution, seed: int) -> tuple[CaseResult, ..
     order, and nothing else: the runner adds them beside the executed cases so that a selection
     covering a check the target cannot serve is described rather than silently shortened. Each
     carries :attr:`~qrcheck.report.model.Status.SKIPPED`, one of the two skip reasons,
-    ``duration_ms`` of ``0.0``, no evidence directory and the run's seed -- ``seed`` is recorded
-    verbatim so the report says which run the skip belongs to. There is no evidence to persist,
-    since no request was built and no symbol exists, so
-    :class:`qrcheck.report.evidence.EvidenceStore` is deliberately not called; the machine-readable
-    cause is the record itself (``status``, ``reason`` and ``expected["missing"]``), which reaches
-    ``summary.json``, the JUnit ``<skipped message="..."/>`` element and the skipped section of the
-    HTML report. ``request`` and ``decoded`` are empty mappings rather than nulls because the record
-    declares both as mappings, so a skip serialises as an empty object every consumer reads
-    uniformly. A skipped result is never a pass: the four separate tallies of
+    ``duration_ms`` of ``0.0`` and the run's seed, recorded verbatim so the report says which run
+    the skip belongs to; the runner hands each result to
+    :class:`qrcheck.report.evidence.EvidenceStore`, which persists a skipped-with-reason case and
+    attaches its directory (AAP §0.3.4). ``decoded`` carries the discovery order walked for a
+    missing dependency found through an ordered candidate list, as ``{"attempted": [...]}``
+    (AAP §0.3.5, §0.7.2), and is empty for every other skip, where ``expected["missing"]`` states
+    the whole cause; ``request`` is an empty mapping rather than null so every consumer reads a
+    skip uniformly. A skipped result is never a pass: the four separate tallies of
     :class:`qrcheck.report.model.Counts` keep it out of ``passed``.
     """
     return tuple(
@@ -452,7 +525,7 @@ def skip_case_results(resolution: Resolution, seed: int) -> tuple[CaseResult, ..
             reason=outcome.reason,
             duration_ms=0.0,
             request={},
-            decoded={},
+            decoded={"attempted": list(outcome.attempted)} if outcome.attempted else {},
             expected={"missing": list(outcome.missing)},
             evidence_dir=None,
             seed=seed,

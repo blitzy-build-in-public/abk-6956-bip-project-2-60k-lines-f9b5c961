@@ -77,7 +77,7 @@ qrcheck run --ec Q --class 'boundary-*' --report-dir reports/boundary-q
 qrcheck run --checks 'SY-*' --fail-fast --report-dir reports/symbol-only
 ```
 
-Give each run its own `--report-dir`: the three report files and the evidence tree are laid out under a single root, so a second run into the same root would overwrite the first.
+Give each run its own `--report-dir`: a second run into the same root replaces the first run's three report files and its evidence tree, so each run should still get its own root.
 
 `run` is quiet apart from one summary line on stdout: diagnostics go to stderr and every detail lands in the reports.
 

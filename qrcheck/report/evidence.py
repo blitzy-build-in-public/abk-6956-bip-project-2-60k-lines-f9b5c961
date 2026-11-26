@@ -67,6 +67,7 @@ untouched, because ``qrcheck.cli.run`` turns an unwritable ``report_dir`` into e
 
 from __future__ import annotations
 
+import shutil
 from collections.abc import Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -167,6 +168,21 @@ class EvidenceStore:
         this store writes has one definition (AAP §0.8.1).
         """
         return self.report_dir / EVIDENCE_DIR_NAME
+
+    def clear(self) -> None:
+        """Remove the evidence tree a previous run left under this report root, if any.
+
+        The report-root contract (AAP §0.3.4, §0.6.1 criterion 9): a reused root describes
+        this run alone, since the report files and the evidence tree are both replaced.
+
+        Raises:
+            OSError: the tree could not be removed, for ``qrcheck.cli.run`` to map to exit 3.
+        """
+        base = self.base_dir
+        if base.is_dir() and not base.is_symlink():
+            shutil.rmtree(base)
+        elif base.exists() or base.is_symlink():
+            base.unlink()
 
     def record(
         self,
