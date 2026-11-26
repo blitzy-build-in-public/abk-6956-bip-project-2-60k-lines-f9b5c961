@@ -1,0 +1,71 @@
+# Build-time tooling only: setuptools is not a runtime dependency and so has no
+# hash-locked entry. The >=61 floor is the first release supporting PEP 621.
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "qrcheck"
+# Static, never dynamic: a wheel build would import the package to resolve it.
+# qrcheck/__init__.py carries the same 0.1.0 literal at runtime.
+version = "0.1.0"
+description = "Offline conformance harness that tests QR code generators against two reference decoders and a golden-encoder oracle."
+readme = "README.md"
+# A floor, never a cap: a newer 3.x runs unsupported and `qrcheck doctor` says so.
+requires-python = ">=3.11"
+# Direct runtime dependencies only: exact pins, sorted by canonical name, no
+# extras, ranges or environment markers. Never add a transitive pin (anyio,
+# certifi, h11, httpcore, idna, sniffio, typing-extensions) — requirements.lock
+# is installed with `--require-hashes` and is the sole authority for those
+# versions. Developers install with `pip install --no-deps -e .` so the manifest
+# cannot pull an unlocked version; pytest, pytest-cov, coverage and pip-tools
+# stay in requirements-dev.lock. The absent Linux-aarch64 zxing-cpp wheel is a
+# blocking `qrcheck doctor` failure naming the distribution, not a marker.
+dependencies = [
+    "Pillow==10.4.0",
+    "click==8.1.8",
+    "httpx==0.27.2",
+    "numpy==1.26.4",
+    "opencv-python-headless==4.10.0.84",
+    "segno==1.6.6",
+    "zxing-cpp==2.2.0",
+]
+# Classifiers only: no license key (no licence file ships) and no [project.urls].
+classifiers = [
+    "Programming Language :: Python :: 3.11",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Topic :: Software Development :: Testing",
+]
+
+# The fixed console entry point; qrcheck/__main__.py gives the equivalent
+# `python -m qrcheck` path. No [project.optional-dependencies]: a `dev` extra
+# would restate the development set requirements-dev.lock owns.
+[project.scripts]
+qrcheck = "qrcheck.cli.main:main"
+
+# The package sits at the repository root (no src/ layout) beside tests/,
+# examples/, docs/ and corpus/, so flat-layout auto-discovery needs this explicit
+# include/exclude or it fails with a multi-package error. No package-data:
+# corpus/default.jsonl is a committed file resolved by relative path, not data.
+[tool.setuptools.packages.find]
+include = ["qrcheck*"]
+exclude = ["tests*", "examples*", "docs*", "corpus*"]
+
+[tool.pytest.ini_options]
+minversion = "8.2"
+testpaths = ["tests"]
+# Registering the marker is what keeps `-m "not e2e"` warning-free. No addopts:
+# `--cov` and `-m` are passed on the CI command line, leaving one source of truth.
+markers = [
+    'e2e: the marker-selected end-to-end proof; deselected by -m "not e2e" in the fast unit job',
+]
+
+# Line coverage only — branch coverage would change the number the floors apply
+# to. No fail_under: the 85% project floor and the 90% floor for qrcheck/config,
+# qrcheck/registry and qrcheck/report live once, in .github/workflows/ci.yml.
+[tool.coverage.run]
+source = ["qrcheck"]
+
+[tool.coverage.report]
+exclude_lines = ["pragma: no cover", "if TYPE_CHECKING:"]
