@@ -8,10 +8,10 @@ the faults is also driven through ``qrcheck run`` with a real ``--config`` path:
 report artefact at all.
 
 The one deliberate exception: a capability *shortfall* is a ``skipped`` result with reason
-``unsupported_capability``, not a configuration error, because whether a declared set can
-satisfy a check depends on the run-time ``--checks`` selection (AAP §0.12, fourth resolved
-conflict; ``tests/unit/test_registry_contract.py`` asserts that half). An unknown capability
-*member* is still exit 2.
+``unsupported_capability``, not a configuration error, because whether a declared set can satisfy
+a check depends on the run-time ``--checks`` selection rather than on the document, and
+``tests/unit/test_registry_contract.py`` asserts that half. An unknown capability *member* is
+still exit 2.
 
 Nothing here loads the repository's own ``qrcheck.toml`` through ``load_config``, which would
 create ``reports/`` inside the checkout, and the unusable-``report_dir`` cases never use
@@ -344,7 +344,7 @@ def test_every_declared_key_carries_a_kind_a_rule_and_a_default(group: str, key:
 @pytest.mark.parametrize("group, key", DEFAULTED_KEY_CASES, ids=_key_ids(DEFAULTED_KEY_CASES))
 def test_the_declared_default_is_the_models_constant(group: str, key: str) -> None:
     """Every declared fallback is the ``models.DEFAULT_*`` constant, so retuning a default cannot
-    leave the schema behind (AAP §0.12, NFR-3: a threshold is declared once)."""
+    leave the schema behind: a threshold is declared once."""
     spec = schema.SCHEMA[group][key]
     named = f"{group or 'top level'}:{key}"
     constant = _default_constant_name(key)
@@ -991,7 +991,6 @@ def test_an_argument_template_with_a_placeholder_or_a_flag_is_accepted(value: st
 
 
 # The argument templates: the same one vocabulary, refused at load
-#
 # ``payload_arg`` and ``output_arg`` are templates over the placeholders a request carries, while
 # ``command`` is a literal argv. Both facts are decided when the document is read, so a typo is the
 # exit-2 configuration fault that names its key rather than an adapter ``ValueError`` raised once
@@ -1509,7 +1508,7 @@ def test_a_valid_configuration_is_not_a_configuration_fault(
 
 def test_a_capability_shortfall_is_not_a_configuration_error(toml_config_file: Any) -> None:
     """A target declaring fewer capabilities than a check needs still loads, and is not exit 2:
-    sufficiency depends on the run-time ``--checks`` selection (AAP §0.12, fourth conflict)."""
+    sufficiency depends on the run-time ``--checks`` selection."""
     shortfall = "png"
     missing = "svg"
     assert missing in models.CAPABILITY_NAMES, (

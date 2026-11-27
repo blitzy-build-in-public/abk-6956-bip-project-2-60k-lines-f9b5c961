@@ -1,10 +1,10 @@
 """The ``summary.json`` schema, its ordering and its exact volatile-field inventory.
 
-AAP §0.6.1 gate 6 names this module as the gate holding ``summary.json``, the artefact a CI
-consumer, a trend line and a triage script all parse. Every document asserted here is written by
+This module holds ``summary.json``, the artefact a CI consumer, a trend line and a triage script
+all parse. Every document asserted here is written by
 :func:`qrcheck.report.json_report.write_summary` from a :class:`~qrcheck.report.model.RunResult`
 built by the shared factories, so nothing is transcribed from a run's output and no second
-formatter can drift in (AAP §0.3.4, §0.5.3-§0.5.5).
+formatter can drift in.
 
 Pinned: the nine top-level keys by **set equality**; ``counts`` as four separate integers,
 because a tally folding ``skipped`` into ``passed`` would satisfy every other assertion while
@@ -43,7 +43,7 @@ from qrcheck.report.model import CaseResult, Counts, Reason, RunResult, Status
 from qrcheck.runner import run_suite
 from qrcheck.targets.base import Adapter
 
-# The exact schema, stated once. AAP §0.3.4 fixes both key sets as a stable public surface, so each
+# The exact schema, stated once. The writer emits both key sets as a stable public surface, so each
 # is compared by set equality against the payload a real write produced.
 _TOP_LEVEL_FIELDS: Final[frozenset[str]] = frozenset(
     {
@@ -76,11 +76,11 @@ _RESULT_FIELDS: Final[frozenset[str]] = frozenset(
 # The four tallies, kept separate, read from nothing but this declaration.
 _COUNT_FIELDS: Final[frozenset[str]] = frozenset({"error", "failed", "passed", "skipped"})
 
-# The complete volatile inventory of AAP §0.5.4: two run timestamps, each result's duration, and
-# the measured leaves of a ``PF-*`` result's ``decoded.metrics``. AAP §0.6.1 gate 10 requires the
-# two performance probes to record their measurement, so the determinism comparison masks it instead
-# of dropping it, and AAP §0.5.5 keeps it out of every comparison: a measured latency or throughput
-# is judged once against the configured floor and never against another run's measurement.
+# The complete volatile inventory: two run timestamps, each result's duration, and the measured
+# leaves of a ``PF-*`` result's ``decoded.metrics``. The two performance probes must record their
+# measurement, so the determinism comparison masks it instead of dropping it, and the masking keeps
+# it out of every comparison: a measured latency or throughput is judged once against the configured
+# floor and never against another run's measurement.
 _VOLATILE_RUN_FIELDS: Final[frozenset[str]] = frozenset({"started_at", "finished_at"})
 _VOLATILE_RESULT_FIELDS: Final[frozenset[str]] = frozenset({"duration_ms"})
 _VOLATILE_METRIC_FIELDS: Final[frozenset[str]] = frozenset(
@@ -519,7 +519,7 @@ def _reread(path: Path) -> bytes:
     return path.read_bytes()
 
 
-# --- The schema, exactly as AAP §0.3.4 states it ---
+# --- The schema, exactly as the writer emits it ---
 
 
 def test_summary_has_exactly_the_documented_top_level_keys(
@@ -631,7 +631,7 @@ def test_evidence_dir_is_null_for_a_pass_and_relative_for_anything_else(
         value = result["evidence_dir"]
         assert isinstance(value, str)
         assert value
-        # No absolute path may reach an artefact (AAP §0.5.5): it would name the clone the run
+        # No absolute path may reach an artefact: it would name the clone the run
         # happened in, and two clones would disagree about the same case.
         assert not Path(value).is_absolute()
         assert not value.startswith("/")
@@ -773,7 +773,7 @@ def test_a_summary_whose_decoded_value_carries_a_lone_surrogate_is_still_written
     assert _LONE_SURROGATE not in text
 
 
-# --- The volatile-field inventory of AAP §0.5.4 ---
+# --- The volatile-field inventory ---
 
 
 def test_masking_the_volatile_fields_makes_two_runs_byte_equal(
@@ -876,9 +876,9 @@ def test_any_non_volatile_change_breaks_the_masked_equality(
 
 # --- ``run_id``: a content hash, never a UUID and never a clock reading ---
 
-# The one check that calls no target at all: AAP §0.8.1's case matrix gives ``CL-ARTIFACTS`` a
-# single run-level case with zero encodes and zero decodes, which is what makes a *real* run of it
-# cheap enough for a unit test to drive the identity several times.
+# The one check that calls no target at all: its contract declares a single run-level case with
+# zero encodes and zero decodes, which is what makes a *real* run of it cheap enough for a unit
+# test to drive the identity several times.
 _CLEANUP_CHECK: Final[str] = "CL-ARTIFACTS"
 
 # The cheapest second check in the same matrix -- ``IV-EMPTY`` sends one request and decodes
@@ -886,7 +886,7 @@ _CLEANUP_CHECK: Final[str] = "CL-ARTIFACTS"
 _EMPTY_INPUT_CHECK: Final[str] = "IV-EMPTY"
 
 # A corpus class the filter narrows to, so a ``--class`` run digests fewer records than the
-# whole-corpus run it is compared with (AAP §0.3.4's "corpus digest").
+# whole-corpus run it is compared with (the runner's own corpus digest).
 _FILTERED_CLASS: Final[str] = "url"
 
 # The EC level and the adapter name a run is repeated with, one input moved at a time.
@@ -902,7 +902,7 @@ def _run(
     ec_level: str = "M",
     seed: int | None = None,
 ) -> RunResult:
-    """Run `selection` through the interface AAP §0.8.1 names and return the model it reported.
+    """Run `selection` through :func:`qrcheck.runner.run_suite` and return the model it reported.
 
     ``seed`` defaults to the configured one, so a caller moves exactly the input it means to move
     and leaves the other four alone. This is the public path ``qrcheck run`` takes, not the
@@ -929,8 +929,8 @@ def test_the_run_identifier_is_a_content_hash_stable_in_its_inputs(
     stub_adapter: Adapter,
     make_run_result: Callable[..., RunResult],
 ) -> None:
-    """A real run's identity repeats for one input and moves with each of the five AAP §0.3.4
-    hashes, so what fails here is the runner's own call site, not only the derivation."""
+    """A real run's identity repeats for one input and moves with each of the five inputs the
+    runner hashes, so what fails here is the runner's own call site, not only the derivation."""
     config = config_factory()
     selection = Selection(checks=_CLEANUP_CHECK)
     run_result = _run(config, selection, stub_adapter)
@@ -950,8 +950,8 @@ def test_the_run_identifier_is_a_content_hash_stable_in_its_inputs(
         "two runs of identical adapter, EC level, seed, check set and corpus reported different "
         f"identities: {repeated} and {identifier}"
     )
-    # (2) The selected check IDs are hashed sorted, not in the order the selector spelled them
-    #     (AAP §0.5.3), so the same two checks written the other way round are one identity.
+    # (2) The selected check IDs are hashed sorted, not in the order the selector spelled them,
+    #     so the same two checks written the other way round are one identity.
     forward = _run(
         config, Selection(checks=f"{_CLEANUP_CHECK},{_EMPTY_INPUT_CHECK}"), stub_adapter
     ).run_id

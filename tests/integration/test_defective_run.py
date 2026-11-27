@@ -1,17 +1,17 @@
 """Set equality between a real ``--adapter defective`` run and its declared expectation.
 
 A suite that cannot fail proves nothing, so the framework ships the defect it is supposed to
-catch: ``qrcheck/targets/defective.py`` carries five injections, and this module holds AAP
-§0.4.2 -- a run against it fails **exactly** the nine checks those injections target, with
-zero ``error`` results and the other twelve passing -- and §0.4.3, that nothing was weakened,
-skipped or relaxed to get there.
+catch: ``qrcheck/targets/defective.py`` carries five injections, and this module holds the
+consequence -- a run against it fails **exactly** the nine checks those injections target, with
+zero ``error`` results and the other twelve passing -- and that nothing was weakened, skipped or
+relaxed to get there.
 
 Set equality is asserted in both directions, because containment would accept a cascade of
 collateral failures: the observed set is compared with ``SELF_CHECK_TARGETS["defective"]``
 **and** with the nine-identifier literal, and every message names what is extra beside what
-is missing. Evidence is written only for failing, errored and skipped cases (AAP §0.3.4), so
-this is the one integration module where attribution can be read rather than inferred. Both
-runs come from the session-scoped fixtures, so §0.6.1 #9's five-run budget is untouched."""
+is missing. Evidence is written only for failing, errored and skipped cases, so this is the one
+integration module where attribution can be read rather than inferred. Both runs come from the
+session-scoped fixtures, so no run is paid for twice."""
 
 from __future__ import annotations
 
@@ -31,7 +31,7 @@ from qrcheck.targets.defective import DEFECTS, Defect, expected_failing_ids
 # Two full runs are the cost; the marker keeps them out of the fast unit job.
 pytestmark = pytest.mark.e2e
 
-# The nine identifiers a --adapter defective run must fail (AAP §0.4.2), as one literal;
+# The nine identifiers a --adapter defective run must fail, as one literal;
 # SELF_CHECK_TARGETS["defective"] is compared against it too, so a drift is a defect in one of them.
 _EXPECTED_FAILING_CHECKS: Final[frozenset[str]] = frozenset(
     {
@@ -65,8 +65,8 @@ _EXPECTED_PASSING_CHECKS: Final[frozenset[str]] = frozenset(
     }
 )
 
-# Each injection of AAP §0.4.2 by name with every identifier it is declared to fail, consequences
-# included; the last test asserts this against the target's own DEFECTS table.
+# Each injection of the target's DEFECTS table by name with every identifier it is declared to
+# fail, consequences included; the last test asserts this against that table itself.
 _DECLARED_PER_DEFECT: Final[Mapping[str, frozenset[str]]] = MappingProxyType(
     {
         "missing_quiet_zone": frozenset({"RN-QUIET-ZONE", "RN-MODULE-SIZE"}),
@@ -77,8 +77,8 @@ _DECLARED_PER_DEFECT: Final[Mapping[str, frozenset[str]]] = MappingProxyType(
     }
 )
 
-# The closed decode-evidence projection of AAP §0.3.4: both decoder outcomes, the agreement
-# classification, both EC readings, the grid's version, the mask and its digest; sorted.
+# The closed decode-evidence projection: both decoder outcomes, the agreement classification,
+# both EC readings, the grid's version, the mask and its digest; sorted.
 _DECODE_EVIDENCE_KEYS: Final[tuple[str, ...]] = (
     "agreement",
     "ec_level_decoder",
@@ -90,7 +90,8 @@ _DECODE_EVIDENCE_KEYS: Final[tuple[str, ...]] = (
     "version",
 )
 
-# The two checks AAP §0.4.2 measures arithmetically, whose evidence carries measurements instead.
+# The two checks the missing-quiet-zone injection fails, whose evidence carries measurements
+# instead.
 _MEASUREMENT_ONLY_CHECKS: Final[frozenset[str]] = frozenset({"RN-MODULE-SIZE", "RN-QUIET-ZONE"})
 
 # The measurement keys a measurement-only check persists: the canvas, the measurement, the request.
@@ -233,7 +234,7 @@ def test_failed_check_set_equals_the_declared_expectation(
         "declared expectation SELF_CHECK_TARGETS['defective']", declared
     )
     assert observed == _EXPECTED_FAILING_CHECKS, _difference_message(
-        "nine identifiers AAP §0.4.2 names", _EXPECTED_FAILING_CHECKS
+        "nine declared identifiers", _EXPECTED_FAILING_CHECKS
     )
 
 
@@ -457,7 +458,7 @@ def test_defect_attribution_is_visible_in_the_evidence(
 
 def test_expectations_validate_against_the_live_registry() -> None:
     """The declared expectation must validate against the twenty-one registered checks."""
-    import qrcheck.checks  # noqa: F401 - importing the package registers the nine families
+    import qrcheck.checks  # importing the package registers the nine families
 
     validate_against_registry()
     validate_against_registry(REGISTRY)
@@ -468,7 +469,7 @@ def test_expectations_validate_against_the_live_registry() -> None:
     )
     registered = frozenset(REGISTRY)
     assert len(registered) == 21, (
-        f"the live registry holds {len(registered)} check(s), not the twenty-one AAP §0.3.4 "
+        f"the live registry holds {len(registered)} check(s), not the twenty-one the product "
         f"declares: {sorted(registered)}"
     )
     unregistered = sorted(SELF_CHECK_TARGETS["defective"] - registered)
@@ -541,7 +542,7 @@ def test_reference_and_defective_form_a_contrast_pair(
 def test_defects_table_declares_the_five_injections() -> None:
     """The target's own injection table must declare exactly the five defects and their catches."""
     assert len(DEFECTS) == 5, (
-        f"the target declares {len(DEFECTS)} injection(s), not the five of AAP §0.4.2: "
+        f"the target declares {len(DEFECTS)} injection(s), not the five this module expects: "
         f"{[getattr(defect, 'name', defect) for defect in DEFECTS]}"
     )
     assert all(isinstance(defect, Defect) for defect in DEFECTS), (
@@ -553,14 +554,14 @@ def test_defects_table_declares_the_five_injections() -> None:
         f"two injections share a name: {sorted(defect.name for defect in DEFECTS)}"
     )
     assert set(declared) == set(_DECLARED_PER_DEFECT), (
-        "the target's injections are not the five the plan names: missing "
+        "the target's injections are not the five this module declares: missing "
         f"{sorted(set(_DECLARED_PER_DEFECT) - set(declared))}, unexpected "
         f"{sorted(set(declared) - set(_DECLARED_PER_DEFECT))}"
     )
     for name in sorted(_DECLARED_PER_DEFECT):
         expected = _DECLARED_PER_DEFECT[name]
         assert declared[name] == expected, (
-            f"injection {name!r} declares {sorted(declared[name])}, but the plan attributes "
+            f"injection {name!r} declares {sorted(declared[name])}, but this module attributes "
             f"{sorted(expected)} to it: extra {sorted(declared[name] - expected)}, missing "
             f"{sorted(expected - declared[name])}"
         )
@@ -579,7 +580,7 @@ def test_defects_table_declares_the_five_injections() -> None:
         f"{sorted(SELF_CHECK_TARGETS['defective'])} as the expected failing set"
     )
     assert union == _EXPECTED_FAILING_CHECKS, (
-        f"the injections union to {sorted(union)}, not the nine AAP §0.4.2 names: "
+        f"the injections union to {sorted(union)}, not the nine of _EXPECTED_FAILING_CHECKS: "
         f"{sorted(_EXPECTED_FAILING_CHECKS)}"
     )
     assert expected_failing_ids() == union, (

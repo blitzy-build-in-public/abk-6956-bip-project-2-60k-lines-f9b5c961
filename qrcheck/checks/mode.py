@@ -1,9 +1,5 @@
 """Mode-family checks: ``MD-MODE-OPTIMAL`` and ``MD-CHARSET``.
 
-Plan item served: the check-family table of AAP §0.8.1 (``checks/mode.py`` owns ``MD-MODE-OPTIMAL``
-and ``MD-CHARSET``), that section's case-matrix rows of 60 and 74 cases, and the ``MD-CHARSET``
-coverage mapping of §0.8.2.
-
 Why mode optimality is proven through the version: neither pinned decoder reports an encoding mode
 -- zxing-cpp 2.2.0 exposes the error level and no segment metadata, OpenCV nothing beyond the
 payload and the corner quadrangle -- so a check claiming to observe the mode would report a guess,
@@ -17,17 +13,17 @@ records (all 12 ``boundary-numeric`` and all 12 ``boundary-alphanumeric``, in ``
 upper bound on the decoded version rather than equality with the mode minimum; the inline comment at
 :func:`execute_mode_optimal` states why.
 
-``MD-CHARSET``: 74 cases, one encode and one decode each -- the six coverages of AAP §0.8.2,
-resolved through :data:`CHARSET_COVERAGE_CLASSES`: ``ascii`` (``boundary-alphanumeric`` 12, ``otp``
-12), ``utf8-multibyte`` 24, ``emoji`` 12, ``right-to-left`` (``rtl``) 8, ``embedded-nul`` (``nul-
-byte``) 6, plus ``four-byte-code-points`` from the ``emoji`` and ``utf8-multibyte`` records whose
-code points reach U+10000 and above, which the predicate decides rather than the class. Each case
-asserts byte-exact preservation of the request.
+``MD-CHARSET``: 74 cases, one encode and one decode each -- the six coverages resolved through
+:data:`CHARSET_COVERAGE_CLASSES`: ``ascii`` (``boundary-alphanumeric`` 12, ``otp`` 12),
+``utf8-multibyte`` 24, ``emoji`` 12, ``right-to-left`` (``rtl``) 8, ``embedded-nul`` (``nul-byte``)
+6, plus ``four-byte-code-points`` from the ``emoji`` and ``utf8-multibyte`` records whose code
+points reach U+10000 and above, which the predicate decides rather than the class. Each case asserts
+byte-exact preservation of the request.
 
 Reasons emitted: ``decoder_disagreement`` from ``MD-CHARSET`` when the two decoders returned
-differing payloads, which it reports ahead of its byte comparison (AAP §0.3.2);
-``value_mismatch`` from both checks and ``sampling_failed`` from ``MD-MODE-OPTIMAL`` when no module
-grid could be recovered. Adapter errors are not classified here:
+differing payloads, which it reports ahead of its byte comparison; ``value_mismatch`` from both
+checks and ``sampling_failed`` from ``MD-MODE-OPTIMAL`` when no module grid could be recovered.
+Adapter errors are not classified here:
 both checks route every one through :func:`qrcheck.checks.support.case_status_for_error`, and
 ``TargetUnavailable``/``TargetTimeout`` are re-raised for the runner's target-loss policy, and a
 declared rejection or an unusable artefact becomes a failure with ``target_rejected`` or
@@ -73,8 +69,8 @@ MODE_OPTIMAL_CHECK: Final[str] = "MD-MODE-OPTIMAL"
 CHARSET_CHECK: Final[str] = "MD-CHARSET"
 
 # How many encode invocations each check makes in one full run over the default 240-record
-# corpus: one per case, because neither check ever re-asks the target for a symbol (AAP §0.4.3,
-# §0.5.6 -- a retry would register as the declared count plus one and fail the counting test).
+# corpus: one per case, because neither check ever re-asks the target for a symbol -- a retry
+# would register as the declared count plus one and fail the counting test.
 EXPECTED_ENCODES: Final[Mapping[str, int]] = MappingProxyType(
     {
         MODE_OPTIMAL_CHECK: 60,
@@ -82,20 +78,20 @@ EXPECTED_ENCODES: Final[Mapping[str, int]] = MappingProxyType(
     }
 )
 
-# The discriminating half of ``MD-MODE-OPTIMAL``'s case set (AAP §0.8.1): the two boundary
-# classes, whose numeric or alphanumeric minimum is strictly below their byte-mode minimum.
+# The discriminating half of ``MD-MODE-OPTIMAL``'s case set: the two boundary classes, whose
+# numeric or alphanumeric minimum is strictly below their byte-mode minimum.
 MODE_OPTIMAL_DISCRIMINATING_CLASSES: Final[tuple[str, ...]] = (
     "boundary-alphanumeric",
     "boundary-numeric",
 )
 
-# The size of ``MD-MODE-OPTIMAL``'s byte-mode sample (AAP §0.8.1 fixes the check at 60 cases:
-# 24 discriminating records plus these 36).  The sample is drawn by the declared rule in
+# The size of ``MD-MODE-OPTIMAL``'s byte-mode sample, which completes its 60 cases: 24
+# discriminating records plus these 36.  The sample is drawn by the declared rule in
 # :func:`mode_optimal_records` -- the first 36 records in ``id`` order outside both charsets.
 MODE_OPTIMAL_BYTE_SAMPLE_SIZE: Final[int] = 36
 
-# Which corpus classes witness which ``MD-CHARSET`` coverage (AAP §0.8.2).  The one
-# declaration of the mapping in the product, resolved to the class list below.
+# Which corpus classes witness which ``MD-CHARSET`` coverage: the one declaration of the mapping
+# in the product, resolved to the class list below.
 CHARSET_COVERAGE_CLASSES: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType(
     {
         "ascii": ("boundary-alphanumeric", "otp"),
@@ -133,9 +129,9 @@ _ALPHANUMERIC_CHARSET: Final[frozenset[str]] = frozenset(
 # ``four-byte-code-points`` coverage asserts (U+10000 and above).
 _FOUR_BYTE_CODE_POINT_MIN: Final[int] = 0x10000
 
-# The one consensus classification that is a finding in its own right (AAP §0.3.2): two decoder
-# payloads that differ.  ``qrcheck.decode.base`` publishes the vocabulary as a ``Literal``, so the
-# value is named here rather than spelled out at the comparison.
+# The one consensus classification that is a finding in its own right: two decoder payloads that
+# differ.  ``qrcheck.decode.base`` publishes the vocabulary as a ``Literal``, so the value is named
+# here rather than spelled out at the comparison.
 _DISAGREE: Final[str] = "disagree"
 
 
@@ -374,8 +370,8 @@ def execute_charset(ctx: RunContext, record: CorpusRecord) -> CaseResult:
     the record requested and the bytes the authoritative decoder returned: not the decoded text,
     which a decoder may re-render, and never the secondary decoder's answer, which corroborates but
     never decides. Two payloads the decoders reported that differ are reported first, as
-    ``decoder_disagreement`` (AAP §0.3.2), because the consensus classification describes what the
-    decoders did before any byte of the payload is compared. The evidence records both digests and
+    ``decoder_disagreement``, because the consensus classification describes what the decoders did
+    before any byte of the payload is compared. The evidence records both digests and
     the offset of the first divergent byte, so a truncation shows an offset equal to the decoded
     length. Returns ``passed`` on an exact match, ``failed`` with ``decoder_disagreement`` or
     ``value_mismatch`` otherwise.
@@ -414,9 +410,9 @@ def execute_charset(ctx: RunContext, record: CorpusRecord) -> CaseResult:
     }
     projection = request.as_dict()
     if decoded.agreement == _DISAGREE:
-        # Two payloads that differ are a finding in their own right, ahead of the byte comparison
-        # (AAP §0.3.2): the consensus classification describes what the decoders did, which is
-        # settled before any byte of the payload is compared. The result is persisted through the
+        # Two payloads that differ are a finding in their own right, ahead of the byte comparison:
+        # the consensus classification describes what the decoders did, which is settled before any
+        # byte of the payload is compared. The result is persisted through the
         # shared evidence call exactly as the mismatch path persists it, so the case still carries
         # symbol.png, request.json and a decoded.json holding both decoders' payloads verbatim.
         result = support.fail(

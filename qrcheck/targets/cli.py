@@ -28,19 +28,17 @@ rejection and a fabricated one would make them vacuous.
 from __future__ import annotations
 
 import base64
-import contextlib
 import json
-import os
 import re
 import shutil
 import subprocess
 import tempfile
-import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final, cast
 
+from qrcheck.capture import BoundedStreamCapture, open_capture_pair
 from qrcheck.config.models import RETURNS_KINDS, TEMPLATE_FIELDS, CLITarget, ReturnsKind
 from qrcheck.targets.base import (
     OUTPUT_FORMATS,
@@ -110,7 +108,7 @@ REJECTION_JSON_FIELD: Final[str] = "error"
 DIAGNOSTIC_TAIL_CHARS: Final[int] = 2000
 
 # The most this adapter keeps from either stream of the child it runs. A cli target is untrusted
-# (AAP §0.1.3: it "may return garbage, lie about metadata, hang or crash"), so a stream that passes
+# -- it may return garbage, lie about metadata, hang or crash -- so a stream that passes
 # this bound is a contract error rather than unbounded growth in the runner's memory. The number is
 # the 16 MiB the http adapter reads from one response, because no legitimate artefact -- a PNG or
 # an SVG of a Model 2 symbol -- approaches either.
@@ -148,125 +146,6 @@ class _Invocation:
     stdin_payload: bytes | None
     artefact_path: Path | None
     temp_dir: Path | None
-
-
-class _BoundedStreamCapture:
-    """Capture at most :data:`_MAX_CAPTURED_STREAM_BYTES` of one output stream of a child process.
-
-    One instance owns one ``os.pipe()`` and one daemon thread. ``subprocess.run`` is handed
-    :attr:`write_fd` as its ``stdout=`` or ``stderr=``, so the child writes straight into the pipe,
-    and the thread reads the other end until the child closes it, keeping at most the documented
-    bound. A stream that passes the bound sets :attr:`overflowed` and closes its read end, so the
-    child's next write fails instead of this process buffering output it will never use.
-
-    :meth:`finish` releases this process's ends of the pipe once the child has exited, and is safe
-    to call more than once, so every path -- success, timeout, spawn failure -- can call it without
-    knowing which one it is on.
-    """
-
-    def __init__(self, name: str) -> None:
-        """Create the pipe and start draining it.
-
-        Args:
-            name: ``"stdout"`` or ``"stderr"``, the stream this object holds, for diagnostics.
-
-        Raises:
-            OSError: The pipe itself could not be created.
-            RuntimeError: The drain thread could not be started.
-        """
-        self._name: str = name
-        self._buffer: bytearray = bytearray()
-        self._received: int = 0
-        self._overflowed: bool = False
-        self._read_fd: int = -1
-        self._write_fd: int = -1
-        self._read_fd, self._write_fd = os.pipe()
-        self._thread: threading.Thread = threading.Thread(
-            target=self._drain,
-            name=f"qrcheck-capture-{name}",
-            daemon=True,
-        )
-        try:
-            self._thread.start()
-        except RuntimeError:
-            self._close_read_fd()
-            self._close_write_fd()
-            raise
-
-    @property
-    def write_fd(self) -> int:
-        """Return the descriptor to hand ``subprocess.run`` as this stream's destination."""
-        return self._write_fd
-
-    @property
-    def name(self) -> str:
-        """Return the stream's name, ``"stdout"`` or ``"stderr"``."""
-        return self._name
-
-    @property
-    def bytes(self) -> bytes:
-        """Return the bytes captured from this stream, at most the documented bound of them."""
-        return bytes(self._buffer)
-
-    @property
-    def received(self) -> int:
-        """Return how many bytes arrived on this stream, the over-bound ones included."""
-        return self._received
-
-    @property
-    def overflowed(self) -> bool:
-        """Return whether this stream delivered more than the documented bound."""
-        return self._overflowed
-
-    def finish(self) -> None:
-        """Release this process's ends of the pipe once the child has exited.
-
-        The write end is closed first, so a drain thread still reading sees end-of-file and returns;
-        the thread is then joined for :data:`_DRAIN_JOIN_TIMEOUT_S`. The read end is closed only
-        once the thread has ended, because closing a descriptor another thread may still be reading
-        is not safe, and a thread still blocked there is left with its descriptor and its daemon
-        status. Idempotent: a second call finds the descriptors already closed.
-        """
-        self._close_write_fd()
-        self._thread.join(_DRAIN_JOIN_TIMEOUT_S)
-        if not self._thread.is_alive():
-            self._close_read_fd()
-
-    def _drain(self) -> None:
-        """Read this stream until the child closes it or the bound is passed."""
-        while True:
-            try:
-                chunk = os.read(self._read_fd, _READ_CHUNK_BYTES)
-            except OSError:
-                # A read end closed on the over-bound path, or a descriptor the kernel refused:
-                # either way nothing more can be read from this stream.
-                return
-            if not chunk:
-                return
-            self._received += len(chunk)
-            room = _MAX_CAPTURED_STREAM_BYTES - len(self._buffer)
-            if room > 0:
-                self._buffer += chunk[:room]
-            if self._received > _MAX_CAPTURED_STREAM_BYTES:
-                self._overflowed = True
-                self._close_read_fd()
-                return
-
-    def _close_read_fd(self) -> None:
-        """Close the read end once, if it is still open."""
-        read_fd, self._read_fd = self._read_fd, -1
-        if read_fd < 0:
-            return
-        with contextlib.suppress(OSError):
-            os.close(read_fd)
-
-    def _close_write_fd(self) -> None:
-        """Close this process's copy of the write end once, if it is still open."""
-        write_fd, self._write_fd = self._write_fd, -1
-        if write_fd < 0:
-            return
-        with contextlib.suppress(OSError):
-            os.close(write_fd)
 
 
 class CliAdapter:
@@ -350,9 +229,9 @@ class CliAdapter:
         The child is run as it always was -- one argv list, no shell, the configured ``timeout_s``,
         and ``env=None``, so it inherits this framework's environment and working directory, as
         ``docs/targets.md`` states -- but its stdout and stderr are the two bounded pipes of
-        :class:`_BoundedStreamCapture` rather than ``capture_output``, so no volume of output can
-        grow this process past :data:`_MAX_CAPTURED_STREAM_BYTES` however much of ``timeout_s`` is
-        left. Both pipes are released on every path, before any error is converted.
+        :func:`~qrcheck.capture.open_capture_pair` rather than ``capture_output``, so no volume of
+        output can grow this process past :data:`_MAX_CAPTURED_STREAM_BYTES` however much of
+        ``timeout_s`` is left. Both pipes are released on every path, before any error is converted.
 
         Args:
             invocation: The command line, stdin bytes and artefact path one ``generate`` call runs.
@@ -370,7 +249,17 @@ class CliAdapter:
                 makes its output unusable whatever else happened -- an over-bound stream outranks a
                 timeout.
         """
-        stdout_capture, stderr_capture = self._open_captures()
+        try:
+            stdout_capture, stderr_capture = open_capture_pair(
+                limit=_MAX_CAPTURED_STREAM_BYTES,
+                chunk_bytes=_READ_CHUNK_BYTES,
+                join_timeout_s=_DRAIN_JOIN_TIMEOUT_S,
+            )
+        except (OSError, RuntimeError) as exc:
+            raise TargetUnavailable(
+                f"target {self.name!r} could not be spawned: its output could not be captured "
+                f"({exc}); check targets.{self.name}.command"
+            ) from None
         started = time.perf_counter()
         try:
             try:
@@ -416,30 +305,7 @@ class CliAdapter:
             elapsed_ms,
         )
 
-    def _open_captures(self) -> tuple[_BoundedStreamCapture, _BoundedStreamCapture]:
-        """Return one bounded capture per output stream of the child about to be spawned.
-
-        Opening them is part of spawning: with nowhere to write, the child is not run at all, which
-        is the same trigger as any other spawn failure.
-
-        Raises:
-            TargetUnavailable: A pipe or a drain thread could not be created, so the target was not
-                run.
-        """
-        captures: list[_BoundedStreamCapture] = []
-        try:
-            captures.append(_BoundedStreamCapture("stdout"))
-            captures.append(_BoundedStreamCapture("stderr"))
-        except (OSError, RuntimeError) as exc:
-            for capture in captures:
-                capture.finish()
-            raise TargetUnavailable(
-                f"target {self.name!r} could not be spawned: its output could not be captured "
-                f"({exc}); check targets.{self.name}.command"
-            ) from None
-        return captures[0], captures[1]
-
-    def _raise_for_overflowed_stream(self, *captures: _BoundedStreamCapture) -> None:
+    def _raise_for_overflowed_stream(self, *captures: BoundedStreamCapture) -> None:
         """Refuse a child stream that passed the documented byte bound.
 
         Args:
@@ -449,7 +315,7 @@ class CliAdapter:
             TargetContractError: One stream delivered more than :data:`_MAX_CAPTURED_STREAM_BYTES`.
                 The message names the stream, the bound and how much arrived, and the first
                 :data:`~qrcheck.targets.base.HEX_PREFIX_LIMIT` bytes travel on ``body_prefix`` --
-                the same evidence shape a non-image body carries (AAP §0.6.6 row 8).
+                the same evidence shape a non-image body carries.
         """
         for capture in captures:
             if not capture.overflowed:

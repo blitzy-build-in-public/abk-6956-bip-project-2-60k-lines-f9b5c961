@@ -81,11 +81,9 @@ MD_CHARSET_CLASSES: tuple[str, ...] = (
 )
 
 # The length the ``truncated_payload`` defect cuts a longer payload back to. The corpus must hold
-# a ``MD-CHARSET`` record whose truncation to it keeps its Version at every level where that is
-# possible, or the defect is inert; ``capacity.truncation_keeps_version`` decides.
 # at least one ``MD-CHARSET`` record whose truncation to this many bytes does not move its Version
-# at every level where that is possible, or the defect is silently inert. Which levels those are
-# is decided by ``capacity.truncation_keeps_version``, never by a list here. The eight synthetic
+# at every level where that is possible, or the defect is silently inert; which levels those are is
+# decided by ``capacity.truncation_keeps_version``, never by a list here. The eight synthetic
 # ``SY-MATRIX-EQUIV`` payloads are 64 bytes or shorter, so it never reaches them.
 _TRUNCATION_BYTES: int = 64
 

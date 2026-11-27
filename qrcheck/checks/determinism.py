@@ -1,8 +1,8 @@
 """Determinism: one identical request, asked twice, must come back as one identical symbol.
 
-``DT-DETERMINISTIC`` is the product's only check of *reproducibility* (AAP §0.8.1, §0.4.5 "defects
-observable only indirectly"): a symbol may be valid, in range and decodable in each of two calls and
-still be a different symbol, so the defect is invisible unless a pair of calls is compared.
+``DT-DETERMINISTIC`` is the product's only check of *reproducibility*: a symbol may be valid, in
+range and decodable in each of two calls and still be a different symbol, so the defect is
+invisible unless a pair of calls is compared.
 
 Two invocations of the **identical** request must agree on all three of the artefact's image bytes
 (``symbol_sha256`` per call), the sampled module matrix (``matrix_sha256``) and the mask read out of
@@ -20,7 +20,7 @@ propagate unchanged, because the target-loss policy belongs to :mod:`qrcheck.run
 
 Exactly two invocations per case, never a third: six declared payloads asked for twice are **12
 encodes and 12 decodes** per full run, which :data:`EXPECTED_ENCODES` declares and
-``tests/unit/test_checks_negative.py`` asserts against a counting stub (AAP §0.4.3, §0.5.6).
+``tests/unit/test_checks_negative.py`` asserts against a counting stub.
 """
 
 from __future__ import annotations
@@ -62,9 +62,9 @@ __all__ = [
 # path and JUnit testcase name this file produces.
 CHECK_ID: Final[str] = "DT-DETERMINISTIC"
 
-# The case-identifier prefix AAP §0.3.4 fixes for a case the framework constructs rather
-# than draws from the corpus. ``checks/support.py`` owns the rule; this module only states
-# the identifier it builds with it.
+# The case-identifier prefix for a case the framework constructs rather than draws from the
+# corpus. ``checks/support.py`` owns the rule; this module only states the identifier it builds
+# with it.
 _SYNTHETIC_PREFIX: Final[str] = "synthetic:"
 
 # The six payloads, one per case, in the order the case identifiers number them. Declared
@@ -86,9 +86,9 @@ DETERMINISM_PAYLOADS: Final[tuple[tuple[str, bytes], ...]] = (
 # retry (see the module docstring).
 _INVOCATIONS_PER_CASE: Final[int] = 2
 
-# The declared adapter-invocation count of this check, in the form AAP §0.4.3 fixes for the
-# case matrix and ``tests/unit/test_checks_negative.py`` asserts with a counting stub:
-# one entry, twelve calls, derived from the payload table above so the two cannot disagree.
+# The declared adapter-invocation count of this check, published as ``EXPECTED_ENCODES`` so
+# ``tests/unit/test_checks_negative.py`` can assert it with a counting stub: one entry, twelve
+# calls, derived from the payload table above so the two cannot disagree.
 EXPECTED_ENCODES: Final[Mapping[str, int]] = MappingProxyType(
     {CHECK_ID: _INVOCATIONS_PER_CASE * len(DETERMINISM_PAYLOADS)}
 )
@@ -348,7 +348,7 @@ def _elapsed_ms(started: float) -> float:
     """Return the milliseconds elapsed since `started`, as a recorded value only.
 
     A duration is recorded and never asserted -- no comparison, no threshold and no report ordering
-    reads it (AAP §0.5.5).
+    reads it.
     """
     return (time.perf_counter() - started) * 1000.0
 

@@ -7,13 +7,12 @@ framework's single image boundary -- the one place Pillow is imported and the on
 takes into a report.
 
 The two halves are re-exported differently for that reason. :mod:`qrcheck.report` defaults the
-evidence root it hands the HTML writer without importing this package at all (AAP §0.8.1, §0.9.1),
-and Python executes this module before any submodule, so an eager ``to_data_uri`` import here would
-pull Pillow into every ``import qrcheck.evidence.naming``. So every public name of ``naming`` is
-re-exported eagerly and every public name of ``mux`` lazily through :pep:`562`
-``__getattr__``/``__dir__``. Nothing else happens here: no directory is created, no file or
-configuration is read, no image library imported, nothing registered and no version literal defined,
-because a re-export is a name binding.
+evidence root it hands the HTML writer without importing this package at all, and Python executes
+this module before any submodule, so an eager ``to_data_uri`` import here would pull Pillow into
+every ``import qrcheck.evidence.naming``. So every public name of ``naming`` is re-exported eagerly
+and every public name of ``mux`` lazily through :pep:`562` ``__getattr__``/``__dir__``. Nothing
+else happens here: no directory is created, no file or configuration is read, no image library
+imported, nothing registered and no version literal defined, because a re-export is a name binding.
 """
 
 import importlib
@@ -60,8 +59,8 @@ _MUX_EXPORTS: frozenset[str] = frozenset(
     }
 )
 
-# The package's public surface, sorted so ``dir()`` and ``import *`` are stable across runs (AAP
-# §0.5.3). ``import *`` resolves the lazy half through ``__getattr__``.
+# The package's public surface, sorted so ``dir()`` and ``import *`` are stable across runs.
+# ``import *`` resolves the lazy half through ``__getattr__``.
 __all__: list[str] = sorted(
     [
         "DAMAGE_ARTIFACT_TEMPLATE",

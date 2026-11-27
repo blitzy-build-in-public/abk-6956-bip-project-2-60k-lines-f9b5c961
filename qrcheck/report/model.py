@@ -18,10 +18,10 @@ deliberately absent from every ``as_dict`` projection.
 The one value the model rewrites is :data:`TRACEBACK_KEY`, the text an errored case
 carries: its absolute frame paths are folded into a portable form here, once, so no
 writer, evidence store or report can publish the clone or the machine a run happened
-in (AAP §0.5.5). The anchor a frame path is folded against is this module's own
-location, taken from ``__file__`` lexically and never resolved, so it is the one input
-here that depends on where the package sits - and it is used only to take that location
-back out of the text.
+in. The anchor a frame path is folded against is this module's own location, taken
+from ``__file__`` lexically and never resolved, so it is the one input here that depends
+on where the package sits - and it is used only to take that location back out of the
+text.
 """
 
 import datetime
@@ -51,7 +51,7 @@ FAILURE_ID_MAX: int = 64
 # The ``decoded`` key an errored result carries its traceback under: a check that raises
 # puts ``traceback.format_exc()`` there, and the JUnit writer renders that text as the
 # error body. The key is named once, here, because the model is what normalises the field
-# and a second spelling of it would let an artefact miss the normalisation (AAP §0.8.1).
+# and a second spelling of it would let an artefact miss the normalisation.
 TRACEBACK_KEY: Final[str] = "traceback"
 
 # Anything outside this set becomes a single "_", so a hostile case_id cannot
@@ -79,7 +79,7 @@ _PROJECT_ROOT: Final[str] = os.path.dirname(os.path.dirname(os.path.dirname(__fi
 
 # The fixed marker an absolute path outside this project is collapsed behind: a traceback
 # still names the module and the line that failed, without naming the clone or the machine
-# it ran on (AAP §0.5.5: no absolute path may reach an artefact).
+# it ran on.
 _PORTABLE_PATH_MARKER: Final[str] = "..."
 
 # One absolute path token inside free text: a leading "/" followed by at least two
@@ -129,11 +129,11 @@ class Reason(enum.StrEnum):
     ``contract_error``, ``value_mismatch``, ``sampling_failed`` and
     ``capacity_violation`` - each spelled exactly as it writes them, in that order.
     The thirteenth, ``INTERNAL_ERROR``, is one accepted addition, and the
-    specification's own internal-fault state is why it exists (AAP §0.6.6 row 11):
-    an exception raised by a check or by the framework itself is contained as an
-    ``error`` result carrying its traceback while the run continues, every
-    non-``passed`` result must carry a reason, and none of the twelve describes a
-    fault of the framework rather than a verdict on the target.
+    specification's own internal-fault state is why it exists: an exception raised by a
+    check or by the framework itself is contained as an ``error`` result carrying its
+    traceback while the run continues, every non-``passed`` result must carry a reason,
+    and none of the twelve describes a fault of the framework rather than a verdict on
+    the target.
 
     Adding a member is additive and safe for consumers that compare against the
     string value; renaming one changes the public surface that ``summary.json``,
@@ -255,8 +255,8 @@ def failure_id(check_id: str, case_id: str, reason: Reason | str | None) -> str:
     character except the constant ``:`` separating the family from the name, so
     distinct case identifiers always derive distinct identifiers. The digest suffix
     is therefore reserved for the :data:`FAILURE_ID_MAX` truncation bound and is not
-    added for sanitation, because the derivation is fixed by AAP §0.3.4 and is a
-    stable public surface (§0.1.3).
+    added for sanitation, because the derivation this function defines is a stable
+    public surface that the evidence store and ``qrcheck.evidence.naming`` derive from.
 
     Args:
         check_id: The stable check identifier, such as ``RT-ROUNDTRIP``.
@@ -299,8 +299,8 @@ class CaseResult:
     One value is not stored as it was handed in: when ``decoded`` carries
     :data:`TRACEBACK_KEY` as a string, the absolute paths inside that text are rewritten
     into a portable form, because a frame's ``co_filename`` is absolute and no artefact
-    may record the directory a run happened in (AAP §0.5.5). Every other key of
-    ``decoded``, and all of ``request`` and ``expected``, are stored untouched.
+    may record the directory a run happened in. Every other key of ``decoded``, and all
+    of ``request`` and ``expected``, are stored untouched.
 
     The instance is frozen: derive a variation with :func:`dataclasses.replace`
     rather than mutating one in place.
@@ -405,8 +405,8 @@ class CaseResult:
         not JSON-serialisable must fail loudly in the writer rather than be silently
         stringified here, where the defect would be invisible. The one exception is the
         text field :meth:`__post_init__` normalised - ``decoded[TRACEBACK_KEY]`` comes
-        back with its absolute paths already rewritten, so no artefact can carry one
-        (AAP §0.5.5), while every other value is untouched.
+        back with its absolute paths already rewritten, so no artefact can carry one,
+        while every other value is untouched.
         """
         return {
             "check_id": self.check_id,
@@ -601,10 +601,10 @@ def _portable_decoded(decoded: Mapping[str, Any]) -> Mapping[str, Any]:
 
     Only :data:`TRACEBACK_KEY` is considered, and only when it holds a string: that text
     is the single field an absolute filesystem path reaches an artefact through, because
-    every frame of a Python traceback names its source file absolutely (AAP §0.5.5). The
-    mapping itself is returned - the same object - when there is nothing to rewrite, so an
-    error result without a traceback, an empty mapping and an already-portable traceback
-    all keep exactly what the caller supplied.
+    every frame of a Python traceback names its source file absolutely. The mapping itself
+    is returned - the same object - when there is nothing to rewrite, so an error result
+    without a traceback, an empty mapping and an already-portable traceback all keep
+    exactly what the caller supplied.
 
     Args:
         decoded: The decoded-or-error evidence mapping a caller supplied.
@@ -634,8 +634,8 @@ def _portable_traceback_text(text: str) -> str:
     :data:`_PORTABLE_PATH_MARKER`, which still names the module that failed
     (``/usr/lib/python3.11/json/decoder.py`` -> ``.../json/decoder.py``). The result is
     the same on every clone and every machine, so ``decoded.json`` stays byte-identical
-    for the same case and seed (AAP §0.5.4), and the rewrite is idempotent: a second pass
-    finds no token left to rewrite.
+    for the same case and seed, and the rewrite is idempotent: a second pass finds no
+    token left to rewrite.
     """
     return _PORTABLE_PATH_TOKEN.sub(_portable_token, text)
 

@@ -2,14 +2,13 @@
 
 ``qrcheck/targets/base.py`` declares exactly five errors, and the port's contract is that an
 adapter raises nothing else: every ``except`` inside ``qrcheck/targets/`` converts a library
-exception into one of them (AAP §0.3.4 "Error taxonomy", §0.14.1's conversion list). Each trigger
-is exercised through the **real** adapter code path, one test per trigger: a missing module or
-attribute, an absent executable, a refused loopback port and an unsupported protocol are
-``TargetUnavailable``; the configured ``timeout_s`` quoted in the message is ``TargetTimeout``,
-while a connect timeout is ``TargetUnavailable``; a declared rejection keeps the target's text
-byte for byte in ``TargetRejected``; an empty body, undecodable base64, bytes that are not an
-image, a missing ``image_field`` and a non-zero exit that declared no rejection are
-``TargetContractError``; and ``TargetUnsupported`` is raised *before any I/O*.
+exception into one of them. Each trigger is exercised through the **real** adapter code path, one
+test per trigger: a missing module or attribute, an absent executable, a refused loopback port and
+an unsupported protocol are ``TargetUnavailable``; the configured ``timeout_s`` quoted in the
+message is ``TargetTimeout``, while a connect timeout is ``TargetUnavailable``; a declared
+rejection keeps the target's text byte for byte in ``TargetRejected``; an empty body, undecodable
+base64, bytes that are not an image, a missing ``image_field`` and a non-zero exit that declared
+no rejection are ``TargetContractError``; and ``TargetUnsupported`` is raised *before any I/O*.
 
 Two distinctions the module exists to hold: ``TargetRejected`` versus ``TargetContractError``
 decides whether ``IV-*`` passes, so misclassifying one as the other is a report defect and not
@@ -89,9 +88,9 @@ _PROBE_CONTRAST_FLOOR: Final[float] = 21.0
 #: ``127.0.0.1``/``localhost``/``::1`` and nothing here dials anything else.
 _LOOPBACK_HOST: Final[str] = "127.0.0.1"
 
-#: The pinned version the over-capacity probe encodes at (AAP §0.8.1's ``IV-OVERCAPACITY``
-#: request uses the same one). A version, not a threshold: it is a coordinate in the
-#: table the capacity figure is read from.
+#: The pinned version the over-capacity probe encodes at (the ``IV-OVERCAPACITY`` request pins the
+#: same one). A version, not a threshold: it is a coordinate in the table the capacity figure is
+#: read from.
 _PINNED_VERSION: Final[int] = 10
 
 #: The largest Model 2 version (ISO/IEC 18004 §7.1), used for the unpinned over-capacity
@@ -106,7 +105,7 @@ _NON_IMAGE_BODY: Final[bytes] = bytes(range(256)) * 2
 #: A body short enough that its hex form is shorter than the prefix limit's.
 _SHORT_BODY: Final[bytes] = b"not an image"
 
-#: The five declared errors, in the order AAP §0.3.4 tabulates them.
+#: The five declared errors, in the order ``qrcheck/targets/base.py`` declares them.
 _ERROR_TYPES: Final[tuple[type[TargetError], ...]] = (
     TargetUnavailable,
     TargetTimeout,
@@ -306,7 +305,7 @@ def _snapshot(root: Path) -> tuple[str, ...]:
 
 
 # TargetUnavailable -- "the process cannot be spawned, the connection is refused,
-# the import path is missing" (AAP §0.3.4)
+# the import path is missing"
 
 
 def test_library_adapter_missing_module_is_unavailable() -> None:
@@ -460,7 +459,7 @@ def test_cli_adapter_capture_pipe_failure_is_unavailable(
     def failing_pipe() -> tuple[int, int]:
         raise OSError(errno.EMFILE, "Too many open files")
 
-    monkeypatch.setattr(cli_module.os, "pipe", failing_pipe)
+    monkeypatch.setattr(os, "pipe", failing_pipe)
     invocations = _patch_spawn(
         monkeypatch,
         AssertionError("the adapter spawned a process it had no capture pipe for"),
@@ -526,7 +525,7 @@ def test_http_adapter_unsupported_protocol_is_unavailable(
     )
 
 
-# TargetTimeout -- "no response within targets.<name>.timeout_s" (AAP §0.3.4)
+# TargetTimeout -- "no response within targets.<name>.timeout_s"
 
 
 def test_cli_adapter_timeout_is_target_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -598,7 +597,7 @@ def test_http_adapter_connect_timeout_is_unavailable_not_a_timeout(
 
 
 # A framework fault is not a target verdict -- a ``KeyError`` or ``IndexError`` raised by
-# framework code reaches the runner as itself (AAP §0.3.4 "Error taxonomy", §0.6.6 row 11)
+# framework code reaches the runner as itself
 
 
 def test_http_adapter_framework_index_error_surfaces_unwrapped(
@@ -737,7 +736,7 @@ def test_reference_adapter_declared_rejection_is_target_rejected(
 
 
 
-# TargetContractError -- "response present but unusable" (AAP §0.3.4)
+# TargetContractError -- "response present but unusable"
 
 
 def test_http_adapter_error_status_is_a_contract_error_not_a_rejection(
@@ -1235,11 +1234,10 @@ def test_reference_adapter_below_floor_contrast_is_rejected(
 
 
 # The closed vocabulary, held mechanically over every `except` in the adapter layer
-#
-# AAP §0.1.2 makes this the second of the two AST scans that hold the adapter MUSTs: §0.3.4 and
-# §0.14.1 say that every `except` under qrcheck/targets/ converts a library exception into one of
-# the five declared errors rather than re-raising it raw. The trigger tests above prove the paths
-# they drive; this scan proves the rule, so a handler that no trigger reaches cannot escape it.
+# This is the second of the two AST scans that hold the adapter MUSTs: every `except` under
+# qrcheck/targets/ converts a library exception into one of the five declared errors rather than
+# re-raising it raw. The trigger tests above prove the paths they drive; this scan proves the rule,
+# so a handler that no trigger reaches cannot escape it.
 
 #: The fewest handlers the scan must find before its silence means anything. The tree holds 44, so
 #: a floor below that tolerates a handler moving between modules while still failing a scan that
@@ -1247,10 +1245,12 @@ def test_reference_adapter_below_floor_contrast_is_rejected(
 #: parses.
 _MINIMUM_HANDLERS: Final[int] = 40
 
-#: The modules that must each hold at least one handler: the port and the five adapter modules. A
+#: The modules that must each hold at least one handler: the port, the five adapter modules and the
+#: shared capture module, whose two handlers are the ones the adapters' streams are read through. A
 #: closed-vocabulary rule that found no handler in one of them would be a rule about nothing.
 _HANDLER_MODULES: Final[tuple[str, ...]] = (
     "base.py",
+    "capture.py",
     "cli.py",
     "http.py",
     "library.py",
@@ -1293,26 +1293,27 @@ class _Exemption(NamedTuple):
     where it can also show the exception leaving it is already classified. Two proofs qualify: the
     guarded block can raise only names the module may raise (``reached`` and ``raised`` record the
     walk :func:`_raise_names_reachable_from` performs over it), or the caught type is converted to a
-    declared error by another handler of the same module (``converted_by`` names that handler and
-    the error it raises). Every entry carries at least one, and the test asserts the proof rather
-    than reading the reason and trusting it.
+    declared error by a handler of the module ``converted_by`` names, that field recording the
+    module, the handler and the error it raises. Every entry carries at least one, and the test
+    asserts the proof rather than reading the reason and trusting it.
     """
 
     reason: str
     caught: tuple[str, ...]
     reached: tuple[str, ...] = ()
     raised: tuple[str, ...] = ()
-    converted_by: tuple[str, str] | None = None
+    converted_by: tuple[str, str, str] | None = None
 
 
 #: The handlers in the tree that re-raise exactly what they caught, keyed by ``(module file name,
 #: enclosing function, the types caught)`` -- the caught types are part of the key because one
 #: function may hold several handlers -- each with the reason and the proof that nothing
 #: unconverted escapes. ``_build_invocation`` deletes the temporary directory it created moments
-#: earlier and re-raises; ``_BoundedStreamCapture.__init__`` closes the two pipe descriptors a
-#: failed thread start would leak and re-raises the ``RuntimeError`` its caller ``_open_captures``
-#: converts into ``TargetUnavailable``. The table is checked in both directions: an entry that
-#: matches no handler fails, and so does a bare re-raise with no entry.
+#: earlier and re-raises; the two handlers of the ``capture.py`` module both spawn paths share --
+#: ``BoundedStreamCapture.__init__`` closes the descriptors a failed thread start would leak, and
+#: ``open_capture_pair`` releases the capture it already opened -- re-raise for their caller, which
+#: classifies them into its layer's error. The table is checked in both directions: an entry
+#: that matches no handler fails, and so does a bare re-raise with no entry.
 _CLEANUP_EXEMPTIONS: Final[Mapping[tuple[str, str, tuple[str, ...]], _Exemption]] = (
     MappingProxyType(
         {
@@ -1325,13 +1326,23 @@ _CLEANUP_EXEMPTIONS: Final[Mapping[tuple[str, str, tuple[str, ...]], _Exemption]
                 reached=("_render", "_token_value", "_payload_text"),
                 raised=("TargetContractError", "ValueError"),
             ),
-            ("cli.py", "_BoundedStreamCapture.__init__", ("RuntimeError",)): _Exemption(
+            ("capture.py", "BoundedStreamCapture.__init__", ("RuntimeError",)): _Exemption(
                 reason=(
                     "catches RuntimeError only to close the pipe descriptors a failed thread "
                     "start would leak, then re-raises it for its caller to convert"
                 ),
                 caught=("RuntimeError",),
-                converted_by=("CliAdapter._open_captures", "TargetUnavailable"),
+                converted_by=("cli.py", "CliAdapter._run", "TargetUnavailable"),
+            ),
+            ("capture.py", "open_capture_pair", ("OSError", "RuntimeError")): _Exemption(
+                reason=(
+                    "catches a pipe or drain-thread failure only to release the capture it had "
+                    "already opened, then re-raises it to the spawn path that classifies it: the "
+                    "cli adapter converts both types into TargetUnavailable, and the rasterizer "
+                    "into the RuntimeError the runner records as a framework error"
+                ),
+                caught=("OSError", "RuntimeError"),
+                converted_by=("cli.py", "CliAdapter._run", "TargetUnavailable"),
             ),
         }
     )
@@ -1351,7 +1362,7 @@ _RECOVERING_HANDLERS: Final[Mapping[tuple[str, str], str]] = MappingProxyType(
             "returns None: a line that is not a JSON object is not a declared rejection, so the "
             "next spelling is tried"
         ),
-        ("cli.py", "_BoundedStreamCapture._drain"): (
+        ("capture.py", "BoundedStreamCapture._drain"): (
             "returns: the read end was closed or the child closed it, so nothing more can be read "
             "from that stream and the capture is simply finished"
         ),
@@ -1693,16 +1704,17 @@ def _called_names(statements: Iterable[ast.stmt]) -> Iterator[str]:
 
 @lru_cache(maxsize=None)
 def _module_source(module: str) -> str:
-    """Return one module's text, read from the adapter package this test imports."""
+    """Return one module's text, from the adapter package or the product package above it."""
     directory = Path(targets_package.__file__).parent
-    return (directory / module).read_text(encoding="utf-8")
+    path = directory.parent / module if module == "capture.py" else directory / module
+    return path.read_text(encoding="utf-8")
 
 
 @lru_cache(maxsize=None)
 def _package_scan() -> _Scan:
     """Parse every module of the adapter package and judge every handler in it."""
     directory = Path(targets_package.__file__).parent
-    modules = tuple(sorted(path.name for path in directory.glob("*.py")))
+    modules = tuple(sorted([path.name for path in directory.glob("*.py")] + ["capture.py"]))
     handlers: list[_Handler] = []
     violations: list[_Violation] = []
     handlers_by_module: dict[str, int] = {}
@@ -1776,7 +1788,7 @@ def test_every_handler_in_the_adapter_layer_converts_to_a_declared_error() -> No
     """No ``except`` in ``qrcheck/targets/`` lets a library exception out unwrapped: each one
     either names one of the five declared errors in its ``raise`` or passes an already-declared
     error on. A new ``except ImportError: raise`` inside any adapter breaks this, which is what
-    makes AAP §0.3.4's rule a test rather than a convention the trigger tests happen to cover."""
+    makes the conversion rule a test rather than a convention the trigger tests happen to cover."""
     scan = _package_scan()
 
     assert scan.violations == (), (
@@ -1798,6 +1810,7 @@ def test_the_scan_discovers_every_module_of_the_adapter_package() -> None:
     planned = {
         "__init__.py",
         "base.py",
+        "capture.py",
         "cli.py",
         "defective.py",
         "http.py",
@@ -1805,11 +1818,13 @@ def test_the_scan_discovers_every_module_of_the_adapter_package() -> None:
         "reference.py",
     }
 
-    # The scan covers every module the package declares, and the seven that exist today are among
-    # them. A superset on the named set, never equality: AAP §0.3.4's extension model adds an
-    # adapter kind by creating one module under ``qrcheck/targets/``, and that module must be
-    # scanned rather than fail this test for a reason no defect explains.
-    declared = {path.name for path in Path(targets_package.__file__).parent.glob("*.py")}
+    # The scan covers every module the package declares and the one shared capture module above
+    # it, and the eight that exist today are among them. A superset on the named set, never
+    # equality: a new adapter kind is added by creating one module under ``qrcheck/targets/``,
+    # and that module must be scanned rather than fail this test for a reason no defect
+    # explains.
+    directory = Path(targets_package.__file__).parent
+    declared = {path.name for path in directory.glob("*.py")} | {"capture.py"}
     assert set(scan.modules) == declared, (
         f"the scan must parse every module the package declares; it read {scan.modules} and the "
         f"package holds {sorted(declared)}"
@@ -1899,19 +1914,19 @@ def test_an_exempt_cleanup_handler_cannot_leak_an_unconverted_exception(
             f"nothing about them: it reached {enclosed.functions}"
         )
     if exemption.converted_by is not None:
-        converter, error = exemption.converted_by
+        module, converter, error = exemption.converted_by
         assert error in _DECLARED_ERROR_NAMES, (
             f"{converter} must convert {exemption.caught} to a declared error; {error} is not one"
         )
         assert [
             handler
             for handler in scan.handlers
-            if handler.key == (exempt.module, converter)
+            if handler.key == (module, converter)
             and set(handler.caught) & set(exemption.caught)
             and error in handler.raised
         ], (
-            f"{exempt.qualname} re-raises {exemption.caught} to its caller, so {converter} must "
-            f"convert that type to {error}: no handler there does"
+            f"{exempt.qualname} re-raises {exemption.caught} to its caller, so {module}'s "
+            f"{converter} must convert that type to {error}: no handler there does"
         )
     assert exemption.reached or exemption.converted_by is not None, (
         f"{key[1]} must be sound by the reachable-raise walk or by a converting caller, and its "
@@ -2038,9 +2053,9 @@ def test_a_bare_raise_may_only_pass_on_what_its_own_module_may_raise(
 ) -> None:
     """A bare ``raise`` is judged against the vocabulary of the module it stands in, never against a
     name admitted everywhere. ``reference.py`` declares no contract errors, so a reference handler
-    that caught segno's ``ValueError`` and re-raised it raw lets a library exception out: AAP
-    §0.14.1's conversion to ``TargetRejected`` is the only thing that makes that name legitimate
-    there, which is why refactoring it to a bare ``raise`` must fail. ``http.py``, which refuses
+    that caught segno's ``ValueError`` and re-raised it raw lets a library exception out: converting
+    it to ``TargetRejected`` is the only thing that makes that name legitimate there, which is why
+    refactoring it to a bare ``raise`` must fail. ``http.py``, which refuses
     its own unparseable url with a ``ValueError`` and reports a bad configuration with
     ``ConfigError``, may pass both on unchanged, and the five declared errors plus ``TargetError``
     pass on in every module."""
@@ -2136,7 +2151,7 @@ def test_reference_adapter_rejects_at_the_ratio_the_product_measures(
     assert str(raised.value) == (
         f"contrast ratio {measured:.1f} is below the declared floor {just_above:.1f}"
     ), (
-        "the rejection message is public API (AAP §0.8.1, the IV-BAD-OPTION (d) row): "
+        "the rejection message reaches decoded.rejection verbatim, so it is public API: "
         f"{str(raised.value)!r}"
     )
 

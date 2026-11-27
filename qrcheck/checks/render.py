@@ -42,12 +42,12 @@ expands an internal entity as it reads (CWE-776) and drops a processing instruct
 resolving it, and one whose ``href``, CSS ``url(...)`` or ``@import`` names anything but a
 same-document ``#fragment`` -- or that spells such a reference with a CSS escape, the one spelling
 a lexical scan cannot see -- is refused before any rasterizer runs, because the tool would
-otherwise fetch a host this framework never chose or read a local file (AAP NFR-2). All of those
+otherwise fetch a host this framework never chose or read a local file. All of those
 refusals belong to :func:`_parse_svg`, the one parse path, so no caller can hand a document to a
 rasterizer without them. A declared canvas above :data:`_MAX_RASTER_SIDE_PX` per side is then
 priced from that parse and reported as ``value_mismatch``, because what an artefact says about
 itself is a verdict about the target; only a rasterizer or host fault stays an ``error`` result
-(AAP §0.3.4's exit codes), and each of the rasterizer's streams is captured under
+, and each of the rasterizer's streams is captured under
 :data:`_MAX_CAPTURED_RASTER_BYTES` with only a short tail of it carried into a diagnostic, so
 neither a flood nor one long message escapes it.
 
@@ -72,7 +72,6 @@ import re
 import shutil
 import subprocess
 import tempfile
-import threading
 import time
 import xml.etree.ElementTree as ElementTree
 from collections.abc import Callable, Iterator, Mapping
@@ -81,6 +80,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
+from qrcheck.capture import BoundedStreamCapture, open_capture_pair
 from qrcheck.checks import support
 from qrcheck.config.models import (
     DEFAULT_DECODE_IMAGE_PX,
@@ -145,14 +145,14 @@ RN_LOGO: Final[str] = "RN-LOGO"
 # JUnit ``classname`` suffix (``classname="qrcheck.render"``).
 _FAMILY: Final[str] = "render"
 
-# The two case-identifier prefixes AAP §0.3.4 fixes: ``corpus:`` for a corpus-driven case,
+# The two case-identifier prefixes a rendered case carries: ``corpus:`` for a corpus-driven case,
 # ``synthetic:`` for a constructed one.  ``failure_id`` embeds both in an evidence path.
 _CORPUS_CASE_PREFIX: Final[str] = "corpus:"
 _SYNTHETIC_CASE_PREFIX: Final[str] = "synthetic:"
 
-# AAP §0.3.4 and §0.7.2 fix the discovery order: importable ``cairosvg`` first (never a hard
-# dependency), then the four command-line rasterizers on ``PATH``.  ``doctor`` and ``RN-SVG``
-# report the sequence they attempted, so reordering it changes a report.
+# The discovery order: importable ``cairosvg`` first (never a hard dependency), then the four
+# command-line rasterizers on ``PATH``.  ``doctor`` and ``RN-SVG`` report the sequence they
+# attempted, so reordering it changes a report.
 SVG_RASTERIZER_AUTO_ORDER: Final[tuple[str, ...]] = (
     "cairosvg",
     "rsvg-convert",
@@ -161,8 +161,9 @@ SVG_RASTERIZER_AUTO_ORDER: Final[tuple[str, ...]] = (
     "convert",
 )
 
-# The ceiling on one rasterizer invocation.  AAP §0.3.4 gives no key for it, so it is a backstop
-# against a hung rasterizer rather than a performance budget (that is ``[checks.performance]``).
+# The ceiling on one rasterizer invocation.  The configuration sets no timeout for it, so it is a
+# backstop against a hung rasterizer rather than a performance budget (that is
+# ``[checks.performance]``).
 RASTERIZER_TIMEOUT_S: Final[float] = 60.0
 
 # The most this module keeps from either stream of the rasterizer it runs: the cli adapter's bound
@@ -188,16 +189,16 @@ _RASTERIZER_READ_CHUNK_BYTES: Final[int] = 64 * 1024
 _RASTERIZER_DRAIN_JOIN_TIMEOUT_S: Final[float] = 5.0
 
 # The largest canvas a rasterizer is asked to render, per side, in pixels: the ceiling the
-# decode pipeline applies, from ``[checks.performance] decode_image_px`` (AAP §0.6.2).  A
-# target's SVG is untrusted and ``rsvg-convert`` allocates the canvas it is told to draw.
+# decode pipeline applies, from ``[checks.performance] decode_image_px``.  A target's SVG is
+# untrusted and ``rsvg-convert`` allocates the canvas it is told to draw.
 _MAX_RASTER_SIDE_PX: Final[int] = 8 * DEFAULT_DECODE_IMAGE_PX
 
 # The largest raster artefact this module measures, per side, in pixels: the same per-side ceiling
 # :mod:`qrcheck.decode.consensus` applies, derived the same way from the one configuration default
-# (``[checks.performance] decode_image_px``, AAP §0.6.2) because that module owns the pixel
-# ceiling for the decode path.  A target's PNG is the same untrusted bytes whether it is decoded or
-# measured, so it is priced from the image header and refused before any pixel is allocated.  The
-# two values are equal by construction, and neither is written as a literal.
+# (``[checks.performance] decode_image_px``) because that module owns the pixel ceiling for the
+# decode path.  A target's PNG is the same untrusted bytes whether it is decoded or measured, so it
+# is priced from the image header and refused before any pixel is allocated.  The two values are
+# equal by construction, and neither is written as a literal.
 _MAX_ARTEFACT_SIDE_PX: Final[int] = 8 * DEFAULT_DECODE_IMAGE_PX
 
 # The largest byte length of a target-supplied SVG this module will parse.  A target artefact is
@@ -248,9 +249,8 @@ _UNIT_TO_PX: Final[Mapping[str, float]] = {
     "em": 16.0,
 }
 
-# The module-edge tolerance ``RN-MODULE-SIZE`` allows, in pixels (AAP §0.6.2): a measurement
-# rounded to whole pixels can be off by one on a conforming render, and two would hide a real
-# geometry defect.
+# The module-edge tolerance ``RN-MODULE-SIZE`` allows, in pixels: a measurement rounded to whole
+# pixels can be off by one on a conforming render, and two would hide a real geometry defect.
 MODULE_SIZE_TOLERANCE_PX: Final[float] = 1.0
 
 # A quarter of a module of slack on the measured quiet zone: the margin is measured in whole
@@ -258,8 +258,8 @@ MODULE_SIZE_TOLERANCE_PX: Final[float] = 1.0
 # under four.  A quarter cannot hide a missing module.
 QUIET_ZONE_TOLERANCE_MODULES: Final[float] = 0.25
 
-# The fixed samples AAP §0.8.1 fixes for this family: the first twelve corpus records in ``id``
-# order.  A sample size, not a threshold.
+# The fixed samples this family takes: the first twelve corpus records in ``id`` order.  A sample
+# size, not a threshold.
 _SAMPLE_RECORDS: Final[int] = 12
 
 # The geometry each corpus-driven check cycles over its sample, so a target that ignores the
@@ -274,8 +274,7 @@ _PINNED_QUIET_ZONE_MODULES: Final[int] = 4
 
 # The quiet zone ``RN-SVG`` requests: none.  The canvas is asserted to carry the module count
 # times one pitch, which is decidable only when the canvas is exactly the symbol; pinning four
-# would make a *short* margin fail this check too, which is ``RN-QUIET-ZONE``'s finding (AAP
-# §0.4.2's attribution).
+# would make a *short* margin fail this check too, which is ``RN-QUIET-ZONE``'s finding.
 _SVG_QUIET_ZONE_MODULES: Final[int] = 0
 
 # The payload length ``RN-LOGO`` requests, in bytes, excluding the case's own label.  A case
@@ -288,14 +287,13 @@ _LOGO_PAYLOAD_BYTES: Final[int] = 40
 # scale-invariant in this value, so it only decides how large the bitmap under test is.
 _LOGO_MODULE_SIZE_PX: Final[int] = 4
 
-# The three overlay sizes of AAP §0.8.1 as fractions of the symbol's *area*, so the largest step
-# spends exactly ``[checks.damage] logo_area_fraction`` and no value is written twice.
+# The three overlay sizes as fractions of the symbol's *area*, so the largest step spends exactly
+# ``[checks.damage] logo_area_fraction`` and no value is written twice.
 _LOGO_FRACTION_STEPS: Final[tuple[int, ...]] = (1, 2, 3)
 _LOGO_FRACTION_DENOMINATOR: Final[int] = 3
 
 # The two error levels ``RN-LOGO`` contrasts: H has spare correction capacity, L almost none, so
-# the same overlay is asserted to decode at one and only recorded at the other (AAP §0.3.5
-# forbids asserting the EC-L outcome).
+# the same overlay is asserted to decode at one and only recorded at the other.
 _LOGO_EC_LEVELS: Final[tuple[str, str]] = ("H", "L")
 
 # The six colour pairs ``RN-CONTRAST`` measures.  Case parameters, each measured at or above the
@@ -344,10 +342,10 @@ _MIN_GEOMETRY_SPREAD: Final[float] = 16.0
 # value is a float-comparison epsilon, not a threshold on a symbol.
 _INTEGRAL_EPSILON: Final[float] = 1e-6
 
-# The adapter-invocation counts AAP §0.4.3 declares for this family: one ``generate`` per case and
-# no second call.  Twelve cases each for ``RN-QUIET-ZONE``, ``RN-MODULE-SIZE``, ``RN-CONTRAST``
-# and ``RN-SVG``, six for ``RN-LOGO``, so the totals are the case counts, and
-# ``tests/unit/test_checks_negative.py`` asserts the observed count against this table.
+# The per-check adapter-invocation counts: one ``generate`` per case and no second call.  Twelve
+# cases each for ``RN-QUIET-ZONE``, ``RN-MODULE-SIZE``, ``RN-CONTRAST`` and ``RN-SVG``, six for
+# ``RN-LOGO``, so the totals are the case counts, and ``tests/unit/test_checks_negative.py``
+# asserts the observed count against this table.
 EXPECTED_ENCODES: Final[Mapping[str, int]] = MappingProxyType(
     {
         RN_QUIET_ZONE: 12,
@@ -392,7 +390,7 @@ class RasterizerStatus:
 
 
 def _configured_rasterizer(value: RenderConfig | str) -> str:
-    """Return the configured rasterizer name from what a caller handed us.
+    """Return the configured rasterizer name from what the caller passes.
 
     The ``[render]`` record is the documented argument; the string form is accepted too, so a
     caller that already holds the name need not build a record and both discovery call sites
@@ -430,12 +428,12 @@ def _probe_rasterizer(name: str) -> bool:
 def discover_svg_rasterizer(value: RenderConfig | str) -> RasterizerStatus:
     """Resolve the configured SVG rasterizer against what this host provides.
 
-    The product's only discovery implementation (AAP §0.3.4, §0.7.2), read by both ``doctor`` and
-    ``RN-SVG``, so the tool the run reports and the tool the check uses are one value, and a host
-    with no rasterizer degrades ``RN-SVG`` to ``skipped``/``missing_dependency``. An explicit value
-    is honoured exactly -- a silent substitution would make ``doctor`` report a tool the
-    configuration never named -- and ``auto`` probes :data:`SVG_RASTERIZER_AUTO_ORDER` in order,
-    stopping at the first hit.
+    The product's only discovery implementation, read by both ``doctor`` and ``RN-SVG``, so the tool
+    the run reports and the tool the check uses are one value, and a host with no rasterizer
+    degrades ``RN-SVG`` to ``skipped``/``missing_dependency``. An explicit value is honoured
+    exactly -- a silent substitution would make ``doctor`` report a tool the configuration never
+    named -- and ``auto`` probes :data:`SVG_RASTERIZER_AUTO_ORDER` in order, stopping at the first
+    hit.
 
     Raises:
         ValueError: The configured value is not one of
@@ -488,9 +486,9 @@ def _rasterizer_command(name: str) -> tuple[str, ...]:
     """Return the argv that rasterizes SVG on stdin to PNG on stdout for `name`.
 
     Every entry is an argument list, never a shell string: subprocesses here are argv-only with
-    ``shell=False`` (AAP §0.3.2), and a rasterizer is third-party code reading an untrusted
-    artefact. ``-`` is each tool's own spelling for stdin, so the argv carries no shell
-    metacharacter and no user-controlled text.
+    ``shell=False``, and a rasterizer is third-party code reading an untrusted artefact. ``-`` is
+    each tool's own spelling for stdin, so the argv carries no shell metacharacter and no
+    user-controlled text.
 
     Raises:
         ValueError: `name` is not one of the declared command-line rasterizers, which means the
@@ -510,156 +508,10 @@ def _rasterizer_command(name: str) -> tuple[str, ...]:
     )
 
 
-class _BoundedRasterCapture:
-    """Capture at most :data:`_MAX_CAPTURED_RASTER_BYTES` of one rasterizer output stream.
-
-    The rule the cli adapter applies to a target's streams, written again here because this layer
-    may reach only the adapter port and ``tests/unit/test_layering.py`` holds it that way: one
-    instance owns one ``os.pipe()`` and one daemon thread. ``subprocess.run`` is handed
-    :attr:`write_fd` as its ``stdout=`` or ``stderr=``, so the tool writes straight into the pipe
-    and the thread reads the other end until the tool closes it, keeping at most the documented
-    bound. A stream that passes the bound sets :attr:`overflowed` and closes its read end, so the
-    tool's next write fails instead of this process buffering output it will never use.
-
-    :meth:`finish` releases this process's ends of the pipe once the tool has exited, and is safe to
-    call more than once, so the success, timeout and spawn-failure paths all call it without knowing
-    which one they are on.
-    """
-
-    def __init__(self, name: str) -> None:
-        """Create the pipe for the `name` stream -- ``"stdout"`` or ``"stderr"`` -- and drain it.
-
-        Raises:
-            OSError: The pipe itself could not be created.
-            RuntimeError: The drain thread could not be started; both descriptors are released
-                first, so a caller sees one failure rather than a leaked pipe.
-        """
-        self._name: str = name
-        self._buffer: bytearray = bytearray()
-        self._received: int = 0
-        self._overflowed: bool = False
-        self._read_fd: int = -1
-        self._write_fd: int = -1
-        self._read_fd, self._write_fd = os.pipe()
-        self._thread: threading.Thread = threading.Thread(
-            target=self._drain,
-            name=f"qrcheck-raster-{name}",
-            daemon=True,
-        )
-        try:
-            self._thread.start()
-        except RuntimeError:
-            self._close_read_fd()
-            self._close_write_fd()
-            raise
-
-    @property
-    def write_fd(self) -> int:
-        """Return the descriptor to hand ``subprocess.run`` as this stream's destination."""
-        return self._write_fd
-
-    @property
-    def name(self) -> str:
-        """Return the stream's name, ``"stdout"`` or ``"stderr"``."""
-        return self._name
-
-    @property
-    def bytes(self) -> bytes:
-        """Return the bytes captured from this stream, at most the documented bound of them."""
-        return bytes(self._buffer)
-
-    @property
-    def received(self) -> int:
-        """Return how many bytes arrived on this stream, the over-bound ones included."""
-        return self._received
-
-    @property
-    def overflowed(self) -> bool:
-        """Return whether this stream delivered more than the documented bound."""
-        return self._overflowed
-
-    def finish(self) -> None:
-        """Release this process's ends of the pipe once the rasterizer has exited.
-
-        The write end is closed first, so a drain thread still reading sees end-of-file and returns,
-        and the thread is then joined for :data:`_RASTERIZER_DRAIN_JOIN_TIMEOUT_S`. The read end is
-        closed only once the thread has ended, because closing a descriptor another thread may still
-        be reading is not safe, and a thread still blocked there keeps its descriptor and its daemon
-        status. Idempotent: a second call finds the descriptors already closed.
-        """
-        self._close_write_fd()
-        self._thread.join(_RASTERIZER_DRAIN_JOIN_TIMEOUT_S)
-        if not self._thread.is_alive():
-            self._close_read_fd()
-
-    def _drain(self) -> None:
-        """Read this stream until the rasterizer closes it or the bound is passed."""
-        while True:
-            try:
-                chunk = os.read(self._read_fd, _RASTERIZER_READ_CHUNK_BYTES)
-            except OSError:
-                # A read end closed on the over-bound path, or a descriptor the kernel refused:
-                # either way nothing more can be read from this stream.
-                return
-            if not chunk:
-                return
-            self._received += len(chunk)
-            room = _MAX_CAPTURED_RASTER_BYTES - len(self._buffer)
-            if room > 0:
-                self._buffer += chunk[:room]
-            if self._received > _MAX_CAPTURED_RASTER_BYTES:
-                self._overflowed = True
-                self._close_read_fd()
-                return
-
-    def _close_read_fd(self) -> None:
-        """Close the read end once, if it is still open."""
-        read_fd, self._read_fd = self._read_fd, -1
-        if read_fd < 0:
-            return
-        with contextlib.suppress(OSError):
-            os.close(read_fd)
-
-    def _close_write_fd(self) -> None:
-        """Close this process's copy of the write end once, if it is still open."""
-        write_fd, self._write_fd = self._write_fd, -1
-        if write_fd < 0:
-            return
-        with contextlib.suppress(OSError):
-            os.close(write_fd)
-
-
-def _open_rasterizer_captures(
-    name: str, argv: tuple[str, ...]
-) -> tuple[_BoundedRasterCapture, _BoundedRasterCapture]:
-    """Return one bounded capture per output stream of the rasterizer about to be spawned.
-
-    Opening them is part of spawning: with nowhere to write, the tool is not run at all, and the
-    capture this call already created is released rather than left behind. The pair is returned in
-    stream order, stdout first.
-
-    Raises:
-        RuntimeError: A pipe or a drain thread could not be created, so no rasterizer ran and this
-            is a framework fault rather than a verdict about the target.
-    """
-    captures: list[_BoundedRasterCapture] = []
-    try:
-        captures.append(_BoundedRasterCapture("stdout"))
-        captures.append(_BoundedRasterCapture("stderr"))
-    except (OSError, RuntimeError) as exc:
-        for capture in captures:
-            capture.finish()
-        raise RuntimeError(
-            f"SVG rasterizer {name!r} was not run: its output could not be captured "
-            f"({type(exc).__name__}: {exc}); command {list(argv)}"
-        ) from None
-    return captures[0], captures[1]
-
-
 def _raise_for_overbound_stream(
     name: str,
     argv: tuple[str, ...],
-    *captures: _BoundedRasterCapture,
+    *captures: BoundedStreamCapture,
 ) -> None:
     """Refuse a rasterizer stream that passed the documented byte bound.
 
@@ -681,7 +533,7 @@ def _raise_for_overbound_stream(
         )
 
 
-def _diagnostic_tail(capture: _BoundedRasterCapture) -> str:
+def _diagnostic_tail(capture: BoundedStreamCapture) -> str:
     """Return at most the last :data:`_RASTERIZER_DIAGNOSTIC_CHARS` of a captured stream, decoded.
 
     A failure message quotes what the tool said, and a tool writing close to the capture ceiling
@@ -700,9 +552,10 @@ def rasterize_svg(
     The product's only rasterization: ``cairosvg`` is driven through its module when discovery found
     one, and every other rasterizer is an argv-only subprocess reading the SVG on stdin and writing
     the PNG to stdout, with :data:`RASTERIZER_TIMEOUT_S` as the backstop. Nothing is written to
-    disk. Both of the child's streams are captured through :class:`_BoundedRasterCapture`, so no
-    document can make the tool grow this process past :data:`_MAX_CAPTURED_RASTER_BYTES` per stream,
-    and a failure quotes only the tail of what the tool said.
+    disk. Both of the child's streams are captured through
+    :func:`~qrcheck.capture.open_capture_pair`, so no document can make the tool grow this process
+    past :data:`_MAX_CAPTURED_RASTER_BYTES` per stream, and a failure quotes only the tail of what
+    the tool said.
 
     The document is read through :func:`_parse_svg` on every call, whichever rasterizer answers, so
     no caller can hand a document to third-party code without the byte bound, the declaration
@@ -714,14 +567,14 @@ def rasterize_svg(
 
     Raises:
         RuntimeError: No rasterizer is available, one of its streams passed the capture ceiling, the
-            configured one emitted nothing, exited non-zero, timed out or could not be executed; the
-            message names the command, its exit status and the tail of its stderr, and the runner
-            records an ``error`` result rather than a verdict about the target. A declared canvas
-            above :data:`_MAX_RASTER_SIDE_PX` and a refused external reference are the two
-            RuntimeErrors a target's own artefact can provoke, and both are defence in depth: a
-            check prices the canvas and scans the references it parsed before calling here and
-            reports that case as ``value_mismatch``, so either raise reaches only a caller that
-            skipped the case-level pricing and it is then a framework fault.
+            configured one emitted nothing, exited non-zero, timed out, could not be executed or
+            could not have its output captured; the message names the command, its exit status and
+            the tail of its stderr, and the runner records an ``error`` result rather than a verdict
+            about the target. A declared canvas above :data:`_MAX_RASTER_SIDE_PX` and a refused
+            external reference are the two RuntimeErrors a target's own artefact can provoke, and
+            both are defence in depth: a check prices the canvas and scans the references it parsed
+            before calling here and reports that case as ``value_mismatch``, so either raise reaches
+            only a caller that skipped the case-level pricing and it is then a framework fault.
             ValueError: ``svg_bytes`` is not bytes-like, or `status` names a rasterizer this module
             cannot drive.
     """
@@ -755,7 +608,17 @@ def rasterize_svg(
     if name == "cairosvg":
         return _rasterize_with_cairosvg(payload)
     argv = _rasterizer_command(name)
-    stdout_capture, stderr_capture = _open_rasterizer_captures(name, argv)
+    try:
+        stdout_capture, stderr_capture = open_capture_pair(
+            limit=_MAX_CAPTURED_RASTER_BYTES,
+            chunk_bytes=_RASTERIZER_READ_CHUNK_BYTES,
+            join_timeout_s=_RASTERIZER_DRAIN_JOIN_TIMEOUT_S,
+        )
+    except (OSError, RuntimeError) as exc:
+        raise RuntimeError(
+            f"SVG rasterizer {name!r} was not run: its output could not be captured "
+            f"({type(exc).__name__}: {exc}); command {list(argv)}"
+        ) from None
     try:
         try:
             completed = subprocess.run(
@@ -828,7 +691,7 @@ def _refuse_url(url: str, *args: object, **kwargs: object) -> bytes:
 
     :func:`_parse_svg` has already refused every reference outside the document, so reaching here
     means the module tried to resolve something that scan did not see, and refusing keeps the
-    rasterizer inside the document either way (AAP NFR-2). The trailing parameters absorb whatever
+    rasterizer inside the document either way. The trailing parameters absorb whatever
     the caller passes after the URL.
 
     Raises:
@@ -837,7 +700,7 @@ def _refuse_url(url: str, *args: object, **kwargs: object) -> bytes:
     del args, kwargs
     raise _ExternalReferenceRefused(
         f"the SVG artefact made the cairosvg rasterizer fetch {url!r}: a rasterizer may not reach "
-        f"a host this framework never chose or read a local file (AAP NFR-2)"
+        f"a host this framework never chose or read a local file"
     )
 
 
@@ -953,8 +816,8 @@ class _ArtefactMeasurements:
 
     ``image`` is the loaded image :func:`qrcheck.evidence.mux.decode_image` returns. Its type is
     left to Pillow because this module never imports it: :mod:`qrcheck.evidence.mux` is the
-    product's only Pillow importer (AAP §0.8.1), and every pixel here crosses that boundary once,
-    when the record is opened.
+    product's only Pillow importer, and every pixel here crosses that boundary once, when the record
+    is opened.
     """
 
     __slots__ = ("_image", "_derived")
@@ -1322,7 +1185,7 @@ _SVG_SEPARATORS: Final[re.Pattern[str]] = re.compile(r"[,\s]+")
 # a rasterizer would otherwise be: handed ``<image xlink:href="http://host/x.png">`` or
 # ``fill="url(file:///etc/passwd)"``, the tool fetches a host this framework never chose or reads a
 # local file, and the raster it produces is persisted as evidence and inlined into ``index.html``.
-# That breaks AAP NFR-2's loopback-only guarantee with this product's own binary as the client.
+# That breaks the loopback-only guarantee with this product's own binary as the client.
 _FRAGMENT_PREFIX: Final[str] = "#"
 
 # The character a CSS escape sequence is written with, and the reason one anywhere in a document is
@@ -1333,7 +1196,7 @@ _FRAGMENT_PREFIX: Final[str] = "#"
 # hole exists with no ``style`` attribute at all. A conforming encoder emits no backslash
 # anywhere -- segno's own SVG output carries none -- so refusing a document that carries one costs
 # no legitimate artefact, and judging the escape instead would mean re-implementing the renderer's
-# own value parser inside this scan (AAP NFR-2).
+# own value parser inside this scan.
 _CSS_ESCAPE_MARKER: Final[str] = "\\"
 
 # Every CSS ``url(...)`` in an attribute value or in a style element's text, quoted or not, so the
@@ -1396,7 +1259,7 @@ class _ExternalReferenceRefused(ValueError):
     canvas it simply could not read, while every other fault still escapes. The document it refuses
     is never rasterized: a rasterizer handed an external reference fetches a host this framework
     never chose or reads a local file, and the raster it produces would be persisted as evidence and
-    inlined into ``index.html`` (AAP NFR-2).
+    inlined into ``index.html``.
     """
 
 
@@ -1509,7 +1372,7 @@ def _parse_svg(svg_bytes: bytes) -> ElementTree.Element:
             f"the SVG artefact carries {form} {reference!r}, which names a resource outside the "
             f"document: a rasterizer handed a reference that leaves it fetches a host this "
             f"framework never chose or reads a local file, and a conforming encoder emits only "
-            f"same-document '{_FRAGMENT_PREFIX}' fragments (AAP NFR-2)"
+            f"same-document '{_FRAGMENT_PREFIX}' fragments"
         )
     return root
 
@@ -1520,7 +1383,7 @@ def _svg_canvas(svg_bytes: bytes) -> tuple[float, float, str]:
     ``viewBox`` is preferred when the document has one, because its third and fourth numbers are the
     canvas in the user units the geometry is drawn in; ``width`` and ``height`` are the fallback.
     Nothing else about the document is inspected: element names, attribute sets and byte layout are
-    encoder-defined and AAP §0.3.5 forbids asserting them.
+    encoder-defined and none of them is asserted.
 
     The artefact is untrusted, so it is read through :func:`_parse_svg` and not around it: a
     document longer than :data:`_MAX_SVG_BYTES`, or one that declares a ``<!DOCTYPE``, an
@@ -1698,8 +1561,7 @@ def _target_config(ctx: RunContext) -> TargetConfig:
 def _elapsed_ms(started: float) -> float:
     """Return the milliseconds elapsed since `started`, a ``time.perf_counter`` reading.
 
-    A monotonic stopwatch fills the recorded ``duration_ms`` only; no assertion here reads a clock
-    (AAP §0.5.5).
+    A monotonic stopwatch fills the recorded ``duration_ms`` only; no assertion here reads a clock.
     """
     return max(0.0, (time.perf_counter() - started) * 1000.0)
 
@@ -1836,8 +1698,8 @@ def _run_quiet_zone(
     Emits ``sampling_failed`` when the image's module geometry cannot be established,
     ``value_mismatch`` when any side renders less than the requested zone, and the translated
     adapter reasons through :func:`_translate`. ``decoded`` carries ``quiet_zone_measured`` beside
-    ``quiet_zone_requested`` and the module pitch, the evidence AAP §0.4.5 requires for the
-    ``missing_quiet_zone`` defect.
+    ``quiet_zone_requested`` and the module pitch, which is what a reader needs to diagnose the
+    ``missing_quiet_zone`` defect from the report alone.
     """
     started = time.perf_counter()
     # The module size is deliberately left unset, so the request asks for the one thing this
@@ -1943,10 +1805,10 @@ def _run_quiet_zone(
     id=RN_MODULE_SIZE,
     title="Module size: the rendered module edge matches the requested pixel size",
     family=_FAMILY,
-    # The request pins the quiet zone as well as the edge: AAP §0.4.2 states the dimension
-    # contract in the request's own quiet zone, so honouring the pin needs the capability and
-    # this declaration must say so, or a target declaring only ``module_size`` is resolved as
-    # runnable and then skips every case at the pre-I/O gate.
+    # The request pins the quiet zone as well as the edge: the dimension contract is stated in the
+    # request's own quiet zone, so honouring the pin needs the capability and this declaration must
+    # say so, or a target declaring only ``module_size`` is resolved as runnable and then skips
+    # every case at the pre-I/O gate.
     requires=frozenset({Capability.png, Capability.module_size, Capability.quiet_zone}),
     dependencies=(DEPENDENCY_PRIMARY_DECODER,),
     corpus_driven=True,
@@ -1993,9 +1855,9 @@ def _run_module_size(
     :data:`MODULE_SIZE_TOLERANCE_PX` of the requested one, and the dimension contract
     ``(modules + 2 * quiet_zone) * module_size`` holds, the canvas counted in module pitches being a
     legal Model 2 module count plus the requested quiet zone on both sides. The second is why a
-    short quiet zone fails here as well as in ``RN-QUIET-ZONE`` (AAP §0.4.2), and being a
-    legal-count test rather than a comparison against a decoder's version it still measures a symbol
-    that cannot be decoded. Emits ``sampling_failed`` when the geometry cannot be established and
+    short quiet zone fails here as well as in ``RN-QUIET-ZONE``, and being a legal-count test rather
+    than a comparison against a decoder's version it still measures a symbol that cannot be
+    decoded. Emits ``sampling_failed`` when the geometry cannot be established and
     ``value_mismatch`` when either assertion fails.
     """
     # Deferred: importing this module starts no image stack in a process that only lists checks.
@@ -2123,8 +1985,8 @@ def contrast_cases(ctx: RunContext) -> Iterator[Case]:
     """Yield the contrast cases: six palettes, each at both polarities.
 
     Twelve cases, one encode and one decode each. The inverted half is why the check exists: the
-    framework owns polarity normalisation (AAP §0.3.2, IM-4), so a light-on-dark symbol must decode
-    through the second pass rather than through a decoder feature the pinned versions lack.
+    framework owns polarity normalisation through a second decode pass, so a light-on-dark symbol
+    must decode that way rather than through a decoder feature the pinned versions lack.
     """
     for index, palette in enumerate(_CONTRAST_PALETTES, start=1):
         for polarity in _CONTRAST_POLARITIES:
@@ -2295,7 +2157,7 @@ def svg_cases(ctx: RunContext) -> Iterator[Case]:
 
     Twelve cases, one encode each and one decode of the rasterized PNG. Discovery runs once here
     rather than per case, so every case reports the same rasterizer and attempted order; when
-    nothing was found every case is a skip carrying that order, never a pass (AAP §0.3.5, §0.7.2).
+    nothing was found every case is a skip carrying that order, never a pass.
     """
     status = discover_svg_rasterizer(ctx.config.render)
     sample = support.first_records(ctx.corpus, _SAMPLE_RECORDS)
@@ -2334,7 +2196,7 @@ def _run_svg(
     checked here from the one parse of it: an oversized canvas is ``value_mismatch`` with
     ``canvas_above_raster_ceiling``, an unreadable canvas ``svg_canvas_unreadable``, and a reference
     that leaves the document ``svg_external_reference``, each leaving the run's exit code at 1 and
-    refusing the rasterization entirely (AAP §0.3.4, AAP NFR-2). A rasterizer or host fault -- a
+    refusing the rasterization entirely. A rasterizer or host fault -- a
     binary that exits non-zero, times out or writes nothing -- raises, and the runner records an
     ``error`` result, which is exit 3. The decoded payload is recorded rather than asserted:
     fidelity is ``RT-ROUNDTRIP``'s assertion.
@@ -2350,9 +2212,9 @@ def _run_svg(
         "svg_canvas_ceiling_px": _MAX_RASTER_SIDE_PX,
     }
     if not status.available:
-        # A skipped-with-reason case is persisted like a failure (AAP §0.3.4), so the
-        # per-case half of the rasterizer gate leaves the same evidence the whole-check
-        # skip does rather than only a record in summary.json.
+        # A skipped-with-reason case is persisted like a failure, so the per-case half of the
+        # rasterizer gate leaves the same evidence the whole-check skip does rather than only a
+        # record in summary.json.
         return support.record_evidence(
             ctx,
             support.skip(
@@ -2392,7 +2254,7 @@ def _run_svg(
         # A reference to anything outside the document is the target's own artefact trying to send
         # this framework's rasterizer to a host or a file of its choosing, so it is a verdict about
         # the target with its own problem token -- exit 1 -- and not the framework fault an
-        # unreadable canvas is priced as (AAP §0.3.4 exit codes, AAP NFR-2).
+        # unreadable canvas is priced as.
         decoded["problems"] = [
             "svg_external_reference"
             if isinstance(error, _ExternalReferenceRefused)
@@ -2520,8 +2382,8 @@ def logo_cases(ctx: RunContext) -> Iterator[Case]:
 
     Six cases, one encode and one decode each. The sizes are thirds of ``[checks.damage]
     logo_area_fraction``, so the largest spends exactly the configured ceiling, and the two levels
-    are the contrast AAP §0.4.2 requires: the same overlay is asserted to decode at H and only
-    recorded at L.
+    are the contrast this check draws: the same overlay is asserted to decode at H and only recorded
+    at L.
     """
     for level in _LOGO_EC_LEVELS:
         for step in _LOGO_FRACTION_STEPS:
@@ -2560,9 +2422,9 @@ def _run_logo(ctx: RunContext, case_id: str, level: str, step: int) -> CaseResul
     symbol did not have, so a declared ``logo_overlay`` capability has behaviour behind it -- and,
     when the covered fraction is at or below ``recovery_fraction(decoded level) -
     occlusion_margin``, that the symbol still decodes to the requested payload. A case above the
-    budget is recorded without assertion, as AAP §0.3.5 requires, and the budget reads the level
-    decoded from the symbol, never the requested one (AAP §0.4.2). Emits ``value_mismatch`` for
-    either assertion.
+    budget is recorded without a payload assertion, because the covered area may exceed what the
+    level can correct, and the budget reads the level decoded from the symbol, never the requested
+    one. Emits ``value_mismatch`` for either assertion.
     """
     # Deferred: importing this module starts no image stack in a process that only lists checks.
     from qrcheck.decode.matrix import module_count_for_version
@@ -2596,7 +2458,8 @@ def _run_logo(ctx: RunContext, case_id: str, level: str, step: int) -> CaseResul
 
     projection = request.as_dict()
     # The overlay reached the target through a temporary file whose name must not reach an
-    # artefact (AAP §0.5.5 forbids absolute paths); the bitmap is persisted as ``logo.png``.
+    # artefact (an absolute path may never reach an evidence file); the bitmap is persisted as
+    # ``logo.png``.
     projection["logo_overlay_path"] = LOGO_PNG
     try:
         with _measure_artefact(symbol.image_bytes) as artefact:

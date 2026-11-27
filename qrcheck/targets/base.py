@@ -104,7 +104,7 @@ _BYTE_ORDER_MARK: Final[bytes] = b"\xef\xbb\xbf"
 _SVG_SNIFF_BYTES: Final[int] = 512
 
 # The most this reader takes from one artefact path. A ``bytes_path`` is a path the target chose
-# and a ``file_path`` one it was handed, so a target is untrusted (AAP §0.1.3) and the read is
+# and a ``file_path`` one it was handed, so a target is untrusted and the read is
 # bounded rather than the path trusted: a named device, a FIFO nobody fills or a multi-gigabyte
 # file must become a contract error instead of a hung or exhausted runner. The bound is the same
 # 16 MiB the http adapter reads from one response, because no legitimate artefact comes near it.
@@ -406,7 +406,6 @@ def build_request(
     # payloads are ASCII by construction, so len(body) is their character count as well
     # as their byte count. An unpinned request is bounded by Version 40, the largest
     # Model 2 symbol, in that same mode.
-    #
     # ``mode_of`` is imported at the point of use, never at module scope: its module
     # imports ``numpy`` for the corpus's seeded generators, and this port is imported by
     # the registry, the decoders and every check, so a module-level import would put

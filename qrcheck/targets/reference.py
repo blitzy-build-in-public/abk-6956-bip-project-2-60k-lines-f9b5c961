@@ -64,7 +64,7 @@ _MAX_MASK: Final[int] = 7
 _MIN_CHANNEL: Final[int] = 0
 _MAX_CHANNEL: Final[int] = 255
 
-# The two artefact kinds segno renders for us, and the segno `kind` name of each.
+# The two artefact kinds segno renders, and the segno `kind` name of each.
 _RENDER_KINDS: Final[tuple[str, ...]] = ("png", "svg")
 
 

@@ -67,7 +67,7 @@ _DEFECTIVE_TARGET: Final[str] = "defective"
 # expected identifier is a stranger.
 _CHECK_ID_SET: Final[frozenset[str]] = frozenset(CHECK_IDS)
 
-# The nine identifiers a --adapter defective run must fail (§0.4.2), as the one literal the
+# The nine identifiers a --adapter defective run must fail, as the one literal the
 # per-defect sets are validated against at import. It is written here and nowhere else in this
 # module: SELF_CHECK_TARGETS is built by unioning the five sets below, so this literal is the
 # acceptance criterion those sets are checked *against* rather than a second declaration of them.
@@ -96,15 +96,14 @@ class ExpectationError(ValueError):
     expected identifier that is declared but never registered. It subclasses :class:`ValueError` for
     the same reason :class:`~qrcheck.registry.check.CheckRegistrationError` does, and the message
     names the target and the offending identifiers in sorted order. Deleting an expectation or
-    deleting a check therefore breaks a test instead of silencing one (§0.4.3).
+    deleting a check therefore breaks a test instead of silencing one.
     """
 
 
 # One immutable set per injection of qrcheck/targets/defective.py, holding every check identifier
-# that injection must make fail: the check designed to catch it plus any consequence the plan
+# that injection must make fail: the check designed to catch it plus any consequence the injection
 # declares unavoidable. Named after the injection so the two declarations can be read side by
 # side.
-#
 # D1 secures the payload at one error-correction level below the request while declaring the
 # requested level. SY-EC-MATCH is the catch; SY-VERSION-MIN follows because a lower level fits a
 # boundary payload in a smaller version, and SY-MATRIX-EQUIV because a pinned-EC matrix cannot
@@ -155,7 +154,6 @@ DEFECT_EXPECTATIONS: Final[Mapping[str, frozenset[str]]] = MappingProxyType(
 )
 
 # What each built-in self-check target must produce, and the only declaration of it.
-#
 # ``reference`` conforms, so its expected-failing set is empty -- and the reference gate
 # additionally demands zero skipped results, so "make it pass by skipping" is not available
 # either. ``defective`` carries every injection at once, so its set is the union of the five
@@ -225,9 +223,9 @@ def expected_passing(adapter: str) -> frozenset[str]:
 
     The complement of :func:`expected_failures` over the twenty-one declared identifiers, so the two
     answers partition them for every adapter name: a target cannot be expected to fail and pass the
-    same check, and no check escapes both. For ``defective`` this is the twelve checks §0.4.2
-    requires to pass in the same run that fails the other nine; for ``reference`` it is all
-    twenty-one. An adapter with no declared expectation yields every identifier, because nothing is
+    same check, and no check escapes both. For ``defective`` this is the twelve checks a run that
+    fails the other nine must pass; for ``reference`` it is all twenty-one. An adapter with no
+    declared expectation yields every identifier, because nothing is
     excused for it: the caller decides what a failure of one of them means, and this module never
     claims such a target must be clean, it only declines to rule any of its checks out.
     """
@@ -247,7 +245,7 @@ def validate_against_registry(
     twenty-one declared checks, a ``defective`` entry that is not the union of the per-defect sets,
     and an expected identifier that is declared but not registered in `registry`. Deleting a check
     or an expectation therefore breaks a test instead of silently shrinking what the acceptance gate
-    compares (§0.4.3). It reads only what it is given and the module's own tables -- no I/O, no
+    compares. It reads only what it is given and the module's own tables -- no I/O, no
     mutation of the registry, no import of a check module -- so the caller decides when the check
     families have been imported, and ``None`` reads the product's
     :data:`~qrcheck.registry.check.REGISTRY` as it stands at call time. It either passes or raises

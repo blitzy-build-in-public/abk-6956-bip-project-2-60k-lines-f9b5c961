@@ -3,18 +3,17 @@
 For each registered check this module drives the check's own ``cases`` generator with a
 protocol-conforming stub adapter and a stubbed decode result carrying the **one** defect it
 exists to detect, and asserts the check's exact :class:`~qrcheck.report.model.Reason`, never
-merely "it failed" (AAP §0.4.4). Every check also carries a **control** round with no defect
-injected, which must pass, so a negative round is attributable to the injected defect and not to
-the harness.
+merely "it failed". Every check also carries a **control** round with no defect injected, which
+must pass, so a negative round is attributable to the injected defect and not to the harness.
 
 The decoders are stubs because a negative case must *put* a specific defect in front of a check,
-and a real decoder cannot be asked for one -- with one exception. The round carrying AAP §0.4.4's
-ninth named defect, an encode that returns non-image bytes, lifts the stub
+and a real decoder cannot be asked for one -- with one exception. The round carrying the ninth
+named defect, an encode that returns non-image bytes, lifts the stub
 (:attr:`NegativeRound.real_decode`): the artefact *is* the defect, so ``RT-ROUNDTRIP`` is handed
 ``bytes`` no image library can open through the real decode entry, and the framework's own mapping
 for unusable bytes is what the round asserts. ``RN-SVG`` is stood in for the same way at its own
-seam: the rasterizer belongs to the CI e2e job alone (AAP §0.6.4 installs the tool there and in no
-other job), so the render family's probe and rasterizer are stubbed here while
+seam: the rasterizer belongs to the CI e2e job alone (the workflow installs the tool there and in
+no other job), so the render family's probe and rasterizer are stubbed here while
 :func:`qrcheck.checks.render.discover_svg_rasterizer` keeps its real order, its real ``attempted``
 list and its real ``none`` branch.
 
@@ -98,10 +97,11 @@ _DEFAULT_SCALE_PX: Final[int] = 4
 # measures a conforming one.
 _DEFAULT_BORDER_MODULES: Final[int] = 4
 
-# How many damage kinds one ``DM-RESILIENCE`` record contributes: ``occluders``, ``blur``,
-# ``jpeg``, ``noise``, ``rotation``, ``perspective`` and ``downscale`` (AAP §0.3.4
-# ``[checks.damage]``).  The check encodes a record once and re-uses that symbol for all
-# seven, so the invocation count is the record count and the case count is seven times it.
+# How many damage kinds one ``DM-RESILIENCE`` record contributes:
+# :data:`~qrcheck.evidence.naming.DAMAGE_KINDS` declares seven -- ``occluders``, ``blur``,
+# ``jpeg``, ``noise``, ``rotation``, ``perspective`` and ``downscale``.  The check encodes a
+# record once and re-uses that symbol for all seven, so the invocation count is the record count
+# and the case count is seven times it.
 _DAMAGE_KINDS_PER_RECORD: Final[int] = 7
 
 # The record count of the corpus the fixed samples and this module's own corpus are drawn
@@ -153,7 +153,7 @@ class NegativeRound:
     adapter_symbol: str | None = None
     # The one round that lifts this module's decode stub: it hands the check the real decode
     # entry, so the framework's own mapping for unusable bytes is the thing under test rather
-    # than a defect scripted in front of the check (AAP §0.4.4, the ninth named defect).
+    # than a defect scripted in front of the check (the ninth named defect).
     real_decode: bool = False
     config: Mapping[str, Any] = dataclasses.field(
         default_factory=lambda: MappingProxyType({})
@@ -193,7 +193,7 @@ def _control(
     )
 
 
-# The declared adapter-invocation contract, one entry per check (AAP §0.4.3, §0.5.6)
+# The declared adapter-invocation contract, one entry per check
 
 # Each helper takes the round's resolved ``[checks.performance]`` limits: the same object
 # ``PF-ENCODE`` copies its warm-up and sample counts into the result's ``expected`` from, so one
@@ -895,7 +895,7 @@ def _other_level(ec_level: str) -> str:
 # The fixed step, in grey levels per channel, by which the palette defect lightens the darker of a
 # requested pair.  One step and no more: the measured ratio of every declared palette stays above
 # the 7:1 floor at it, so the round proves the palette assertion alone rather than the ratio one as
-# well (AAP §0.4.4).
+# well.
 _PALETTE_LIGHTEN_STEP: Final[int] = 24
 
 
@@ -1319,8 +1319,8 @@ _CANNED_ARTEFACT: Final[bytes] = b"\x89PNG\r\n\x1a\nqrcheck-negative-canned"
 # The bytes a round hands a decode-backed check instead of a rendered symbol: plain text, with no
 # image signature in it at all, so no decoder pipeline can open it.  Deliberately unlike
 # ``_CANNED_ARTEFACT`` above, which carries a PNG signature and is only ever measured, never
-# opened -- this artefact is opened, by the real decode entry, which is how AAP §0.4.4's ninth
-# named defect ("an encode that returns non-image bytes") is proved to reach a check that fails.
+# opened -- this artefact is opened, by the real decode entry, which is how the ninth named defect
+# ("an encode that returns non-image bytes") is proved to reach a check that fails.
 _NON_IMAGE_ARTEFACT: Final[bytes] = b"qrcheck negative case: not an image in any format\n"
 
 ADAPTER_SYMBOLS: Final[dict[str, Callable[[], GeneratedSymbol]]] = {
@@ -1385,7 +1385,7 @@ def _leak_temp_entry(preparation: _Preparation) -> Iterator[None]:
 @contextlib.contextmanager
 def _tamper_recorded_variant(preparation: _Preparation) -> Iterator[None]:
     """Replace every recorded variant with bytes no seed can derive: record and damage kind are
-    read off the ``corpus:<record-id>@<kind>`` cases (AAP §0.3.4), never transcribed.
+    read off the ``corpus:<record-id>@<kind>`` cases, never transcribed.
 
     The variant memo is module-global, so the original bytes of every key tampered with are
     snapshotted first, one entry per ``(record_id, kind)``, and put back in a ``finally``: the
@@ -1513,19 +1513,18 @@ def _drive_round(
     if not prerequisite_cases:
         damage_family.clear_symbol_memo()
     # What the case asks the decode layer for, counted at the one seam every image check decodes
-    # through, so a retried decode registers as one more call (AAP §0.4.3).
+    # through, so a retried decode registers as one more call.
     decode_calls = {"calls": 0}
     # The dotted form, because ``monkeypatch.setattr`` reads a bare string as a whole import
     # path: it resolves the module itself and remembers the previous value, so the patcher's
-    # own installation is restored when this test ends.
-    #
-    # The stub exists because a negative case must put a specific defect in front of a check and
-    # a real decoder cannot be asked for one.  That reason does not hold for a round whose
-    # artefact *is* the defect -- bytes no image library can open -- so that round restores the
-    # real decode entry instead, and the framework's own mapping for unusable bytes becomes what
-    # the check is observed to report (AAP §0.4.4, the ninth named defect).  No constant result
-    # is installed for it either: the stub sets one only because a canned artefact describes no
-    # symbol at all; every other round counts its decodes at the one seam it runs through.
+    # own installation is restored when this test ends.  The stub exists because a negative case
+    # must put a specific defect in front of a check and a real decoder cannot be asked for one.
+    # That reason does not hold for a round whose artefact *is* the defect -- bytes no image
+    # library can open -- so that round restores the real decode entry instead, and the
+    # framework's own mapping for unusable bytes becomes what the check is observed to report
+    # (the ninth named defect).  No constant result is installed for it either: the stub sets one
+    # only because a canned artefact describes no symbol at all; every other round counts its
+    # decodes at the one seam it runs through.
     decode_entry = (
         harness.patcher.real
         if round_spec.real_decode
@@ -1581,13 +1580,12 @@ def _drive(check_id: str, harness: _Harness) -> _CheckRun:
 
 
 # The SVG rasterizer the unit tier stands in for
-#
-# ``RN-SVG`` rasterizes through whatever ``discover_svg_rasterizer`` finds on the host, and the tool
-# belongs to the CI e2e job alone (AAP §0.6.4 installs ``librsvg2-bin`` there and in no other job),
-# so this module answers that seam with a stub: the real tool's fidelity is the e2e tier's proof,
-# and the subject here is the check's own arithmetic and the discovery order it reports.  The name
-# is one the product's own order lists, so discovery still walks ``SVG_RASTERIZER_AUTO_ORDER`` and
-# still stops at the first candidate its probe accepts.
+# ``RN-SVG`` rasterizes through whatever ``discover_svg_rasterizer`` finds on the host, and the
+# tool belongs to the CI e2e job alone (the workflow installs ``librsvg2-bin`` there and in no
+# other job), so this module answers that seam with a stub: the real tool's fidelity is the e2e
+# tier's proof, and the subject here is the check's own arithmetic and the discovery order it
+# reports.  The name is one the product's own order lists, so discovery still walks
+# ``SVG_RASTERIZER_AUTO_ORDER`` and still stops at the first candidate its probe accepts.
 _STUB_RASTERIZER: Final[str] = "rsvg-convert"
 
 # The product's own rasterization, captured at import time because the autouse fixture below
@@ -1633,8 +1631,8 @@ def stub_svg_rasterizer(monkeypatch: pytest.MonkeyPatch) -> None:
     Only the two seams are replaced.  ``discover_svg_rasterizer`` keeps its real probe order, its
     real ``attempted`` list and its real ``"none"`` branch -- which answers before any probe runs,
     so the module's skip round still skips -- and ``rasterize_svg`` answers a PNG instead of driving
-    third-party code.  The unit tier is the fast, fully-mocked layer AAP §0.6.4 defines, and the
-    real tool remains the e2e tier's proof.
+    third-party code.  The unit tier is the fast, fully-mocked layer the workflow's unit job runs,
+    and the real tool remains the e2e tier's proof.
     """
 
     def probe(name: str) -> bool:
@@ -1695,7 +1693,7 @@ def harness(
 
 def test_the_tables_cover_every_registered_check() -> None:
     """Both tables name every registered check and every round names something real -- the
-    table-level gate AAP §0.4.4 needs, where a misspelt defect fails here."""
+    table-level gate that keeps the suite non-vacuous, where a misspelt defect fails here."""
     assert REGISTERED == registered_ids(), (
         "loading the families must not change the registered set: "
         f"{REGISTERED} != {registered_ids()}"
@@ -1842,8 +1840,8 @@ def test_an_unmeasurable_artefact_records_the_ceiling_and_never_an_invented_canv
 # instruction is refused by the pre-parse byte scan, because the parser drops a processing
 # instruction and no scan of the parsed tree could see the stylesheet it names, so it carries the
 # unreadable-canvas token the two entity rounds carry.  Both are ``value_mismatch``, which is the
-# point: the target's own bytes are a verdict about the target rather than a framework error (AAP
-# §0.3.4's exit codes, AAP NFR-2).  Case inputs, not thresholds.
+# point: the target's own bytes are a verdict about the target rather than a framework error.  Case
+# inputs, not thresholds.
 _REFUSED_ARTEFACT_ROUNDS: Final[tuple[tuple[str, str, str], ...]] = (
     ("svg-external-reference", "svg_external_reference", _REFUSED_REFERENCE),
     ("svg-stylesheet-instruction", "svg_canvas_unreadable", "<?xml-stylesheet"),
@@ -1861,7 +1859,7 @@ def test_a_refused_artefact_is_a_verdict_about_the_target(
     """An artefact that references something outside itself, and one carrying a declaration the
     parser would drop, are both refused before any rasterizer runs: the case is ``value_mismatch``
     carrying `problem`, the recorded error names `named` from the document, and the target's own
-    bytes are a verdict about the target, never a framework error (AAP §0.3.4's exit codes)."""
+    bytes are a verdict about the target, never a framework error."""
     run = _drive("RN-SVG", harness)
     refused = [outcome for outcome in run.rounds if outcome.round.symbol_defect == symbol_defect]
     assert len(refused) == 1, f"RN-SVG declares exactly one {symbol_defect} round"
@@ -1963,8 +1961,8 @@ def test_declared_invocations_match_the_family_tables(
             f"invocation(s), but the family module declares {family_counts[check_id]}"
         )
     assert sum(family_counts.values()) == 1287, (
-        "the case matrix of AAP §0.8.1 declares 1,287 encodes for one full run; the family "
-        f"modules declare {sum(family_counts.values())}"
+        "the family modules' EXPECTED_ENCODES tables total 1,287 encodes for one full run; "
+        f"they declare {sum(family_counts.values())}"
     )
 
 
@@ -1994,7 +1992,7 @@ def test_decode_invocations_match_the_declared_count(harness: _Harness) -> None:
     """The decode half of the accounting, asserted as a strict equality: ``PF-ENCODE`` decodes
     nothing and ``PF-DECODE`` decodes its probe ``warmup + decode_samples`` times, as
     :data:`qrcheck.checks.performance.EXPECTED_DECODES` declares, so a retry on the decode path
-    registers as one more call and fails here (AAP §0.4.3)."""
+    registers as one more call and fails here."""
     for check_id, declared in performance_family.EXPECTED_DECODES.items():
         run = _drive(check_id, harness)
         for outcome in run.all:
@@ -2013,8 +2011,7 @@ def test_decode_invocations_match_the_declared_count(harness: _Harness) -> None:
 
 def test_performance_results_copy_the_configured_thresholds(harness: _Harness) -> None:
     """Both performance checks report the configured thresholds and their sample count; the measured
-    durations are recorded, never asserted, so no wall-clock value reaches an assertion
-    (§0.5.5)."""
+    durations are recorded, never asserted, so no wall-clock value reaches an assertion."""
     expectations: dict[str, tuple[str, ...]] = {
         "PF-ENCODE": ("encode_p95_ms", "encode_samples", "min_symbols_per_minute", "warmup"),
         "PF-DECODE": ("decode_image_px", "decode_p95_ms", "decode_samples", "warmup"),
@@ -2041,8 +2038,8 @@ def test_performance_results_copy_the_configured_thresholds(harness: _Harness) -
 
 
 def test_a_skipped_round_is_never_counted_as_a_pass(harness: _Harness) -> None:
-    """The one documented skip is tallied in ``skipped`` alone, leaving ``passed`` at zero: AAP
-    §0.3.4 makes a skip a real outcome, and the four-integer ``Counts`` is what holds that."""
+    """The one documented skip is tallied in ``skipped`` alone, leaving ``passed`` at zero: a skip
+    is a real outcome, and the four-integer ``Counts`` is what holds that."""
     run = _drive("RN-SVG", harness)
     skipped = [outcome for outcome in run.rounds if outcome.round.status is Status.SKIPPED]
     assert len(skipped) == 1, "RN-SVG declares exactly one skip round"
@@ -2077,7 +2074,6 @@ def test_the_image_boundary_declares_the_pillow_module_the_probe_builds_with() -
 
 
 # The rasterization sink itself: its document guard, driven through the real function
-#
 # The autouse stub stands in for the tool, never for the guard: the reference allow-list, the byte
 # bound and the capture all live in ``rasterize_svg``, so these tests drive the real function with
 # the discovered tool replaced by an argv-only command that is this interpreter.
@@ -2206,7 +2202,7 @@ def test_the_rasterizer_sink_refuses_a_document_reaching_outside_itself(
     parsed tree can meet, is refused before a command is built, so the discovered tool is never
     spawned: `label` names the form under test, the raise quotes the offending value back in the
     form the scan reports it -- an escape spelling in its escaped form -- and a refused document
-    that reached the command seam would fail the case here (AAP NFR-2)."""
+    that reached the command seam would fail the case here."""
     argv_requests: list[str] = []
 
     def command(name: str) -> tuple[str, ...]:
@@ -2237,6 +2233,23 @@ _FRAGMENT_ONLY_DOCUMENT: Final[bytes] = _sink_document(
 )
 
 
+def _answer_with(monkeypatch: pytest.MonkeyPatch, argv: tuple[str, ...]) -> None:
+    """Answer the rasterizer's argv seam with `argv`, so no tool this host provides is spawned."""
+    monkeypatch.setattr(render_family, "_rasterizer_command", lambda name: argv)
+
+
+def _refusal(monkeypatch: pytest.MonkeyPatch, argv: tuple[str, ...]) -> str:
+    """Answer the argv seam with `argv` and return the sink's refusal of the fragment-only document.
+
+    The one shape every refusal case drives: the product's own ``rasterize_svg``, never a stand-in
+    for it, over a document whose only references are its own ``#fragment`` ones.
+    """
+    _answer_with(monkeypatch, argv)
+    with pytest.raises(RuntimeError) as raised:
+        _REAL_RASTERIZE_SVG(_FRAGMENT_ONLY_DOCUMENT, _RASTERIZER_STATUS)
+    return str(raised.value)
+
+
 def _emitting_command(png_bytes: bytes) -> tuple[str, ...]:
     """Return an argv-only command that writes `png_bytes` to its stdout, reading its stdin first.
 
@@ -2258,12 +2271,7 @@ def test_the_rasterizer_sink_still_rasterizes_a_document_of_same_document_fragme
     rasterized: the bytes the tool wrote come back unchanged, so the guard refuses references
     without refusing the artefact a conforming encoder produces."""
 
-    def command(name: str) -> tuple[str, ...]:
-        """Answer the rasterizer argv with a command that emits the stub's PNG."""
-        del name
-        return _emitting_command(_STUB_RASTER)
-
-    monkeypatch.setattr(render_family, "_rasterizer_command", command)
+    _answer_with(monkeypatch, _emitting_command(_STUB_RASTER))
     assert _REAL_RASTERIZE_SVG(_FRAGMENT_ONLY_DOCUMENT, _RASTERIZER_STATUS) == _STUB_RASTER
 
 
@@ -2306,7 +2314,7 @@ def test_the_cairosvg_path_restricts_the_fetcher_only_where_the_module_takes_one
 ) -> None:
     """The cairosvg path hands a fetcher that refuses every URL to a module whose ``svg2png`` takes
     one, and still calls a module whose ``svg2png`` does not: the restriction is never an argument
-    an older cairosvg would reject, and the document's own scan guards both (AAP NFR-2)."""
+    an older cairosvg would reject, and the document's own scan guards both."""
     seen: list[object] = []
     monkeypatch.setitem(
         sys.modules,
@@ -2351,19 +2359,10 @@ def test_the_rasterizer_sink_refuses_a_stream_past_its_byte_ceiling(
 ) -> None:
     """A rasterizer that floods either stream is refused for that alone: `stream` names the stream
     under test, and the raise names the ceiling the capture applied and the stream that passed it,
-    so that stream was closed at the bound instead of being buffered whole (AAP §0.3.2's bounded
-    reads, the rule the cli adapter applies to a target's streams)."""
+    so that stream was closed at the bound instead of being buffered whole."""
     monkeypatch.setattr(render_family, "_MAX_CAPTURED_RASTER_BYTES", _TINY_STREAM_BOUND_BYTES)
 
-    def command(name: str) -> tuple[str, ...]:
-        """Answer the rasterizer argv with a command that floods the stream under test."""
-        del name
-        return _flooding_command(stream, _STUB_RASTER)
-
-    monkeypatch.setattr(render_family, "_rasterizer_command", command)
-    with pytest.raises(RuntimeError) as excinfo:
-        _REAL_RASTERIZE_SVG(_FRAGMENT_ONLY_DOCUMENT, _RASTERIZER_STATUS)
-    message = str(excinfo.value)
+    message = _refusal(monkeypatch, _flooding_command(stream, _STUB_RASTER))
     assert f"{_TINY_STREAM_BOUND_BYTES}-byte" in message, (
         f"the refusal must name the ceiling it applied, got {message!r}"
     )
@@ -2412,15 +2411,7 @@ def test_a_failing_rasterizer_reports_the_exit_status_and_only_the_tail_of_its_s
     :data:`render_family._RASTERIZER_DIAGNOSTIC_CHARS` characters of its stderr, so one diagnostic
     never carries a whole captured stream into the report or the evidence."""
 
-    def command(name: str) -> tuple[str, ...]:
-        """Answer the rasterizer argv with a command that floods stderr and fails."""
-        del name
-        return _failing_command()
-
-    monkeypatch.setattr(render_family, "_rasterizer_command", command)
-    with pytest.raises(RuntimeError) as excinfo:
-        _REAL_RASTERIZE_SVG(_FRAGMENT_ONLY_DOCUMENT, _RASTERIZER_STATUS)
-    message = str(excinfo.value)
+    message = _refusal(monkeypatch, _failing_command())
     assert f"exited {_RASTERIZER_FAILURE_EXIT}" in message, message
     assert _STDERR_TAIL_MARKER in message, "the message must carry the end of what the tool said"
     assert len(message) < _LONG_STDERR_BYTES, (

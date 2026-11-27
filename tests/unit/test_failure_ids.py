@@ -2,18 +2,19 @@
 
 ``qrcheck.report.model.failure_id`` is the product's only derivation of the name a failure is filed
 under and ``qrcheck.evidence.naming`` calls it rather than re-deriving it, so the identifier in
-``summary.json`` and the last segment of an evidence directory cannot disagree (AAP §0.8.1 "single
-owner of each cross-cutting concern", §0.3.4 "Stable identifiers"). The pinned properties:
+``summary.json`` and the last segment of an evidence directory cannot disagree. The pinned
+properties:
 
 * **a stated formula** -- ``<CHECK-ID>__<case_id>__<reason>`` with every character outside
   ``[A-Za-z0-9._-]`` replaced by ``_`` and, past the bound, a retained prefix plus an 8-hex SHA-256
-  digest, recomputed in :func:`reference_failure_id` from the plan's words rather than transcribed
-  from a run, so a change fails here instead of renaming every evidence directory and CI trend line;
-* **one path segment** -- sanitization is the security control of AAP §0.3.2 and IM-7: a hostile
-  ``case_id`` such as ``"../../etc/passwd"`` must still resolve inside the report directory;
+  digest, recomputed in :func:`reference_failure_id` from the documented formula rather than
+  transcribed from a run, so a change fails here instead of renaming every evidence directory and
+  CI trend line;
+* **one path segment** -- sanitization is the security control: a hostile ``case_id`` such as
+  ``"../../etc/passwd"`` must still resolve inside the report directory;
 * **bounded** -- prefix and digest together stay within ``qrcheck.report.model.FAILURE_ID_MAX``;
 * **pure** -- a function of its three inputs alone, stable across processes and ``PYTHONHASHSEED``
-  values, because the directories it names are promised to be byte-stable (AAP §0.5.4).
+  values, because the directories it names are promised to be byte-stable.
 
 :func:`qrcheck.evidence.naming.sanitize` decides whether a component is usable at all, so its two
 hard behaviours are asserted: it refuses an empty component and the two still dangerous after the
@@ -80,15 +81,15 @@ _REPOSITORY_ROOT = _MODEL_PATH.parents[2]  # the directory that holds qrcheck/
 # restated, so this module cannot agree with a stale copy of the number.
 FAILURE_ID_LIMIT: int = model_module.FAILURE_ID_MAX
 
-# The sanitization rule, stated once (AAP §0.3.4: "every character outside
-# [A-Za-z0-9._-] replaced by _"). It is written out here instead of imported from the
-# module under test, so widening the replacement set - dropping "/" above all - fails
-# the assertions below instead of moving with the implementation.
+# The sanitization rule, stated once: every character outside [A-Za-z0-9._-] replaced by
+# ``_``. It is written out here instead of imported from the module under test, so widening
+# the replacement set - dropping "/" above all - fails the assertions below instead of moving
+# with the implementation.
 UNSAFE_SEGMENT_CHARS = re.compile(r"[^A-Za-z0-9._-]")
 
-# AAP §0.3.4: the truncation suffix is "an 8-hex sha256 suffix". Its length is the only
-# reason the retained prefix is shorter than the bound, and it is the one arithmetic
-# constant the formula needs.
+# The truncation suffix is 8 hexadecimal SHA-256 characters, as
+# ``qrcheck.report.model.failure_id`` computes it. Its length is the only reason the retained
+# prefix is shorter than the bound, and it is the one arithmetic constant the formula needs.
 DIGEST_CHARACTERS: int = 8
 
 
@@ -104,7 +105,7 @@ def reference_failure_id(
     check_id: str, case_id: str, reason: Reason | str | None
 ) -> str:
     """Recompute the documented failure-ID formula independently of the module. The expectation is
-    the plan's rule written out again - never a value copied from a run - so a change to the
+    the documented formula written out again - never a value copied from a run - so a change to the
     formula has to be a deliberate change in two places.
     """
     reason_text = "none" if reason is None else getattr(reason, "value", reason)
@@ -176,7 +177,7 @@ HOSTILE_CASE_IDS: tuple[str, ...] = tuple(sorted(set(_HOSTILE_SPECS)))
 # The components ``sanitize`` refuses outright: an empty component names nothing, and
 # "." and ".." survive the character rule while still escaping or collapsing the
 # directory they are joined to. They are unusable as a check ID and are asserted
-# separately from the components that are merely sanitized (AAP §0.3.2, IM-7).
+# separately from the components that are merely sanitized.
 REFUSED_COMPONENTS: tuple[str, ...] = ("", ".", "..")
 
 # The hostile components that survive :func:`sanitize` - the traversal attempts minus
@@ -195,7 +196,7 @@ TRAVERSAL_PAIRS: tuple[tuple[str, str], ...] = tuple(
     )
 )
 
-# The characters §0.3.4's rule must replace, one sample each: path separators, quoting
+# The characters the replacement rule covers, one sample each: path separators, quoting
 # and shell metacharacters, a control character, a two-byte code point and a four-byte
 # one. Sorted, so the ids are stable.
 UNSAFE_CHARACTERS: tuple[str, ...] = tuple(
@@ -285,7 +286,8 @@ SUBPROCESS_CASES: tuple[tuple[str, str, str | None], ...] = tuple(
     sorted(_SUBPROCESS_SPECS, key=repr)
 )
 
-# The one module allowed to define a failure ID, repository-relative (AAP §0.8.1).
+# The one module allowed to define a failure ID, repository-relative: every other module,
+# ``qrcheck.evidence.naming`` included, imports it rather than re-deriving it.
 FAILURE_ID_OWNER: str = "qrcheck/report/model.py"
 
 # The module that must consume it rather than re-derive it.
@@ -390,7 +392,7 @@ def test_a_hostile_case_id_leaves_nothing_a_filesystem_reads_as_a_path(
     """The identifier matches the safe set exactly and keeps the input's length. The length
     assertion states that the replacement is one-for-one per code point: a separator, a quote,
     a control character and a multi-byte character each cost the identifier a single character,
-    so the bound counts characters rather than bytes (AAP §0.3.4, §0.3.2, IM-7).
+    so the bound counts characters rather than bytes.
     """
     raw = _raw("RT-ROUNDTRIP", case_id, "value_mismatch")
     fid = failure_id("RT-ROUNDTRIP", case_id, "value_mismatch")
@@ -532,7 +534,7 @@ def test_a_degenerate_component_is_refused_by_the_layout(component: str) -> None
     """An empty, ``.`` or ``..`` component raises instead of naming a directory. The character
     rule alone cannot reject these: ``.`` and ``..`` are inside the safe set and are exactly
     the two names that collapse or escape the directory they are joined to, so the layout
-    refuses them by name (AAP §0.3.2, IM-7).
+    refuses them by name.
     """
     with pytest.raises(ValueError) as raised:
         sanitize(component)
@@ -557,7 +559,7 @@ def test_evidence_dir_never_leaves_the_report_directory(
     """Resolving the path is the assertion; inspecting the characters is not. A hostile check ID
     and a hostile case ID together must still name a directory under the configured report
     root, exactly three levels below it, because the layout is
-    ``<report_dir>/evidence/<check-id>/<failure-id>`` (AAP §0.3.4).
+    ``<report_dir>/evidence/<check-id>/<failure-id>``.
     """
     check_id, case_id = pair
     root = tmp_path.resolve()
@@ -694,7 +696,7 @@ def test_identifiers_do_not_depend_on_pythonhashseed(hash_seed: str) -> None:
     """A separate interpreter under a different hash seed produces the same identifiers. The
     suffix is a content digest, never ``hash()``: a ``hash()``-derived component would differ
     between the two child processes and between two machines, and the evidence directories it
-    names are promised to be byte-stable (AAP §0.5.4).
+    names are promised to be byte-stable.
     """
     expected = [failure_id(*case) for case in SUBPROCESS_CASES]
     assert _identifiers_in_subprocess(hash_seed) == expected
@@ -789,9 +791,9 @@ def test_the_scan_is_not_vacuous() -> None:
 # The result model records: what CaseResult and RunResult refuse
 # --------------------------------------------------------------------------- #
 
-# The field names AAP §0.3.4 states for each record, written out here rather than read
-# from the dataclasses under test, so a field that is added, dropped or renamed fails an
-# assertion below instead of moving with the implementation.
+# The field names each record is pinned to, written out here rather than read from the
+# dataclasses under test, so a field that is added, dropped or renamed fails an assertion
+# below instead of moving with the implementation.
 CASE_RESULT_FIELDS = (
     "check_id",
     "case_id",
@@ -892,12 +894,12 @@ def run_result(**overrides: Any) -> RunResult:
 
 
 # --------------------------------------------------------------------------- #
-# The record shape AAP §0.3.4 fixes
+# The record shape ``qrcheck.report.model`` fixes
 # --------------------------------------------------------------------------- #
 
 
 def test_case_result_keeps_the_ten_stated_fields() -> None:
-    """The record and its summary projection are exactly the AAP's ten fields."""
+    """The record and its summary projection are exactly the ten fields above."""
     assert tuple(field.name for field in dataclasses.fields(CaseResult)) == CASE_RESULT_FIELDS
     assert sorted(case_result().as_dict()) == sorted(CASE_RESULT_FIELDS)
 
@@ -1216,8 +1218,8 @@ def test_the_same_case_id_under_two_check_ids_is_accepted() -> None:
 
 # The twelve reason words the result model fixes, written out here in the order the enum
 # declares them rather than read back from the product, so a member that is reordered,
-# added, dropped or re-spelled has to disagree with this table (AAP §0.3.4 "Result model"
-# enumerates all twelve and spells each one).
+# added, dropped or re-spelled has to disagree with this table. ``Reason``'s own docstring
+# enumerates all twelve and spells each one.
 SPECIFIED_REASONS: tuple[str, ...] = (
     "unsupported_capability",
     "missing_dependency",
@@ -1235,9 +1237,9 @@ SPECIFIED_REASONS: tuple[str, ...] = (
 
 
 def test_an_internal_fault_has_a_reason_of_its_own() -> None:
-    """An ``error`` row names the framework's fault, not a check's verdict. AAP §0.6.6 row 11
-    contains an internal exception as an ``error`` result carrying its traceback instead of
-    aborting the run, so its cause needs a word of its own: without one, a real capacity-gate
+    """An ``error`` row names the framework's fault, not a check's verdict. The runner contains
+    an internal exception as an ``error`` result carrying its traceback instead of aborting the
+    run, so its cause needs a word of its own: without one, a real capacity-gate
     ``ValueError`` raised on the framework side can only be filed as ``capacity_violation`` - a
     check's verdict - and the ``reason`` ``summary.json`` records and the ``<error
     message=...>`` ``junit.xml`` emits then describe the row as something it is not.
@@ -1263,10 +1265,10 @@ def test_the_vocabulary_is_closed_at_the_twelve_specified_reasons_and_internal_e
 
     The thirteenth member exists for a state the twelve cannot name: an exception raised by a
     check or by the framework itself must become an ``error`` result carrying its traceback while
-    the run continues (AAP §0.6.6 row 11), a ``CaseResult`` refuses any non-``passed`` result that
-    carries no reason, and none of the twelve describes a fault of the framework rather than a
-    verdict on the target. ``internal_error`` is the one accepted addition, compared last, so a
-    second addition fails here as surely as a missing member does.
+    the run continues, a ``CaseResult`` refuses any non-``passed`` result that carries no reason,
+    and none of the twelve describes a fault of the framework rather than a verdict on the
+    target. ``internal_error`` is the one accepted addition, compared last, so a second addition
+    fails here as surely as a missing member does.
     """
     assert len(SPECIFIED_REASONS) == 12
     assert [member.value for member in Reason] == [*SPECIFIED_REASONS, "internal_error"]

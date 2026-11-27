@@ -1,9 +1,8 @@
 """The JUnit writer's ``xunit2`` shape, its one-child-per-status rule and its hygiene.
 
-AAP §0.6.1 gate 6 names this module as the gate that holds ``junit.xml``, the one artefact CI
-stores as evidence and gates a merge on. Every document is written by
-:func:`qrcheck.report.junit.write_junit` from a :class:`~qrcheck.report.model.RunResult` built
-by the shared factories (AAP §0.3.4, §0.5.3, §0.5.4).
+This module is the gate that holds ``junit.xml``, the one artefact CI stores as evidence and
+gates a merge on. Every document is written by :func:`qrcheck.report.junit.write_junit` from a
+:class:`~qrcheck.report.model.RunResult` built by the shared factories.
 
 Pinned: one ``testsuites`` root holding exactly one ``testsuite name="qrcheck"``; ``tests``,
 ``failures``, ``errors`` and ``skipped`` equal to the run's four integers, so a skipped case can
@@ -13,7 +12,7 @@ order; ``name`` as ``<CHECK-ID>[<case-id>]``, ``classname`` as ``qrcheck.<family
 degrades to ``qrcheck.unknown``) and ``time`` with exactly three decimals, because a raw float
 renders as ``1.25`` or ``1e-05``; exactly one child element per skipped, failed or errored
 status; the deliberate absences -- no ``hostname``, no ``timestamp``, no ``file``/``line`` --
-because a wall-clock reading makes two identical runs differ (AAP §0.5.5); and byte-identical
+because a wall-clock reading makes two identical runs differ; and byte-identical
 documents once ``time`` is masked.
 
 XML 1.0 safety is held here too: ``ElementTree`` escapes markup but emits a control character
@@ -53,8 +52,9 @@ _TIME_ATTRIBUTE = re.compile(rb'time="[^"]*"')
 # not a duration, so a masked document can never be mistaken for a measured one.
 _MASKED_TIME = b'time="<masked>"'
 
-# The two shapes AAP §0.3.4 fixes for a duration: three decimals on a testcase, and any
-# number of them on the suite, whose total is a sum rather than a measurement.
+# The two shapes :func:`qrcheck.report.junit.write_junit` fixes for a duration: three decimals
+# on a testcase, and any number of them on the suite, whose total is a sum rather than a
+# measurement.
 _THREE_DECIMALS = re.compile(r"\d+\.\d{3}")
 _SUITE_TIME = re.compile(r"\d+\.\d+")
 
@@ -79,7 +79,7 @@ _TEXT_FREE_TAGS = frozenset({"testsuites", "testsuite", "testcase", "skipped"})
 
 # Names pytest's own ``--junitxml`` emits, or that a JUnit dialect allows, and that this
 # writer deliberately does not: a hostname or a wall-clock reading in the document makes two
-# identical runs differ (AAP §0.5.4, §0.5.5).
+# identical runs differ.
 _FORBIDDEN_NAMES = frozenset(
     {
         "assertions",
@@ -632,7 +632,7 @@ def test_two_runs_that_differ_only_in_durations_agree_once_time_is_masked(
     report_dir: Path,
 ) -> None:
     """Duration and timestamps are the whole volatile inventory, and only ``time`` escapes: the
-    documents differ before masking and are equal after it (AAP §0.5.4)."""
+    documents differ before masking and are equal after it."""
     first = _durations_run(make_case_result, make_run_result, first_ms=1.5, second_ms=900.0)
     second = _durations_run(
         make_case_result,

@@ -9,12 +9,12 @@ bytes, and the four ways that can go wrong (a missing file, a path that is a dir
 that does not decode, an empty body) all arrive as
 :class:`~qrcheck.targets.base.TargetContractError`, never as the ``OSError`` or
 ``binascii.Error`` underneath; a response's shape comes only from configuration, ``_body`` being
-the one sentinel the adapter may know (AAP §0.3.4), whose mechanical half is the AST deny-list
-over ``qrcheck/targets/http.py``; and a subprocess is argv-only -- ``str`` words, ``shell=False``,
-the configured ``timeout_s`` handed to ``subprocess.run`` and both of the child's streams captured
-through the adapter's own bounded pipes rather than ``capture_output`` (AAP §0.3.2, NFR-7), because
-a missing timeout would let a hung target hang the whole run and an unbounded capture would let a
-chatty one exhaust the runner.
+the one sentinel the adapter may know, whose mechanical half is the AST deny-list over
+``qrcheck/targets/http.py``; and a subprocess is argv-only -- ``str`` words, ``shell=False``, the
+configured ``timeout_s`` handed to ``subprocess.run`` and both of the child's streams captured
+through the adapter's own bounded pipes rather than ``capture_output``, because a missing timeout
+would let a hung target hang the whole run and an unbounded capture would let a chatty one exhaust
+the runner.
 
 Deliberately not asserted: the ``declared_*`` fields are the target's own claim, so what is
 pinned is that they carry what the configured path holds and stay ``None`` when nothing is
@@ -98,10 +98,10 @@ _HTTP_URL: Final[str] = "http://127.0.0.1:18000/generate"
 _HTTP_MODULE_PATH: Final[Path] = Path(http_module.__file__).resolve()
 
 # The vendor field names the HTTP adapter may never name: a literal equal to one of these anywhere
-# in ``qrcheck/targets/http.py`` means the module learned a response shape of its own, which is the
-# AAP §0.3.4 MUST NOT. The only response-shape vocabulary it may hold is the ``_body`` sentinel and
-# the placeholder tokens of :data:`qrcheck.config.models.TEMPLATE_FIELDS`. Sorted, so a failure
-# message lists the offenders in one fixed order.
+# in ``qrcheck/targets/http.py`` means the module learned a response shape of its own, which the
+# configuration-only contract forbids. The only response-shape vocabulary it may hold is the
+# ``_body`` sentinel and the placeholder tokens of :data:`qrcheck.config.models.TEMPLATE_FIELDS`.
+# Sorted, so a failure message lists the offenders in one fixed order.
 _VENDOR_FIELD_DENYLIST: Final[tuple[str, ...]] = tuple(
     sorted(
         {
@@ -173,7 +173,7 @@ def _library_target(
         capabilities=frozenset(capabilities),
         callable=callable_path,
         kwargs_map=dict(kwargs_map or {}),
-        returns=returns,  # type: ignore[arg-type]
+        returns=returns,
         metadata_map=dict(metadata_map or {}),
     )
 
@@ -197,7 +197,7 @@ def _cli_target(
         command=command,
         payload_arg=payload_arg,
         output_arg=output_arg,
-        returns=returns,  # type: ignore[arg-type]
+        returns=returns,
         metadata_map=dict(metadata_map or {}),
     )
 
@@ -270,8 +270,8 @@ def _install_fake_process(
 
 
 def _assert_argv_only(calls: list[tuple[list[str], dict[str, Any]]]) -> list[str]:
-    """Assert the one recorded invocation is argv-only and return its vector -- the properties
-    AAP §0.3.2 and NFR-7 require (a list of text words, no shell, the configured timeout) together
+    """Assert the one recorded invocation is argv-only and return its vector -- the properties the
+    argv-only contract requires (a list of text words, no shell, the configured timeout) together
     with the bound this module's own capture enforces in place of ``capture_output`` (both streams
     are the adapter's descriptors, never ``subprocess.PIPE``)."""
     assert len(calls) == 1, f"expected exactly one invocation, recorded {len(calls)}"
@@ -484,8 +484,8 @@ def test_an_empty_metadata_map_reads_nothing() -> None:
 
 
 def test_metadata_map_reports_a_field_the_response_does_not_carry() -> None:
-    """A configured path the response lacks is a contract error naming field and path -- AAP
-    §0.3.4's "missing field named in config" trigger, so the diagnostic says what to fix."""
+    """A configured path the response lacks is a contract error naming field and path, so the
+    diagnostic says what to fix."""
     with pytest.raises(TargetContractError) as raised:
         apply_metadata_map(_RESPONSE, {"mask": "metadata.mask"})
 
@@ -610,7 +610,7 @@ def test_kwargs_map_projects_each_configured_field_onto_its_kwarg(
     kwargs_seen = received[0]
     assert sorted(kwargs_seen) == sorted(kwargs_map.values())
     assert kwargs_seen["text"] == _PAYLOAD
-    assert kwargs_seen["text"].decode("utf-8") == _PAYLOAD_TEXT  # type: ignore[union-attr]
+    assert kwargs_seen["text"].decode("utf-8") == _PAYLOAD_TEXT
     assert kwargs_seen["ecl"] == request.ec_level
     assert kwargs_seen["fmt"] == request.output_format
     assert kwargs_seen["scale"] == request.module_size_px
@@ -789,7 +789,7 @@ def test_the_timeout_the_transport_receives_is_the_resolved_configurations(
     config_factory: Callable[..., Any],
 ) -> None:
     """The ``timeout_s`` handed to the transport is the resolved record's, not a literal -- the
-    property NFR-7 and AAP §0.3.2 rest on."""
+    property the argv-only contract rests on."""
     target = CLITarget(
         name="cli",
         type="cli",
@@ -802,7 +802,7 @@ def test_the_timeout_the_transport_receives_is_the_resolved_configurations(
     )
     resolved = config_factory(targets={"cli": target}).targets["cli"]
     calls = _install_fake_process(monkeypatch, written=_PNG_BYTES, stdout=_PNG_BYTES)
-    adapter = CliAdapter(resolved)  # type: ignore[arg-type]
+    adapter = CliAdapter(resolved)
 
     adapter.generate(GenerateRequest(payload=_PAYLOAD))
 

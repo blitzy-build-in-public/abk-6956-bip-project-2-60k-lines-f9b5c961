@@ -357,7 +357,7 @@ The rasterizer discovery itself has one owner, `qrcheck/checks/render.py`, and o
 | root | `qrcheck/__init__.py`, `qrcheck/__main__.py` | package surface, version, and the `python -m qrcheck` entry point |
 | root | `qrcheck/runner.py` | orchestration of exactly one sequential run: probe, resolve, walk, fail-fast, target-loss policy, accumulate, close |
 | root | `qrcheck/loc.py` | the one definition of a tracked physical line, comments and blanks included |
-| `qrcheck/cli/` | `main.py`, `run.py`, `doctor.py`, `list.py`, `corpus.py`, `loc.py`, `exit.py` | the click group and the five subcommands, plus the only exit-code mapping |
+| `qrcheck/cli/` | `main.py`, `run.py`, `doctor.py`, `list.py`, `corpus.py`, `loc.py`, `exit.py`, `support.py` | the click group and the five subcommands, the only exit-code mapping, and the click plumbing every command module shares — the group's `--config` resolution and the command class that turns a returned exit code into the process status |
 | `qrcheck/config/` | `schema.py`, `load.py`, `models.py`, `seeding.py` | the configuration contract, TOML loading with path resolution, the resolved dataclasses, the single seed derivation point |
 | `qrcheck/targets/` | `base.py`, `library.py`, `cli.py`, `http.py`, `reference.py`, `defective.py`, `__init__.py` | the adapter port, its five implementations and the factory table |
 | `qrcheck/decode/` | `base.py`, `zxing.py`, `opencv.py`, `consensus.py`, `matrix.py`, `format_info.py`, `__init__.py` | the two decoder wrappers, the consensus classification, grid sampling and format information, plus the facade and availability probes |
@@ -384,6 +384,7 @@ Each cross-cutting concern has exactly one owner, and **a second implementation 
 | Request construction and the capability gate | `qrcheck/targets/base.py` |
 | Report serialization | `qrcheck/report/junit.py`, `qrcheck/report/json_report.py`, `qrcheck/report/html.py` |
 | Exit-code decisions | `qrcheck/cli/exit.py` |
+| The group's `--config` resolution and the command class that carries a returned exit code to the process status | `qrcheck/cli/support.py`, imported by every command module and importing none of them |
 | SVG rasterizer discovery and rasterization | `qrcheck/checks/render.py`, imported into the CLI and never the reverse |
 
 Three consequences of that table are worth naming, because they are the ones a change tends to duplicate:

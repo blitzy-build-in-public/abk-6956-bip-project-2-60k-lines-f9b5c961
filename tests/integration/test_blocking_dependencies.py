@@ -1,15 +1,15 @@
 """Every pinned runtime dependency blocks a run, and the diagnostic names it and the lock file.
 
-AAP §0.7.2: ``segno`` is the oracle and ``numpy``, ``Pillow``, ``httpx`` and ``click`` are
-imported at their point of use, so an unusable one "blocks with a diagnostic naming the missing
-distribution and pointing at ``requirements.lock``; a broken install is an environment error
-(exit 2), not a silent degradation". Held at the process boundary: ``doctor`` and ``run`` both
+``segno`` is the oracle and ``numpy``, ``Pillow``, ``httpx`` and ``click`` are imported at their
+point of use, so an unusable one "blocks with a diagnostic naming the missing distribution and
+pointing at ``requirements.lock``; a broken install is an environment error (exit 2), not a
+silent degradation". Held at the process boundary: ``doctor`` and ``run`` both
 exit 2 -- never 3, never with a traceback -- naming the distribution and the lock file, and the
 run writes no report, ``httpx`` getting its own case because it loads only for an ``http``
 target. Absence is the state a broken installation really has -- module present, import failing
 -- produced by the :func:`unimportable_module` fixture, whose stub reaches the child process
 through ``PYTHONPATH`` while the distribution metadata still reports the installed version. No
-test skips or retries (AAP §0.4.3, §0.5.6), and every artefact lands under ``tmp_path``.
+test skips or retries, and every artefact lands under ``tmp_path``.
 """
 
 from __future__ import annotations
@@ -79,7 +79,7 @@ def assert_refusal(result: Any, distribution: str) -> None:
     """Assert ``result`` is the exit-2 environment diagnostic naming ``distribution``.
 
     A traceback or an ``internal error`` line means the fault reached the last-resort handler, and a
-    missing lock-file reference leaves the reader no install to fix (AAP §0.7.2).
+    missing lock-file reference leaves the reader no install to fix.
     """
     assert result.exit_code == EXIT_CONFIG, (
         f"the command exited {result.exit_code} with {distribution!r} unimportable, expected "

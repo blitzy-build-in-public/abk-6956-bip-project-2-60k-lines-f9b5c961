@@ -1,18 +1,21 @@
 """The HTML page's substance: its panels, its verdicts, its images, its escapes.
 
-AAP §0.9.1 names this module as the place the writer's contract is held, and AAP §0.8.4 fixes
-what the page promises its reader: a failing case's block shows the ``request.json`` the
-evidence store wrote, and no page state may let a reader read a run that did not pass as a pass.
+This module is the place the writer's contract is held, and the page's promises to its reader are
+fixed here: a failing case's block shows the request that produced it --
+the model's projection with the case's identity envelope over it, which the evidence store's
+``request.json`` may enrich with the parameters its check resolved -- and no page state may let a
+reader read a run that did not pass as a pass.
 
 Pinned: a run that recorded no result states that no case ran, keeps its four zero tallies and
-replaces the results table with the empty-state paragraph; the ``request.json`` panel parses to
-the recorded artefact with its identity envelope; the two verdicts that already worked stay as
-they were, so the empty-state branch cannot reorder the precedence AAP §0.3.4 fixes; and the
-page's obligations are read back out of the document it wrote -- the header's identity, duration
-and four tallies, one row per result in ``(check_id, case_id)`` order, a skip in the skip block,
-the failing case's images decoded out of their ``data:`` URIs, a banner only where the results
-prove a degradation, the errored case's traceback, and a second write byte-identical to the
-first.
+replaces the results table with the empty-state paragraph; the failures and skipped sections are
+rendered on every page, and each states in one fixed sentence when its own set is empty rather
+than disappearing; the ``request.json`` panel parses to the recorded artefact with its identity
+envelope; the two verdicts that already worked stay as they were, so the empty-state branch
+cannot reorder the documented precedence; and the page's obligations are read back out of
+the document it wrote -- the header's identity, duration and four tallies, one row per result in
+``(check_id, case_id)`` order, a skip in the skip block, the failing case's images decoded out of
+their ``data:`` URIs, a banner only where the results prove a degradation, the errored case's
+traceback, and a second write byte-identical to the first.
 
 Self-containment and escaping are held here too: the page reaches no external origin, and
 escaped text keeps its non-ASCII characters literally and still parses back out of the panel.
@@ -30,6 +33,7 @@ from html import unescape
 from html.parser import HTMLParser
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 import segno
@@ -56,11 +60,11 @@ from qrcheck.report.model import (
 )
 
 # The fragments of the document the assertions read, matched on the markup the writer
-# emits: the verdict line with its colour modifier, the body of the panel headed
-# request.json, and one tally figure.
+# emits: the verdict line with its colour modifier, one named JSON panel with the
+# attributes of its ``pre``, and one tally figure.
 _VERDICT = re.compile(r'<p class="verdict (?P<modifier>[a-z-]+)">(?P<text>[^<]*)</p>')
-_REQUEST_PANEL = re.compile(
-    r"<h4>request\.json</h4>\s*<pre[^>]*>(?P<body>.*?)</pre>", re.DOTALL
+_PANEL = re.compile(
+    r"<h4>(?P<heading>[^<]*)</h4>\s*<pre(?P<attributes>[^>]*)>(?P<body>.*?)</pre>", re.DOTALL
 )
 _COUNT_VALUE = re.compile(r'<span class="count-value">(?P<value>[^<]*)</span>')
 
@@ -90,6 +94,51 @@ _SRC_ATTRIBUTE = re.compile(r'src="(?P<value>[^"]*)"')
 _REFERENCE = re.compile(r'\b(?:src|href)="(?P<value>[^"]*)"')
 _TAG = re.compile(r"<[^>]*>")
 
+# The stylesheet the page carries, read as CSS rather than as markup: one fact of a facts grid
+# with the attributes of the div that wraps it, the style element's body, one rule with its
+# selector list, and a comment to drop before the rules are read.
+_FACT_ITEM = re.compile(
+    r"<div(?P<attributes>[^>]*)><dt>(?P<label>[^<]*)</dt><dd>(?P<value>[^<]*)</dd></div>"
+)
+_STYLESHEET = re.compile(r"<style>(?P<body>.*?)</style>", re.DOTALL)
+_CSS_RULE = re.compile(r"(?P<selectors>[^{}]+)\{(?P<declarations>[^{}]*)\}")
+_CSS_COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
+
+# Every box in the page that can hold an unbreakable identifier - a case id, an evidence path,
+# a check id in a skip bullet - and so has to wrap one inside itself rather than widen the page.
+_IDENTIFIER_BOXES: tuple[str, ...] = (
+    'tbody td[data-label="Case"]',
+    ".facts dd",
+    ".reasons dd",
+    ".evidence h3",
+    ".skips li",
+)
+
+# The table's fixed-vocabulary columns. Their words are short and known, so they must NOT wrap
+# anywhere: `anywhere` lowers a cell's minimum width, and a wordless break in `skipped` or
+# `value_mismatch` is a defect of its own on a viewport where the identifier column is squeezed.
+_FIXED_VOCABULARY_CELLS: tuple[str, ...] = (
+    "tbody td",
+    'tbody td[data-label="Check"]',
+    'tbody td[data-label="Status"]',
+    'tbody td[data-label="Reason"]',
+    'tbody td[data-label="Duration"]',
+    'tbody td[data-label="Evidence"]',
+)
+
+
+# The one sentence each case section states when its set is empty, held verbatim: they are
+# fixed text by contract - no count, no path, nothing this run measured - so a test that
+# matched only a prefix would let a number creep into the page unnoticed.
+_EMPTY_FAILURES = (
+    '<p class="empty-state">No failures or errors in this run: no case recorded a failed or '
+    "errored outcome, so there is no failing case to inspect.</p>"
+)
+_EMPTY_SKIPS = (
+    '<p class="empty-state">No skipped cases in this run: no case recorded a skipped outcome, '
+    "so nothing was left unexercised for a missing capability, dependency or platform.</p>"
+)
+
 # The accessibility skeleton the writer emits, read back one property at a time: the six column
 # labels the table's header row carries in the order the columns are defined, one column header,
 # the caption body, and the level of one heading element.
@@ -110,7 +159,7 @@ _HEADING_LEVEL = re.compile(r"<h(?P<level>[1-4])>")
 _SVG: bytes = b'<svg xmlns="http://www.w3.org/2000/svg" width="21" height="21"></svg>'
 
 # The traceback an errored case carries, already free of any frame path, so this module
-# pins the error branch without holding an absolute path of its own (AAP §0.5.5).
+# pins the error branch without holding an absolute path of its own.
 _TRACEBACK: str = (
     "Traceback (most recent call last):\n"
     '  File "qrcheck/checks/performance.py", line 42, in cases\n'
@@ -178,7 +227,7 @@ _REQUEST: dict[str, object] = {
 }
 
 # The two runs whose verdicts the empty-state branch must leave alone: one all-passing and
-# one whose only result is a skip, which is never a plain pass (AAP §0.3.4).
+# one whose only result is a skip, which is never a plain pass.
 _PASSING_RESULTS: tuple[CaseResult, ...] = (
     CaseResult(
         check_id="RT-ROUNDTRIP",
@@ -237,7 +286,7 @@ def _run(*results: CaseResult, **overrides: object) -> RunResult:
         "results": results,
     }
     fields.update(overrides)
-    return RunResult(**fields)  # type: ignore[arg-type]
+    return RunResult(**fields)
 
 
 def _write_page(root: Path, run: RunResult) -> str:
@@ -301,6 +350,15 @@ def _error_case(check_id: str, case_id: str) -> CaseResult:
     )
 
 
+def _recorded(case: CaseResult, root: Path, **artifacts: Any) -> CaseResult:
+    """Return ``case`` carrying the evidence directory the store wrote for it under ``root``.
+
+    ``artifacts`` are the keyword arguments :meth:`EvidenceStore.record` takes for the images a
+    case recorded, so a test names the artefacts it wrote rather than repeating the store's call.
+    """
+    return dataclasses.replace(case, evidence_dir=EvidenceStore(root).record(case, **artifacts))
+
+
 def _header(document: str) -> str:
     """Return the body of the document's header region."""
     match = _HEADER.search(document)
@@ -320,13 +378,17 @@ def _rows(document: str) -> list[dict[str, str]]:
     return rows
 
 
-def _panel(document: str, heading: str) -> object:
-    """Return the JSON the panel headed ``heading`` renders, parsed back out of the page."""
-    match = re.search(
-        rf"<h4>{re.escape(heading)}</h4>\s*<pre[^>]*>(?P<body>.*?)</pre>", document, re.DOTALL
-    )
-    assert match is not None
-    return json.loads(unescape(match.group("body")))
+def _panels(document: str, heading: str) -> list[Any]:
+    """Return the JSON every panel headed ``heading`` renders, parsed back out of the page."""
+    markup = [match for match in _PANEL.finditer(document) if match.group("heading") == heading]
+    return [json.loads(unescape(match.group("body"))) for match in markup]
+
+
+def _panel(document: str, heading: str) -> Any:
+    """Return the JSON the first panel headed ``heading`` renders, parsed out of the page."""
+    panels = _panels(document, heading)
+    assert panels, heading
+    return panels[0]
 
 
 def _figures(document: str) -> list[tuple[str, bytes]]:
@@ -337,6 +399,35 @@ def _figures(document: str) -> list[tuple[str, bytes]]:
         assert source.startswith("data:"), source
         figures.append((figure.group("name"), decode_base64(source.split(",", 1)[1])))
     return figures
+
+
+def _stylesheet(document: str) -> str:
+    """Return the body of the document's single inline stylesheet."""
+    match = _STYLESHEET.search(document)
+    assert match is not None
+    return match.group("body")
+
+
+def _declarations(stylesheet: str, selector: str) -> str:
+    """Return the declarations of the rule that selects ``selector`` alone, normalised."""
+    for rule in _CSS_RULE.finditer(_CSS_COMMENT.sub("", stylesheet)):
+        if selector in (part.strip() for part in rule.group("selectors").split(",")):
+            return " ".join(rule.group("declarations").split())
+    return ""
+
+
+def _wrapping_selectors(stylesheet: str) -> set[str]:
+    """Return the selectors whose rule declares ``overflow-wrap: anywhere`` in ``stylesheet``."""
+    selectors: set[str] = set()
+    for rule in _CSS_RULE.finditer(_CSS_COMMENT.sub("", stylesheet)):
+        if "overflow-wrap: anywhere" not in rule.group("declarations"):
+            continue
+        selectors.update(
+            selector
+            for selector in (part.strip() for part in rule.group("selectors").split(","))
+            if selector
+        )
+    return selectors
 
 
 class _DocumentParser(HTMLParser):
@@ -417,13 +508,11 @@ def test_request_panel_renders_the_recorded_artefact(
 ) -> None:
     """The panel's text parses to the artefact on disk, the case's identity included."""
     case = _failed_case(payload)
-    recorded = dataclasses.replace(case, evidence_dir=EvidenceStore(tmp_path).record(case))
+    recorded = _recorded(case, tmp_path)
     assert recorded.evidence_dir is not None
 
     document = _write_page(tmp_path, _run(recorded))
-    panel = _REQUEST_PANEL.search(document)
-    assert panel is not None
-    rendered = json.loads(unescape(panel.group("body")))
+    rendered = _panel(document, "request.json")
     artefact = json.loads(
         (tmp_path / recorded.evidence_dir / "request.json").read_text(encoding="utf-8")
     )
@@ -438,9 +527,7 @@ def test_page_embeds_its_image_and_reaches_no_external_origin(tmp_path: Path) ->
     """The page stays one self-contained file: inline CSS, a data: image, no origin."""
     case = _failed_case(_REQUEST)
     symbol = SimpleNamespace(image_bytes=_png("qrcheck"), output_format="png")
-    recorded = dataclasses.replace(
-        case, evidence_dir=EvidenceStore(tmp_path).record(case, symbol=symbol)
-    )
+    recorded = _recorded(case, tmp_path, symbol=symbol)
 
     document = _write_page(tmp_path, _run(recorded))
 
@@ -461,15 +548,13 @@ def test_hostile_identifier_stays_escaped_and_parses_back_out_of_the_panel(
     """A target-supplied case identifier reaches the page as text, never as markup."""
     hostile = "corpus:<script>alert(1)</script>"
     case = dataclasses.replace(_failed_case(_REQUEST), case_id=hostile)
-    recorded = dataclasses.replace(case, evidence_dir=EvidenceStore(tmp_path).record(case))
+    recorded = _recorded(case, tmp_path)
 
     document = _write_page(tmp_path, _run(recorded))
 
     assert "<script" not in document
     assert "&lt;script&gt;alert(1)&lt;/script&gt;" in document
-    panel = _REQUEST_PANEL.search(document)
-    assert panel is not None
-    assert json.loads(unescape(panel.group("body")))["case_id"] == hostile
+    assert _panel(document, "request.json")["case_id"] == hostile
 
 
 def test_a_lone_surrogate_in_an_identifier_or_a_decoded_value_becomes_u_fffd(
@@ -490,7 +575,7 @@ def test_a_lone_surrogate_in_an_identifier_or_a_decoded_value_becomes_u_fffd(
     )
     # Recorded rather than left unpersisted: a failing case's detail block needs its evidence, and
     # the store now writes a case whose text carries a surrogate instead of refusing the case.
-    recorded = dataclasses.replace(case, evidence_dir=EvidenceStore(tmp_path).record(case))
+    recorded = _recorded(case, tmp_path)
     assert recorded.evidence_dir is not None
 
     document = _write_page(tmp_path, _run(recorded))
@@ -511,24 +596,39 @@ def test_a_lone_surrogate_in_an_identifier_or_a_decoded_value_becomes_u_fffd(
 
 
 @pytest.mark.parametrize(
-    ("results", "text", "modifier"),
+    ("results", "text", "modifier", "skips"),
     (
-        (_PASSING_RESULTS, "run passed", "verdict-passed"),
-        (_SKIPPED_RESULTS, "run passed (skips present)", "verdict-skipped"),
+        (_PASSING_RESULTS, "run passed", "verdict-passed", False),
+        (_SKIPPED_RESULTS, "run passed (skips present)", "verdict-skipped", True),
     ),
     ids=("all-passing", "skips-only"),
 )
 def test_a_run_with_results_keeps_its_verdict(
-    tmp_path: Path, results: tuple[CaseResult, ...], text: str, modifier: str
+    tmp_path: Path,
+    results: tuple[CaseResult, ...],
+    text: str,
+    modifier: str,
+    skips: bool,
 ) -> None:
-    """A run with results keeps its verdict, its table and no empty-state paragraph."""
+    """A run with results keeps its verdict, its table and states the sets it left empty.
+
+    Both case sections are rendered whatever the run recorded, so an empty set is a statement
+    rather than a missing heading: neither run here has a failure, so the failures section
+    carries its one empty sentence, and the skipped section carries its own exactly when the
+    run skipped nothing - a skip is listed instead, under its reason.
+    """
     document = _write_page(tmp_path, _run(*results))
 
     verdict = _VERDICT.search(document)
     assert verdict is not None
     assert (verdict.group("text"), verdict.group("modifier")) == (text, modifier)
-    assert '<p class="empty-state">' not in document
     assert '<table role="table">' in document
+    assert _FAILURES_SECTION.search(document) is not None
+    assert _EMPTY_FAILURES in document
+    assert _SKIPPED_SECTION.search(document) is not None
+    assert (_EMPTY_SKIPS in document) is (not skips)
+    assert document.count('<section id="ev-') == 0
+    assert "<img" not in document
 
 
 def test_header_states_the_run_identity_and_its_four_tallies(tmp_path: Path) -> None:
@@ -565,8 +665,8 @@ def test_every_result_gets_one_row_in_check_then_case_order(tmp_path: Path) -> N
     submitted = (
         _passed_case("RT-ROUNDTRIP", "corpus:url-002"),
         _skipped_case("DM-RESILIENCE", "corpus:random-bytes-001", Reason.UNSUPPORTED_CAPABILITY),
-        dataclasses.replace(errored, evidence_dir=EvidenceStore(tmp_path).record(errored)),
-        dataclasses.replace(failure, evidence_dir=EvidenceStore(tmp_path).record(failure)),
+        _recorded(errored, tmp_path),
+        _recorded(failure, tmp_path),
         _passed_case("RT-ROUNDTRIP", "corpus:url-001"),
     )
     run = _run(*submitted)
@@ -588,15 +688,18 @@ def test_every_result_gets_one_row_in_check_then_case_order(tmp_path: Path) -> N
 
 
 def test_the_skipped_block_lists_each_skip_under_its_own_reason(tmp_path: Path) -> None:
-    """A skip is filed in its own block under its reason token, never with the failures."""
+    """A skip is filed in its own block under its reason token, never with the failures.
+
+    The failures section is rendered for this run too and states that it holds none, so a
+    skip-only run cannot look like a run whose failure section went missing.
+    """
     skips = (
         _skipped_case("RN-SVG", "synthetic:svg-rasterizer", Reason.MISSING_DEPENDENCY),
         _skipped_case("RN-LOGO", "synthetic:logo-overlay", Reason.UNSUPPORTED_CAPABILITY),
         _skipped_case("CL-ARTIFACTS", "synthetic:open-handles", Reason.UNSUPPORTED_PLATFORM),
     )
-    store = EvidenceStore(tmp_path)
     recorded = (
-        dataclasses.replace(skips[0], evidence_dir=store.record(skips[0])),
+        _recorded(skips[0], tmp_path),
         *skips[1:],
     )
     run = _run(*recorded)
@@ -611,7 +714,10 @@ def test_the_skipped_block_lists_each_skip_under_its_own_reason(tmp_path: Path) 
     assert [row["Status"] for row in _rows(document)] == ["skipped"] * len(skips)
     assert [row["Reason"] for row in _rows(document)] == [case.reason.value for case in run.results]
     assert block.count("<li><code>") == len(skips)
-    assert _FAILURES_SECTION.search(document) is None
+    failures = _FAILURES_SECTION.search(document)
+    assert failures is not None
+    assert _EMPTY_FAILURES in failures.group("body")
+    assert '<section id="ev-' not in failures.group("body")
     assert _COUNT_VALUE.findall(_header(document)) == ["0", "0", str(len(skips)), "0"]
     assert [row["Evidence"] for row in _rows(document)] == [
         "recorded, not shown" if case.evidence_dir else "—" for case in run.results
@@ -623,12 +729,10 @@ def test_a_missing_evidence_directory_states_the_failure_and_embeds_nothing(
 ) -> None:
     """A failure whose evidence is gone says so, rather than embedding an empty image."""
     failure = _failed_case(_REQUEST)
-    recorded = dataclasses.replace(
+    recorded = _recorded(
         failure,
-        evidence_dir=EvidenceStore(tmp_path).record(
-            failure,
-            symbol=SimpleNamespace(image_bytes=_derived_png("symbol"), output_format="png"),
-        ),
+        tmp_path,
+        symbol=SimpleNamespace(image_bytes=_derived_png("symbol"), output_format="png"),
     )
     assert recorded.evidence_dir is not None
     shutil.rmtree(tmp_path / recorded.evidence_dir)
@@ -649,17 +753,13 @@ def test_a_failing_case_embeds_the_images_the_evidence_store_wrote(
     """Every image a failing case recorded is embedded, and its alternative describes it."""
     failure = _failed_case(_REQUEST)
     damage_name = DAMAGE_ARTIFACT_TEMPLATE.format(kind="blur", seed=failure.seed)
-    recorded = dataclasses.replace(
+    recorded = _recorded(
         failure,
-        evidence_dir=EvidenceStore(report_dir).record(
-            failure,
-            symbol=SimpleNamespace(image_bytes=_derived_png("symbol"), output_format="png"),
-            repeat_symbol=SimpleNamespace(
-                image_bytes=_derived_png("repeat"), output_format="png"
-            ),
-            damage_variants=(("blur", _derived_png("damage")),),
-            logo=_derived_png("logo"),
-        ),
+        report_dir,
+        symbol=SimpleNamespace(image_bytes=_derived_png("symbol"), output_format="png"),
+        repeat_symbol=SimpleNamespace(image_bytes=_derived_png("repeat"), output_format="png"),
+        damage_variants=(("blur", _derived_png("damage")),),
+        logo=_derived_png("logo"),
     )
     assert recorded.evidence_dir is not None
     assert recorded.evidence_dir.startswith(f"{EVIDENCE_DIR_NAME}/")
@@ -694,7 +794,11 @@ def test_a_failing_case_embeds_the_images_the_evidence_store_wrote(
 
 
 def test_a_passing_case_embeds_no_image(tmp_path: Path) -> None:
-    """A case with no evidence directory contributes a row, no block and no image."""
+    """A case with no evidence directory contributes a row, no block and no image.
+
+    Both case sections are still rendered, each stating that this run left its set empty,
+    so an all-passing page says so in words instead of ending at the results table.
+    """
     run = _run(
         _passed_case("RT-ROUNDTRIP", "corpus:url-001"),
         _passed_case("RT-ROUNDTRIP", "corpus:url-002"),
@@ -704,8 +808,12 @@ def test_a_passing_case_embeds_no_image(tmp_path: Path) -> None:
     assert "<img" not in document
     assert "data:" not in document
     assert _FIGURE.findall(document) == []
-    assert _FAILURES_SECTION.search(document) is None
-    assert _SKIPPED_SECTION.search(document) is None
+    failures = _FAILURES_SECTION.search(document)
+    assert failures is not None
+    assert _EMPTY_FAILURES in failures.group("body")
+    skipped = _SKIPPED_SECTION.search(document)
+    assert skipped is not None
+    assert _EMPTY_SKIPS in skipped.group("body")
     assert [(row["Status"], row["Reason"], row["Evidence"]) for row in _rows(document)] == [
         ("passed", "—", "—"),
         ("passed", "—", "—"),
@@ -727,7 +835,7 @@ def test_target_supplied_text_reaches_the_page_as_escaped_text(tmp_path: Path) -
     failure = dataclasses.replace(
         _failed_case(supplied), decoded=supplied, expected=supplied
     )
-    recorded = dataclasses.replace(failure, evidence_dir=EvidenceStore(tmp_path).record(failure))
+    recorded = _recorded(failure, tmp_path)
 
     document = _write_page(tmp_path, _run(recorded, adapter=hostile))
 
@@ -757,22 +865,14 @@ def test_every_reference_is_inline_data_or_a_fragment(tmp_path: Path) -> None:
     svg_case = dataclasses.replace(
         _failed_case(_REQUEST), check_id="RN-SVG", case_id="corpus:url-003"
     )
-    store = EvidenceStore(tmp_path)
     recorded = (
-        dataclasses.replace(
+        _recorded(
             png_case,
-            evidence_dir=store.record(
-                png_case,
-                symbol=SimpleNamespace(
-                    image_bytes=_derived_png("png-case"), output_format="png"
-                ),
-            ),
+            tmp_path,
+            symbol=SimpleNamespace(image_bytes=_derived_png("png-case"), output_format="png"),
         ),
-        dataclasses.replace(
-            svg_case,
-            evidence_dir=store.record(
-                svg_case, symbol=SimpleNamespace(image_bytes=_SVG, output_format="svg")
-            ),
+        _recorded(
+            svg_case, tmp_path, symbol=SimpleNamespace(image_bytes=_SVG, output_format="svg")
         ),
     )
     document = _write_page(tmp_path, _run(*recorded))
@@ -811,14 +911,12 @@ def test_the_page_carries_the_accessibility_skeleton_it_declares(tmp_path: Path)
     failure = _failed_case(_REQUEST)
     errored = _error_case("PF-ENCODE", "synthetic:encode")
     results = (
-        dataclasses.replace(
+        _recorded(
             failure,
-            evidence_dir=EvidenceStore(tmp_path).record(
-                failure,
-                symbol=SimpleNamespace(image_bytes=_derived_png("symbol"), output_format="png"),
-            ),
+            tmp_path,
+            symbol=SimpleNamespace(image_bytes=_derived_png("symbol"), output_format="png"),
         ),
-        dataclasses.replace(errored, evidence_dir=EvidenceStore(tmp_path).record(errored)),
+        _recorded(errored, tmp_path),
         _skipped_case("RN-SVG", "synthetic:svg-rasterizer", Reason.MISSING_DEPENDENCY),
     )
 
@@ -845,7 +943,7 @@ def test_the_page_carries_the_accessibility_skeleton_it_declares(tmp_path: Path)
 def test_an_errored_case_renders_its_traceback_in_its_block(tmp_path: Path) -> None:
     """An error gets its own detail block, and its panel holds the traceback it carries."""
     errored = _error_case("PF-ENCODE", "synthetic:encode")
-    recorded = dataclasses.replace(errored, evidence_dir=EvidenceStore(tmp_path).record(errored))
+    recorded = _recorded(errored, tmp_path)
     document = _write_page(tmp_path, _run(recorded))
 
     assert '<section id="ev-1" class="evidence status-error"' in document
@@ -855,32 +953,55 @@ def test_an_errored_case_renders_its_traceback_in_its_block(tmp_path: Path) -> N
     assert "&quot;" in document
 
 
+def test_a_case_without_an_evidence_directory_still_gets_its_block(tmp_path: Path) -> None:
+    """A failed or errored case whose evidence could not be written keeps its block.
+
+    The request, the decoded-or-error outcome, the expected value and the seed are all derived
+    from the result model, so only the image area degrades - to the statement that no image was
+    recorded - and the table's Evidence cell is the link to the block, never the em dash that
+    means nothing was recorded anywhere.
+    """
+    failed = _failed_case(_REQUEST)
+    errored = dataclasses.replace(_error_case("PF-ENCODE", "synthetic:encode"), seed=1)
+    assert failed.evidence_dir is None
+    assert errored.evidence_dir is None
+
+    document = _write_page(tmp_path, _run(failed, errored))
+
+    assert '<section id="ev-1" class="evidence status-failed"' in document
+    assert '<section id="ev-2" class="evidence status-error"' in document
+    assert document.count('<section id="ev-') == 2
+    assert document.count('<p class="no-image">no image recorded for this case</p>') == 2
+    assert "<img" not in document
+    assert [row["Evidence"] for row in _rows(document)] == ["evidence", "evidence"]
+    assert document.count('<a class="evidence-link" href="#ev-') == 2
+    assert "<div><dt>seed</dt><dd>1</dd></div>" in document
+    # The evidence directory is a long-identifier fact, so its div carries the class that gives it
+    # the whole grid width; the absent directory is still stated as the em dash.
+    assert document.count(
+        '<div class="fact-wide"><dt>evidence_dir</dt><dd>—</dd></div>'
+    ) == 2
+    assert _panel(document, "request.json") == {
+        **_REQUEST,
+        "check_id": failed.check_id,
+        "case_id": failed.case_id,
+        "seed": failed.seed,
+    }
+    decoded_panels = _panels(document, "decoded.json")
+    assert decoded_panels == [dict(failed.decoded), dict(errored.decoded)]
+    assert decoded_panels[1][TRACEBACK_KEY].splitlines()[-1] == "RuntimeError: boom"
+
+
 @pytest.mark.parametrize(
     ("results", "banner", "phrase"),
     (
         (
-            (
-                CaseResult(
-                    check_id="RT-ROUNDTRIP",
-                    case_id="corpus:url-001",
-                    status=Status.PASSED,
-                    decoded=dict(_SINGLE_DECODER_DECODE),
-                    seed=_SEED,
-                ),
-            ),
+            (_passed_case("RT-ROUNDTRIP", "corpus:url-001", _SINGLE_DECODER_DECODE),),
             "banner-single-decoder",
             "Single-decoder mode.",
         ),
         (
-            (
-                CaseResult(
-                    check_id="RT-ROUNDTRIP",
-                    case_id="corpus:url-001",
-                    status=Status.PASSED,
-                    decoded=dict(_UNUSABLE_SECONDARY_DECODE),
-                    seed=_SEED,
-                ),
-            ),
+            (_passed_case("RT-ROUNDTRIP", "corpus:url-001", _UNUSABLE_SECONDARY_DECODE),),
             "banner-single-decoder",
             "Single-decoder mode.",
         ),
@@ -957,7 +1078,7 @@ def test_the_decoder_banner_states_how_many_cases_it_did_not_answer_for(
     One agreeing result beside one whose secondary decoder errored on the artefact proves the
     degradation for one case and not for the run, so the heading says corroboration is
     incomplete and the sentence states how many of how many decode-bearing cases were not
-    corroborated -- the only claim the recorded statuses support (AAP §0.6.6 row 4).
+    corroborated -- the only claim the recorded statuses support.
     """
     run = _run(
         _passed_case("RT-ROUNDTRIP", "corpus:url-001"),
@@ -1016,18 +1137,18 @@ def test_a_healthy_run_carries_no_banner(tmp_path: Path) -> None:
     assert _BANNERS.search(document) is None
     assert 'class="banner' not in document
     assert "Single-decoder mode." not in document
-    assert _SKIPPED_SECTION.search(document) is None
+    skipped = _SKIPPED_SECTION.search(document)
+    assert skipped is not None
+    assert _EMPTY_SKIPS in skipped.group("body")
 
 
 def test_two_writes_of_one_run_are_byte_identical(tmp_path: Path) -> None:
     """The page is a pure function of the result model and the evidence bytes on disk."""
     failure = _failed_case(_REQUEST)
-    recorded = dataclasses.replace(
+    recorded = _recorded(
         failure,
-        evidence_dir=EvidenceStore(tmp_path).record(
-            failure,
-            symbol=SimpleNamespace(image_bytes=_derived_png("symbol"), output_format="png"),
-        ),
+        tmp_path,
+        symbol=SimpleNamespace(image_bytes=_derived_png("symbol"), output_format="png"),
     )
     run = _run(
         recorded,
@@ -1060,10 +1181,7 @@ def test_each_failing_case_block_carries_its_own_reproduction_command(tmp_path: 
             _failed_case(_REQUEST), check_id="RT-ROUNDTRIP", case_id="corpus:url-007", seed=7
         ),
     )
-    recorded = tuple(
-        dataclasses.replace(case, evidence_dir=EvidenceStore(tmp_path).record(case))
-        for case in cases
-    )
+    recorded = tuple(_recorded(case, tmp_path) for case in cases)
 
     document = _write_page(tmp_path, _run(*recorded))
 
@@ -1089,13 +1207,11 @@ def test_the_command_carries_the_run_seed_not_the_case_s_derived_one(tmp_path: P
     value back into ``--seed`` re-derives every draw from the wrong root and reproduces a
     different case than the page shows. The command carries the run seed, while the block's
     ``seed`` fact keeps recording the case's own derived seed that the damage artefact is
-    named for (AAP §0.5.2, §0.3.4).
+    named for.
     """
     derived = 1617066119022174236
     failure = dataclasses.replace(_failed_case(_REQUEST), seed=derived)
-    recorded = dataclasses.replace(
-        failure, evidence_dir=EvidenceStore(tmp_path).record(failure)
-    )
+    recorded = _recorded(failure, tmp_path)
 
     document = _write_page(tmp_path, _run(recorded))
 
@@ -1112,13 +1228,11 @@ def test_a_command_from_a_non_default_target_names_that_target(tmp_path: Path) -
 
     ``--adapter`` defaults to the configured ``default_adapter`` and ``--ec`` to ``M``, so a
     command naming neither re-runs the conforming default target and reports passes where
-    the page shows the defective target's failures (AAP §0.8.4, §0.8.3). A page written for
+    the page shows the defective target's failures. A page written for
     a differently targeted run differs in exactly that position.
     """
     failure = _failed_case(_REQUEST)
-    recorded = dataclasses.replace(
-        failure, evidence_dir=EvidenceStore(tmp_path).record(failure)
-    )
+    recorded = _recorded(failure, tmp_path)
 
     document = _write_page(tmp_path, _run(recorded, adapter="defective", ec_level="L"))
 
@@ -1151,14 +1265,15 @@ def test_the_decoded_panel_renders_the_artefact_the_store_wrote(tmp_path: Path) 
         "per_decoder": {"opencv": {"status": "decoded"}, "zxing": {"status": "decoded"}},
     }
     failure = dataclasses.replace(_failed_case(_REQUEST), decoded=decoded)
-    recorded = dataclasses.replace(failure, evidence_dir=EvidenceStore(tmp_path).record(failure))
+    recorded = _recorded(failure, tmp_path)
     assert recorded.evidence_dir is not None
 
     document = _write_page(tmp_path, _run(recorded))
 
-    panel = re.search(r'<h4>decoded\.json</h4>\s*<pre(?P<attributes>[^>]*)>', document)
-    assert panel is not None
-    assert panel.group("attributes") == ' dir="auto"'
+    (markup,) = [
+        match for match in _PANEL.finditer(document) if match.group("heading") == "decoded.json"
+    ]
+    assert markup.group("attributes") == ' dir="auto"'
     artefact = json.loads(
         (tmp_path / recorded.evidence_dir / "decoded.json").read_text(encoding="utf-8")
     )
@@ -1175,13 +1290,11 @@ def test_an_unreadable_artefact_is_stated_and_the_readable_ones_still_embedded(
     failure can be raised from.
     """
     failure = _failed_case(_REQUEST)
-    recorded = dataclasses.replace(
+    recorded = _recorded(
         failure,
-        evidence_dir=EvidenceStore(tmp_path).record(
-            failure,
-            symbol=SimpleNamespace(image_bytes=_derived_png("symbol"), output_format="png"),
-            logo=_derived_png("logo"),
-        ),
+        tmp_path,
+        symbol=SimpleNamespace(image_bytes=_derived_png("symbol"), output_format="png"),
+        logo=_derived_png("logo"),
     )
     assert recorded.evidence_dir is not None
     real_read = html_module._read_artifact
@@ -1206,12 +1319,10 @@ def test_an_unreadable_artefact_is_stated_and_the_readable_ones_still_embedded(
 def test_a_file_outside_the_closed_evidence_set_is_never_published(tmp_path: Path) -> None:
     """An unrecognised name in the case directory is ignored rather than surfaced."""
     failure = _failed_case(_REQUEST)
-    recorded = dataclasses.replace(
+    recorded = _recorded(
         failure,
-        evidence_dir=EvidenceStore(tmp_path).record(
-            failure,
-            symbol=SimpleNamespace(image_bytes=_derived_png("symbol"), output_format="png"),
-        ),
+        tmp_path,
+        symbol=SimpleNamespace(image_bytes=_derived_png("symbol"), output_format="png"),
     )
     assert recorded.evidence_dir is not None
     directory = tmp_path / recorded.evidence_dir
@@ -1232,7 +1343,7 @@ def test_the_page_never_carries_the_evidence_directory_as_an_absolute_path(
 ) -> None:
     """The evidence directory reaches the page as the relative posix path the model holds."""
     failure = _failed_case(_REQUEST)
-    recorded = dataclasses.replace(failure, evidence_dir=EvidenceStore(tmp_path).record(failure))
+    recorded = _recorded(failure, tmp_path)
     assert recorded.evidence_dir is not None
 
     document = _write_page(tmp_path, _run(recorded))
@@ -1242,3 +1353,76 @@ def test_the_page_never_carries_the_evidence_directory_as_an_absolute_path(
     assert facts["evidence_dir"] == recorded.evidence_dir
     assert facts["evidence_dir"].startswith(f"{EVIDENCE_DIR_NAME}/")
     assert "\\" not in facts["evidence_dir"]
+
+
+def test_a_detail_blocks_long_identifier_facts_take_the_whole_facts_grid(
+    tmp_path: Path,
+) -> None:
+    """A case id and an evidence path span the block's facts grid; the short facts do not.
+
+    The block reuses the header's ``.facts`` grid, which gives every fact one 11 rem track, so
+    the two facts whose value is a long identifier break mid-token there and push the last fact
+    alone into a row of its own. Marking those two lets them take the card's full width, while
+    the header's own facts stay unmarked and keep the column count they had.
+    """
+    failure = _failed_case(_REQUEST)
+    recorded = dataclasses.replace(failure, evidence_dir=EvidenceStore(tmp_path).record(failure))
+    assert recorded.evidence_dir is not None
+
+    document = _write_page(tmp_path, _run(recorded))
+
+    grids = re.findall(r'<dl class="facts">(?P<body>.*?)</dl>', document, re.DOTALL)
+    assert len(grids) == 2, "the header's facts and the failing case's block"
+    header, block = (
+        [(item.group("label"), item.group("attributes")) for item in _FACT_ITEM.finditer(grid)]
+        for grid in grids
+    )
+    assert [label for label, attributes in block if "fact-wide" in attributes] == [
+        "case_id",
+        "evidence_dir",
+    ]
+    assert [label for label, attributes in block if "fact-wide" not in attributes] == [
+        "check_id",
+        "status",
+        "reason",
+        "seed",
+        "duration",
+    ]
+    assert all("fact-wide" not in attributes for _, attributes in header)
+    assert _declarations(_stylesheet(document), ".facts .fact-wide") == "grid-column: 1 / -1;"
+
+
+@pytest.mark.parametrize("selector", _IDENTIFIER_BOXES)
+def test_every_box_that_can_hold_an_identifier_wraps_it_at_every_width(
+    tmp_path: Path, selector: str
+) -> None:
+    """The wrap rule sits in the base sheet, not only inside the narrow-viewport block.
+
+    A cell computing ``overflow-wrap: normal`` cannot shrink below its longest token, so an
+    identifier longer than the product's own vocabulary widens the table and pushes the Status,
+    Reason, Duration and Evidence columns off-screen. The declaration therefore has to hold
+    above the 720 px breakpoint too, which is what reading the sheet above ``@media`` proves.
+    """
+    document = _write_page(tmp_path, _run(_failed_case(_REQUEST)))
+
+    base, separator, narrow = _stylesheet(document).partition("@media (max-width: 720px)")
+
+    assert separator and narrow, "the single-column collapse is still declared"
+    assert selector in _wrapping_selectors(base)
+
+
+@pytest.mark.parametrize("selector", _FIXED_VOCABULARY_CELLS)
+def test_the_wrap_rule_stays_off_the_fixed_vocabulary_columns(
+    tmp_path: Path, selector: str
+) -> None:
+    """Only the column that carries a case id may break a token; short words stay whole.
+
+    ``overflow-wrap: anywhere`` lowers the minimum width of the box it is declared on, so
+    declaring it on every cell lets the table squeeze the Status column below the width of the
+    word it holds, and ``skipped`` renders as ``skippe`` / ``d`` at a viewport where the
+    identifier column needs the room. The fixed-vocabulary columns therefore keep their default
+    wrapping and only the identifier column gives way.
+    """
+    document = _write_page(tmp_path, _run(_failed_case(_REQUEST)))
+
+    assert selector not in _wrapping_selectors(_stylesheet(document))

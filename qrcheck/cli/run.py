@@ -43,21 +43,21 @@ one JSON object per line; a directory found unusable before a result existed lea
 stream, which the diagnostic states, so a CI consumer is never left with an empty stream it
 cannot explain.
 
-Two interface gaps the plan leaves open, and how this module settles them
-------------------------------------------------------------------------
+Two gaps in the documented interface, and how this module settles them
+----------------------------------------------------------------------
 * **``--config``.** The group owns that option, and this module must not import
   ``qrcheck.cli.main`` -- the group imports the commands, so the reverse import would close a
-  cycle. :func:`_config_path` therefore reads the value from the click context exactly as the
-  sibling commands do, and :func:`run` takes it as the keyword-only ``config_path`` that the
-  group's option supplies. That keyword is why the signature carries more than the seven run
-  options AAP §0.8.1 names.
+  cycle. :func:`qrcheck.cli.support.resolve_config_path` therefore reads the value from the
+  click context exactly as the sibling commands do, and :func:`run` takes it as the
+  keyword-only ``config_path`` that the group's option supplies. That keyword is why the
+  signature carries more than the seven options :func:`run_command` declares.
 * **``--fail-fast``.** :func:`qrcheck.runner.run_suite` accepts ``fail_fast`` as a
   keyword-only argument, so this module forwards the flag unchanged and implements no part of
   the policy. Filtering the selection here instead would give the flag a second meaning and
   would decide execution policy in the command that exists only to plumb it.
 
 Nothing here prints progress, measures a duration, retries a case or re-runs a check: the
-product has no retry path anywhere (AAP §0.5.6). The single line this command writes on
+product has no retry path anywhere. The single line this command writes on
 success is deterministic and carries neither a timing nor a path.
 """
 
@@ -65,7 +65,6 @@ from __future__ import annotations
 
 import dataclasses
 import tempfile
-from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
 
@@ -73,6 +72,7 @@ import click
 
 from qrcheck.checks import load_families
 from qrcheck.cli.exit import EXIT_CONFIG, EXIT_INTERNAL, exit_code_for
+from qrcheck.cli.support import DEFAULT_CONFIG_PATH, ExitCodeCommand, resolve_config_path
 from qrcheck.config import ConfigError, load_config
 from qrcheck.config.schema import SCHEMA
 from qrcheck.dependencies import blocking_problem
@@ -93,18 +93,9 @@ __all__ = ("DEFAULT_CONFIG_PATH", "DEFAULT_EC_LEVEL", "EC_LEVELS", "run", "run_c
 #: ``--ec`` help spell them.
 EC_LEVELS: Final[tuple[str, ...]] = ("L", "M", "Q", "H")
 
-#: The level a run uses when ``--ec`` is absent, which is the level AAP §0.6.1 criterion 2
-#: names for the full-corpus round-trip run.
+#: The level a run uses when ``--ec`` is absent, which is the level every full-corpus
+#: round-trip run in this repository is driven at.
 DEFAULT_EC_LEVEL: Final[str] = "M"
-
-#: Read only when nothing in the group context supplies ``--config``, which happens when
-#: :func:`run` is called directly rather than through the command line.
-DEFAULT_CONFIG_PATH: Final[str] = "qrcheck.toml"
-
-#: The names a group's context object, or the group's own click parameters, may carry the
-#: ``--config`` value under; tried in this order. ``qrcheck.cli.main`` owns that option, so
-#: this module reads all three shapes rather than requiring one of them.
-_CONFIG_KEYS: Final[tuple[str, ...]] = ("config", "config_path", "config_file")
 
 #: Every diagnostic carries this prefix and goes to stderr, so a line on stdout is always the
 #: one-line summary (or a streamed result) and a line on stderr is always something to fix.
@@ -112,7 +103,7 @@ _DIAGNOSTIC_PREFIX: Final[str] = "qrcheck run: "
 
 #: The probe file that proves the resolved report directory is writable. It is created inside
 #: the report directory itself -- never in the system temporary directory, which the
-#: artifact-cleanup check snapshots -- and removed before the run starts, so it leaves no
+#: artefact-cleanup check snapshots -- and removed before the run starts, so it leaves no
 #: artefact behind.
 _PROBE_PREFIX: Final[str] = "qrcheck-probe-"
 _PROBE_SUFFIX: Final[str] = ".tmp"
@@ -279,22 +270,20 @@ def run(
     # for this target kind: no concrete adapter is named in this file. That import is also
     # where the kind's own library loads -- ``httpx`` for an ``http`` target -- so an
     # unusable pinned distribution surfaces here too.
-    #
     # Construction sits inside the exit-2 mapping, never above it. A constructor refuses a
     # configuration that is wrong on its own terms but whose shape alone the schema can
     # check: a ``kwargs_map`` naming a field the framework does not have, because that
     # mapping's key vocabulary belongs to the adapter and not to the schema; a
     # ``metadata_map`` beside a stdout-based ``returns``, which would read one stream twice;
-    # an http ``request_template`` carrying no payload placeholder. AAP §0.3.4 puts each of
-    # these at exit code 2, named by its dotted key and decided before any check runs, and
-    # ``str(error)`` already reads "<dotted key>: <message>". A ``TargetError`` raised this
-    # early is the pre-flight availability fault, which carries that same code wherever it
-    # is found: an adapter that could not be built leaves no run to describe.
-    #
-    # An ``ImportError`` or ``OSError`` from that same import is the environment fault of AAP
-    # §0.7.2 instead -- exit 2 naming the distribution and ``requirements.lock``, through the
-    # product's one dependency probe -- and not the exit-3 internal error the re-raise leaves
-    # to ``qrcheck.cli.main`` for a fault no dependency explains.
+    # an http ``request_template`` carrying no payload placeholder. Each of these is exit code
+    # 2, named by its dotted key and decided before any check runs, and ``str(error)`` already
+    # reads "<dotted key>: <message>". A ``TargetError`` raised this early is the pre-flight
+    # availability fault, which carries that same code wherever it is found: an adapter that
+    # could not be built leaves no run to describe.
+    # An ``ImportError`` or ``OSError`` from that same import is an environment fault instead --
+    # exit 2 naming the distribution and ``requirements.lock``, through the product's one
+    # dependency probe -- and not the exit-3 internal error the re-raise leaves to
+    # ``qrcheck.cli.main`` for a fault no dependency explains.
     adapter_obj: Adapter | None = None
     try:
         adapter_obj = ADAPTER_TYPES[str(target.type)](target, name=name)
@@ -319,10 +308,10 @@ def run(
     except OSError as error:
         # The walk's evidence writes cannot arrive here: the runner contains each one as an
         # ``error`` result, so the results it accumulated survive to be written or streamed from
-        # ``step 8`` instead of being lost with this exception (AAP §0.6.6 row 11). The one
-        # ``OSError`` still raised is ``EvidenceStore.clear`` failing to remove a previous run's
-        # evidence tree -- before the walk, before any result exists, so there is nothing to
-        # stream and :func:`_report_unwritable` is handed no result.
+        # ``step 8`` instead of being lost with this exception. The one ``OSError`` still raised
+        # is ``EvidenceStore.clear`` failing to remove a previous run's evidence tree -- before
+        # the walk, before any result exists, so there is nothing to stream and
+        # :func:`_report_unwritable` is handed no result.
         return _report_unwritable(error, config.report_dir, None)
     finally:
         # Closing twice is safe -- the port requires ``close`` to tolerate a second call --
@@ -334,7 +323,7 @@ def run(
         try:
             if adapter_obj is not None:
                 adapter_obj.close()
-        except Exception:  # noqa: BLE001 - see above: it must not replace the run's outcome
+        except Exception:  # See above: it must not replace the run's outcome.
             pass
 
     # -- 8. the reports -------------------------------------------------------
@@ -366,7 +355,7 @@ def _probe_report_dir(report_directory: Path) -> None:
     have produced -- before the run rather than after it.
 
     The probe is created inside ``report_directory`` rather than in the system temporary
-    directory, which the artifact-cleanup check snapshots, and it is removed in a ``finally``
+    directory, which the artefact-cleanup check snapshots, and it is removed in a ``finally``
     so an interrupted probe leaves nothing behind. It runs on every path, including the one
     the loader already proved: the ``--report-dir`` override has been proved by nobody, and a
     single code path is worth one temporary file.
@@ -404,12 +393,12 @@ def _report_unwritable(
 ) -> int:
     """Report an unwritable report directory and stream whatever results the CLI holds.
 
-    The one condition AAP §0.3.4 defines where a report cannot be written but the run's
-    findings may already exist. Two things follow, and neither is a retry or a second report
-    path: the diagnostic goes to stderr naming the directory and the underlying fault, and
-    every result the caller holds is streamed to stdout as one canonical JSON object per line
-    -- no wrapper object and no array -- through the product's only JSON formatter, so a CI
-    consumer parses results it would otherwise never see.
+    The one condition under which a report cannot be written but the run's findings may
+    already exist. Two things follow, and neither is a retry or a second report path: the
+    diagnostic goes to stderr naming the directory and the underlying fault, and every result
+    the caller holds is streamed to stdout as one canonical JSON object per line -- no wrapper
+    object and no array -- through the product's only JSON formatter, so a CI consumer parses
+    results it would otherwise never see.
 
     When the caller holds no run result the stream stays empty and the diagnostic says so, so an
     empty stdout is never mistaken for a truncated one -- and it says no more than that, because
@@ -421,9 +410,9 @@ def _report_unwritable(
     refused, and a previous run's evidence tree ``EvidenceStore.clear`` could not remove before
     the walk began; every evidence write *during* the walk is contained by the runner as an
     ``error`` result instead of raising, which is what lets the results of such a run be
-    streamed from the other branch (AAP §0.6.6 row 11, §0.3.4). No result is fabricated to fill
-    the output. Every fault is decided by the caller, not here: the run may have completed and
-    only the report failed, and then the number of results streamed is stated on stderr as well.
+    streamed from the other branch. No result is fabricated to fill the output. Every fault is
+    decided by the caller, not here: the run may have completed and only the report failed, and
+    then the number of results streamed is stated on stderr as well.
 
     Args:
         detail: The ``OSError`` that prevented the write, quoted in the diagnostic because its
@@ -490,27 +479,7 @@ def _json_line(payload: Any) -> str:
 # ---------------------------------------------------------------------------
 
 
-class _ExitCodeCommand(click.Command):
-    """A command whose integer return value becomes the process exit code.
-
-    Click 8.1 discards a callback's return value when the command runs standalone, so a
-    callback that merely returned :data:`qrcheck.cli.exit.EXIT_CONFIG` would leave the
-    process status at 0 however the run went, and every gate built on this command -- the
-    empty-selection gate above all -- would pass silently. The callback still returns the
-    integer, so a caller and a test read it directly; this class is where that integer
-    becomes the process status, and in non-standalone mode click turns it back into the very
-    same return value.
-    """
-
-    def invoke(self, ctx: click.Context) -> object:
-        """Run the callback and, when it returned an exit code, exit with it."""
-        result = super().invoke(ctx)
-        if isinstance(result, int):
-            ctx.exit(result)
-        return result
-
-
-@click.command(name="run", cls=_ExitCodeCommand)
+@click.command(name="run", cls=ExitCodeCommand)
 @click.option(
     "--adapter",
     type=str,
@@ -552,11 +521,11 @@ class _ExitCodeCommand(click.Command):
 @click.option(
     "--report-dir",
     "report_dir",
-    # ``file_okay`` stays at click's default on purpose. AAP §0.8.3 makes an unusable
-    # ``--report-dir`` exit 3, and ``file_okay=False`` would make click reject a path that is
-    # an existing regular file with its own exit 2 before this command ever sees it. The
-    # writability probe in :func:`run` decides that condition instead, so a file standing
-    # where the directory belongs is reported with the run's exit-code contract.
+    # ``file_okay`` stays at click's default on purpose. An unusable ``--report-dir`` is exit 3,
+    # and ``file_okay=False`` would make click reject a path that is an existing regular file
+    # with its own exit 2 before this command ever sees it. The writability probe in
+    # :func:`run` decides that condition instead, so a file standing where the directory belongs
+    # is reported with the run's exit-code contract.
     type=click.Path(path_type=str),
     default=None,
     help="Report root; defaults to report_dir in the configuration.",
@@ -581,42 +550,6 @@ def run_command(
         class_globs,
         fail_fast,
         report_dir,
-        config_path=_config_path(ctx),
+        config_path=resolve_config_path(ctx),
     )
-
-
-def _config_path(ctx: click.Context | None) -> str:
-    """Return the configuration file the group's ``--config`` option selected.
-
-    ``qrcheck.cli.main`` owns that option, and how it hands the value down is its contract
-    rather than this module's: the group may leave the raw string in the context object, keep
-    a mapping or a namespace there, or hold the value only in its own click parameters. All
-    three are read, in that order, so registering this command under the group needs no
-    adaptation of either module. When none of them carries a value -- including a call with no
-    click context at all -- the default configuration file name stands.
-    """
-    if ctx is not None:
-        found = _config_value(ctx.obj)
-        if found is not None:
-            return found
-        root_params = ctx.find_root().params
-        for key in _CONFIG_KEYS:
-            found = _config_value(root_params.get(key))
-            if found is not None:
-                return found
-    return DEFAULT_CONFIG_PATH
-
-
-def _config_value(value: object) -> str | None:
-    """Return the configuration path ``value`` holds, or ``None`` when it holds none."""
-    if isinstance(value, str | Path):
-        text = str(value)
-        return text or None
-    if value is None:
-        return None
-    for key in _CONFIG_KEYS:
-        entry = value.get(key) if isinstance(value, Mapping) else getattr(value, key, None)
-        if isinstance(entry, str | Path) and str(entry):
-            return str(entry)
-    return None
 

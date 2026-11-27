@@ -5,12 +5,12 @@ Nothing here is a test, and a fixture whose precondition cannot be met calls
 consuming module holds. :func:`run_cli` runs the product as a real process so a test asserts
 the status a shell would see, and bounds its in-process path on a daemon thread with the same
 guard, so a hang fails by name rather than stalling the session; :func:`reference_report`,
-:func:`defective_report` and :func:`boundary_runs` are session-scoped, which keeps the five-run
-sequence of AAP §0.6.1 #9 inside its 600 s ceiling, and each mints its own report root inside
-the run helper, so no run overwrites another's evidence and the defective run's nine expected
-failures stay attributable (AAP IM-8); :func:`http_target_server` and :func:`cli_target` drive
-both configurable adapters over their real transports; and :func:`write_config` writes a
-schema-valid document from caller values and the schema's declared defaults only (AAP §0.12)."""
+:func:`defective_report` and :func:`boundary_runs` are session-scoped, so each whole-suite run
+is paid for once per session, and each mints its own report root inside the run helper, so no
+run overwrites another's evidence and the defective run's nine expected failures stay
+attributable; :func:`http_target_server` and :func:`cli_target` drive both configurable
+adapters over their real transports; and :func:`write_config` writes a schema-valid document
+from caller values and the schema's declared defaults only."""
 
 from __future__ import annotations
 
@@ -56,13 +56,13 @@ _CONFIG_FILE_NAME: Final[str] = "qrcheck.toml"
 #: The two built-in self-check targets in name order: the conforming one and the defective one.
 _BUILTIN_TARGETS: Final[tuple[str, str]] = ("reference", "defective")
 
-#: The module ``python -m`` runs for the process boundary (AAP §0.9.2).
+#: The module ``python -m`` runs for the process boundary.
 _ENTRY_MODULE: Final[str] = "qrcheck"
 
 #: The error-correction level the whole-suite fixtures run at: the ``run`` command's default.
 _DEFAULT_EC_LEVEL: Final[str] = "M"
 
-#: The levels success criterion 2 replays the boundary subset at (AAP §0.6.1 #2).
+#: The levels :func:`boundary_runs` replays the 40-record boundary subset at.
 _BOUNDARY_LEVELS: Final[tuple[str, ...]] = ("L", "Q", "H")
 
 #: The corpus class filter that selects the 40 boundary records.
@@ -130,7 +130,7 @@ def repo_root() -> Path:
 
 
 # Generating a configuration document: ``tomllib`` cannot write TOML and no writer dependency may be
-# added (AAP §0.7.1), so the serialiser's only promise is determinism.
+# added, so the serialiser's only promise is determinism.
 
 #: A key TOML may spell bare; anything else -- a target name with a space, say -- is quoted.
 _BARE_KEY: Final[re.Pattern[str]] = re.compile(r"[A-Za-z0-9_-]+\Z")
@@ -361,7 +361,7 @@ def _run_cli_in_process(config: Path, args: Sequence[str], timeout: float) -> Cl
             f"qrcheck did not finish within {timeout:g}s in this interpreter: "
             f"{' '.join(argv)}. A hang in-process must fail this gate by name: the only other "
             f"bound is the e2e job's timeout-minutes, and that kills the job instead of "
-            f"reporting the invocation that hung (AAP §0.6.4)."
+            f"reporting the invocation that hung."
         )
     if raised:
         raise raised[0]
@@ -447,7 +447,7 @@ def reference_report(
     tmp_path_factory: pytest.TempPathFactory,
     write_config: Callable[..., Path],
 ) -> tuple[Path, dict[str, Any], int]:
-    """Run the suite once against the conforming target, session-scoped (AAP §0.6.1 #9)."""
+    """Run the suite once against the conforming target, session-scoped."""
     return _run_suite_and_load(
         tmp_path_factory,
         write_config,
@@ -592,7 +592,7 @@ def _read_port_line(process: subprocess.Popen[str], timeout: float) -> str:
     lines: queue.Queue[str] = queue.Queue(maxsize=1)
 
     def _read() -> None:
-        """Read one line, or an empty string when the pipe closes under us."""
+        """Read one line, or an empty string when the pipe closes."""
         try:
             lines.put(reader_stream.readline())
         except (OSError, ValueError):  # pragma: no cover - pipe closed under a kill

@@ -13,7 +13,7 @@ the component scan does not see is still refused by the real-path comparison; a 
 root and a report root that is itself a symlink (the operator's own choice) both still record; a
 normal record writes exactly the closed artefact set under ``evidence/<CHECK-ID>/<failure-id>`` and
 returns that relative posix path; and a passed result still returns ``None`` having written nothing
-(AAP §0.3.4, §0.6.6 row 11).
+.
 """
 
 import json

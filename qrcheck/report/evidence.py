@@ -2,11 +2,11 @@
 
 ``qrcheck.runner`` hands every case's outcome to :class:`EvidenceStore`, and this module is the only
 place that decides *whether* evidence reaches the filesystem. That decision is a policy, not an
-optimisation: a full run is a few thousand cases (AAP §0.8.1 case matrix), so a directory per case
-would write tens of thousands of files, while a passing case whose bytes are reproducible from
+optimisation: a full run is a few thousand cases, so a directory per case would write tens of
+thousands of files, while a passing case whose bytes are reproducible from
 ``(adapter, seed, case_id)`` has nothing to inspect. Only ``failed``, ``error`` and ``skipped``
-results are persisted (AAP §0.3.4); a skip is persisted because its machine-readable reason is the
-only record of why a check never ran, and a skip must never be mistaken for a pass.
+results are persisted; a skip is persisted because its machine-readable reason is the only record
+of why a check never ran, and a skip must never be mistaken for a pass.
 
 The layout and the artefact names are **not** defined here: :mod:`qrcheck.evidence.naming` owns
 ``<report_dir>/evidence/<check-id>/<failure-id>/``, the closed artefact set and path sanitization,
@@ -17,7 +17,7 @@ written -- no manifest, no index, no README, no per-directory metadata -- becaus
 name inside an evidence directory would break the closed set the HTML writer and ``CL-ARTIFACTS``
 inspect against.
 
-The closed artefact set, in the order this module writes it (AAP §0.3.4):
+The closed artefact set, in the order this module writes it:
 
 =============================  ====================================================
 ``request.json``               the case's identity envelope plus its request projection
@@ -42,10 +42,10 @@ Guarantees. Both JSON artefacts are serialised by :func:`qrcheck.report.json_rep
 and written by :func:`qrcheck.report.json_report.write_canonical_text` -- sorted keys, two-space
 indent, UTF-8 with one trailing newline -- and neither carries a timestamp, duration, hostname or
 absolute path, which is what makes ``request.json`` and ``decoded.json`` byte-identical for the same
-case and seed (AAP §0.5.4); ``duration_ms`` stays on the result, never in evidence. Writing the
-same case twice leaves the same files with the same bytes in the same place: the directory is
-created with ``exist_ok=True``, the files are written directly, and no temporary file exists at any
-moment for ``CL-ARTIFACTS`` to find. Every artefact name, every artefact's bytes and both JSON
+case and seed; ``duration_ms`` stays on the result, never in evidence. Writing the same case twice
+leaves the same files with the same bytes in the same place: the directory is created with
+``exist_ok=True``, the files are written directly, and no temporary file exists at any moment for
+``CL-ARTIFACTS`` to find. Every artefact name, every artefact's bytes and both JSON
 bodies are resolved before the case directory is created, so a malformed case raises with no
 evidence directory at all -- not even one holding ``request.json`` alone -- and the only exception
 that can follow the directory's creation is an :exc:`OSError`. Nothing below ``report_dir`` is
@@ -61,7 +61,7 @@ symlink keeps working, and only what this store builds below it is checked. ``sy
 package never depends on the adapter layer and a configuration-only process pulls in no Pillow,
 numpy or zxing.
 
-Failure modes, three, none of them retried and none logged (AAP §0.5.6). Two are caller defects
+Failure modes, three, none of them retried and none logged. Two are caller defects
 raised before anything is written: :exc:`ValueError` from this module or from
 :mod:`qrcheck.evidence.naming` for a malformed artefact request (an unknown symbol format, a non-PNG
 repetition, an undeclared damage kind) or from :func:`qrcheck.report.json_report.dumps_canonical`
@@ -71,12 +71,12 @@ for a non-finite float (``nan``, ``inf``, ``-inf``), which JSON defines no token
 cannot encode is not one of them: the lone surrogate a target's JSON metadata can carry in is
 replaced with U+FFFD by the canonical formatter
 (:func:`qrcheck.report.json_report.make_utf8_encodable`), so it becomes a written artefact
-instead of costing the run the report that describes it (AAP §0.6.6 row 11). The third is
+instead of costing the run the report that describes it. The third is
 :exc:`OSError`, raised two ways: before anything is created, when a component below
 ``report_dir`` or an artefact destination is a symlink or the case directory's real path leaves
 the report root -- the refusal naming the path it declined to write -- and when the directory or
 an artefact cannot be written (:exc:`PermissionError` included). It is not converted, retried or
-logged: ``qrcheck.runner`` contains it as one ``error`` result for the case (AAP §0.6.6 row 11)
+logged: ``qrcheck.runner`` contains it as one ``error`` result for the case
 and ``qrcheck.cli.run`` turns an unwritable ``report_dir`` into exit 3.
 """
 
@@ -171,7 +171,7 @@ def _refuse_unsafe_case_dir(
         OSError: A component below ``report_dir`` or an artefact destination is a symlink, or the
             case directory's real path leaves the report root's. The message names the path that was
             refused; it is an :exc:`OSError` because that is the store's documented write fault,
-            which ``qrcheck.runner`` contains as one ``error`` result per case (AAP §0.6.6 row 11).
+            which ``qrcheck.runner`` contains as one ``error`` result per case.
     """
     current = report_dir
     for part in case_dir.relative_to(report_dir).parts:
@@ -201,7 +201,7 @@ class EvidenceStore:
     """Writes, and declines to write, the evidence of one run's cases.
 
     One instance per run, constructed with the run's ``report_dir`` exactly as configuration gave it
-    -- relative or absolute, never rewritten to an absolute path (AAP §0.5.5), resolved only inside
+    -- relative or absolute, never rewritten to an absolute path, resolved only inside
     :meth:`record` to compare it with the case directory's real path -- and the constructor performs
     no I/O, so a run that persists nothing leaves nothing behind on disk. The store is not a cache
     and keeps no state beyond that directory: every decision is a pure function of the
@@ -226,15 +226,15 @@ class EvidenceStore:
 
         The single derivation of the evidence root in the product: the report dispatcher and the
         writers read it from here rather than joining the name themselves, so the root of everything
-        this store writes has one definition (AAP §0.8.1).
+        this store writes has one definition.
         """
         return self.report_dir / EVIDENCE_DIR_NAME
 
     def clear(self) -> None:
         """Remove the evidence tree a previous run left under this report root, if any.
 
-        The report-root contract (AAP §0.3.4, §0.6.1 criterion 9): a reused root describes
-        this run alone, since the report files and the evidence tree are both replaced.
+        The report-root contract this method keeps: a reused root describes this run alone, since
+        the report files and the evidence tree are both replaced.
 
         Raises:
             OSError: the tree could not be removed, for ``qrcheck.cli.run`` to map to exit 3.
@@ -259,8 +259,8 @@ class EvidenceStore:
         A **passed** case is not persisted at all: no directory, no file, ``None`` returned. That is
         the policy this class owns rather than an optimisation -- a passing case has nothing to
         inspect, and one directory per case would bury the failing ones under tens of thousands of
-        files (AAP §0.3.4) -- and it keeps the invariant :class:`qrcheck.report.model.CaseResult`
-        enforces, that a passed result carries ``evidence_dir is None``. A **failed**, **errored**
+        files -- and it keeps the invariant :class:`qrcheck.report.model.CaseResult` enforces, that
+        a passed result carries ``evidence_dir is None``. A **failed**, **errored**
         or **skipped** case gets ``<report_dir>/evidence/<check-id>/<failure-id>/`` holding
         ``request.json`` (the identity envelope ``check_id``, ``case_id`` and ``seed`` merged over
         ``case_result.request``, the envelope winning a collision because it identifies the case and

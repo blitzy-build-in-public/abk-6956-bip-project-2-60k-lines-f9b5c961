@@ -17,7 +17,7 @@ It never raises for a decode failure -- an exception from the binding becomes ``
 because consensus treats a secondary error as absence and must never manufacture a
 ``decoder_disagreement``. A binding that cannot be imported is not a decode failure at all:
 :func:`binding_problem` lets consensus record it as an unavailable decoder rather than as an outcome
-(AAP §0.4.5), while a direct call to :func:`read_secondary` still answers with ``status="error"``.
+, while a direct call to :func:`read_secondary` still answers with ``status="error"``.
 ``cv2`` is resolved lazily, and ``ValueError`` is reserved for a caller defect.
 """
 
@@ -128,7 +128,7 @@ def read_secondary(
 
     try:
         decoded_info, points, straight_qrcode = module.QRCodeDetector().detectAndDecode(decodable)
-    except Exception as exc:  # noqa: BLE001 - the closed error vocabulary of the pipeline
+    except Exception as exc:  # the closed error vocabulary of the pipeline
         # Deliberate, and the only broad catch in this module: the consensus
         # layer treats a secondary decoder's failure as absence, and an
         # exception escaping here would abort a check that the primary decoder
@@ -188,7 +188,7 @@ def binding_problem() -> str | None:
     The probe the decode pipeline consults *before* it asks this decoder anything: a binding that
     cannot be imported raised nothing about any artefact, so it is recorded as an unavailable
     decoder rather than as an outcome with ``status="error"``, which is what makes single-decoder
-    mode's evidence list one decoder (AAP §0.6.6 row 4, §0.4.5). Built on :func:`_load_cv2`, so an
+    mode's evidence list one decoder. Built on :func:`_load_cv2`, so an
     :exc:`ImportError` from an absent distribution and an :exc:`OSError` from a compiled extension
     that cannot be loaded both mean unavailable, and a successful import is cached by the
     interpreter, so a probe before every decode costs one import for the whole run.

@@ -1,7 +1,7 @@
 """``CL-ARTIFACTS``: the run leaves no temporary file and no open handle behind.
 
 One synthetic case, ``synthetic:cleanup``, observing the framework's own footprint rather than
-anything a target produced (AAP §0.8.1), in two halves:
+anything a target produced, in two halves:
 
 * **temporary-file half** -- the window is the run. The runner snapshots
   :func:`tempfile.gettempdir` once, through :func:`temp_entries`, immediately before the first
@@ -14,12 +14,12 @@ anything a target produced (AAP §0.8.1), in two halves:
   macOS) resolved and compared against ``report_dir``, plus the images
   :func:`qrcheck.evidence.mux.open_image` registers, read through :func:`mux.open_images`. Which
   interface was enumerated is recorded as the platform token of :func:`fd_directory_token`, never as
-  the directory's path, because no artefact may carry an absolute path (AAP §0.5.5).
+  the directory's path, because no artefact may carry an absolute path.
 
 The check executes at the end of the run because its contract declares ``observes_run_end=True``:
 it asserts a property of the whole run rather than of one case, so the runner runs it after every
 other check -- after a ``--fail-fast`` break too, since it never invokes the target -- and that is
-what makes the two snapshots bracket the run itself (AAP §0.8.1, §0.5.3).
+what makes the two snapshots bracket the run itself.
 
 It relies on a per-run temporary directory: ``TMPDIR``, ``TMP`` or ``TEMP`` pointing at a directory
 of this run's own. The baseline separates this run's entries from what was there before it, but a
@@ -28,9 +28,10 @@ the run would be reported as this run's leak, because the two are indistinguisha
 that runs many checkouts at once has to give each run a private temporary directory.
 
 Zero adapter invocations: :data:`EXPECTED_ENCODES` declares ``0``, and the one dependency token is
-the primary decoder, as AAP §0.3.4's row records, so a run whose target is unreachable still
-reports this check as passing. That token can never turn the check into a ``missing_dependency``
-skip: a run without the primary decoder exits 2 before resolution (AAP §0.6.6 row 3).
+:data:`~qrcheck.registry.check.DEPENDENCY_PRIMARY_DECODER`, the honest record of what the check
+needs: it declares no capability, so a run whose target is unreachable still reports this check as
+passing. That token can never turn the check into a ``missing_dependency`` skip: a run without the
+primary decoder exits 2 before resolution.
 
 Reasons emitted: ``value_mismatch``, the single ``failed`` verdict, carrying the leaked names, the
 fd paths under ``report_dir`` and the open images; and ``unsupported_platform``, the single
@@ -84,8 +85,8 @@ EXPECTED_ENCODES: Final[Mapping[str, int]] = MappingProxyType({CHECK_ID: 0})
 _FD_DIRECTORIES: Final[tuple[Path, ...]] = (Path("/proc/self/fd"), Path("/dev/fd"))
 
 # The artefact token of each descriptor directory: which platform interface was enumerated, stated
-# without naming a host location, because no artefact may carry an absolute path (AAP §0.5.5).  One
-# entry per member of :data:`_FD_DIRECTORIES`, so a third directory cannot be added without a token.
+# without naming a host location, because no artefact may carry an absolute path.  One entry per
+# member of :data:`_FD_DIRECTORIES`, so a third directory cannot be added without a token.
 _FD_DIRECTORY_TOKENS: Final[Mapping[Path, str]] = MappingProxyType(
     {
         Path("/proc/self/fd"): "proc-self-fd",
@@ -113,7 +114,7 @@ def temp_entries(prefix: str = TEMP_PREFIX) -> frozenset[str]:
     unordered set for set arithmetic, empty when nothing matches or the directory no longer exists.
     The runner calls it once, immediately before the walk, to take the baseline
     :attr:`~qrcheck.registry.check.RunContext.temp_baseline` this check compares against at the
-    run's end (AAP §0.8.1).
+    run's end.
 
     Raises:
         ValueError: `prefix` is not a non-empty string. An empty prefix would match every entry and
@@ -163,7 +164,7 @@ def fd_directory_token(directory: Path | None) -> str | None:
     ``/proc/self/fd`` is recorded as ``proc-self-fd`` and ``/dev/fd`` as ``dev-fd``: the token says
     which platform interface :func:`fd_directory` enumerated, which is what a reader of
     ``decoded.json`` needs to judge the handle half, and it names no host location, because no
-    artefact may carry an absolute path (AAP §0.5.5). ``None`` stays ``None``: neither directory
+    artefact may carry an absolute path. ``None`` stays ``None``: neither directory
     exists, which is what makes the handle half ``unsupported_platform``.
 
     Raises:
@@ -235,10 +236,10 @@ def _is_under(path: Path, root: Path) -> bool:
 def _report_relative(path: str, report_dir: Path) -> str:
     """Return `path` in the portable form an artefact may carry.
 
-    No artefact records an absolute host path (AAP §0.5.5), so a path under `report_dir` is
-    recorded relative to it -- the same form ``summary.json`` gives ``evidence_dir`` -- and an
-    absolute path elsewhere is recorded by its name alone. A path the caller already gave relatively
-    is returned untouched, because it never carried the run's location.
+    No artefact records an absolute host path, so a path under `report_dir` is recorded relative to
+    it -- the same form ``summary.json`` gives ``evidence_dir`` -- and an absolute path elsewhere is
+    recorded by its name alone. A path the caller already gave relatively is returned untouched,
+    because it never carried the run's location.
     """
     if not os.path.isabs(path):
         return path
@@ -264,7 +265,7 @@ def cases(ctx: RunContext) -> Iterator[Case]:
     could run and carried on :attr:`~qrcheck.registry.check.RunContext.temp_baseline`, so
     enumeration neither reads the filesystem nor fixes a window of its own. The verdict is formed
     when the case executes, which the runner arranges to be after the walk, so what the case
-    compares at either end is the run (AAP §0.8.1).
+    compares at either end is the run.
 
     Yields:
         Exactly one :class:`~qrcheck.registry.check.Case`, named :data:`CASE_ID`.

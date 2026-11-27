@@ -1,13 +1,14 @@
 """The inward-only dependency direction, held mechanically by an AST scan of the package.
 
-The dependency direction is a contract, not a convention (AAP §0.3.2, §0.3.4 "Extension
-boundary"), so this module asserts it by reading the package's source and lets a breach fail a
-test instead of a review: ``qrcheck/checks/**`` may import ``qrcheck.targets.base`` and nothing
-else of that layer -- not a concrete adapter and not the ``qrcheck.targets`` package itself,
-whose entry point is the one module allowed to know the concrete class names;
-``qrcheck/targets/**`` never imports ``qrcheck/checks``; nothing under ``qrcheck/`` imports
-anything under ``tests``; and the scan cannot pass vacuously, because both subtrees must still
-hold the modules the plan's tree fixes.
+The dependency direction is a contract, not a convention -- it is the extension boundary that
+lets a fourth adapter kind be added with no check change -- so this module asserts it by reading
+the package's source and lets a breach fail a test instead of a review: ``qrcheck/checks/**`` may
+import ``qrcheck.targets.base`` and nothing else of that layer -- not a concrete adapter and not
+the ``qrcheck.targets`` package itself, whose entry point is the one module allowed to know the
+concrete class names; ``qrcheck/targets/**`` never imports ``qrcheck/checks``; nothing under
+``qrcheck/`` imports anything under ``tests``; and the scan cannot pass vacuously, because both
+subtrees must still hold at least :data:`_MIN_CHECK_MODULES` and
+:data:`_MIN_TARGET_MODULES` modules.
 
 The AST rather than a text search: a comment, a docstring or a log line naming an adapter is not
 a dependency, while a relative ``from ..targets.cli import ...`` is one a text search misses. A
@@ -44,8 +45,8 @@ _TEST_SUITE: Final[str] = "tests"
 _CHECKS_SCOPE: Final[str] = f"{_PACKAGE}/checks"
 _TARGETS_SCOPE: Final[str] = f"{_PACKAGE}/targets"
 
-# The five concrete adapters of the plan's tree (AAP §0.9.1), sorted, each of which a check
-# must never name and only the factory table may name.
+# The five concrete adapters ``qrcheck.targets`` ships, sorted, each of which a check must never
+# name and only the factory table may name.
 _ADAPTER_MODULES: Final[tuple[str, ...]] = (
     f"{_TARGETS}.cli",
     f"{_TARGETS}.defective",
@@ -54,14 +55,14 @@ _ADAPTER_MODULES: Final[tuple[str, ...]] = (
     f"{_TARGETS}.reference",
 )
 
-# The module counts the plan's tree fixes (AAP §0.9.1). A floor, not a target: a rename or a move
-# that empties either subtree must fail here rather than turn the rules below into a scan of nothing
-# -- qrcheck/checks/ holds __init__, support and nine families, qrcheck/targets/ seven.
-_PLANNED_CHECK_MODULES: Final[int] = 11
-_PLANNED_TARGET_MODULES: Final[int] = 7
+# The floor on the modules the scan must visit, rather than a target: a rename or a move that
+# empties either subtree must fail here rather than turn the rules below into a scan of nothing --
+# qrcheck/checks/ holds __init__, support and nine families, qrcheck/targets/ seven.
+_MIN_CHECK_MODULES: Final[int] = 11
+_MIN_TARGET_MODULES: Final[int] = 7
 
 # The only modules allowed to name a concrete adapter or the adapter package, sorted, each with the
-# plan item that permits it; adding an importer is a deliberate change here, not an accidental pass.
+# reason beside it; adding an importer is a deliberate change here, not an accidental pass.
 ALLOWED_ADAPTER_CONSUMERS: Final[frozenset[str]] = frozenset(
     {
         # Resolves a target through the one factory map during `qrcheck doctor`'s pre-flight probe.
@@ -69,7 +70,7 @@ ALLOWED_ADAPTER_CONSUMERS: Final[frozenset[str]] = frozenset(
         # Resolves a target through the same map for a run.
         "qrcheck/cli/run.py",
         # The factory table itself: the single owner of the five concrete module names, which it
-        # resolves lazily and so imports none of (AAP §0.3.4 extension boundary).
+        # resolves lazily and so imports none of.
         "qrcheck/targets/__init__.py",
         # DefectiveAdapter reuses the conforming generator's encode path and injects the five
         # defects.
@@ -366,8 +367,8 @@ def test_checks_layer_reaches_only_the_adapter_port() -> None:
     """``qrcheck/checks/**`` imports ``qrcheck.targets.base`` and nothing else of that layer."""
     violations = _violations(_scan(_PRODUCT_ROOT), scope=_CHECKS_SCOPE, reaches=_beyond_the_port)
     assert not violations, (
-        "Check modules may import qrcheck.targets.base and nothing else from qrcheck.targets "
-        "(AAP §0.3.4 extension boundary). Offenders, as path:lineno:module:\n"
+        "Check modules may import qrcheck.targets.base and nothing else from qrcheck.targets. "
+        "Offenders, as path:lineno:module:\n"
         f"{_format(violations)}"
     )
 
@@ -378,8 +379,8 @@ def test_target_layer_never_reaches_the_check_layer() -> None:
         _scan(_PRODUCT_ROOT), scope=_TARGETS_SCOPE, reaches=_reaches_the_check_layer
     )
     assert not violations, (
-        "Adapter modules must never import the check layer (AAP §0.3.4 extension boundary). "
-        "Offenders, as path:lineno:module:\n"
+        "Adapter modules must never import the check layer. Offenders, as "
+        "path:lineno:module:\n"
         f"{_format(violations)}"
     )
 
@@ -393,18 +394,18 @@ def test_product_never_reaches_the_test_suite() -> None:
     )
 
 
-def test_scan_covers_the_planned_modules() -> None:
-    """The scan visits the modules the plan's tree fixes, so no rule above can pass vacuously."""
+def test_scan_covers_the_required_modules() -> None:
+    """The scan visits at least the declared module counts, so no rule above can pass vacuously."""
     assert _PRODUCT_ROOT.is_dir(), f"the package directory {_PRODUCT_ROOT} is missing"
     checks = _python_files(_PRODUCT_ROOT / "checks")
     targets = _python_files(_PRODUCT_ROOT / "targets")
-    assert len(checks) >= _PLANNED_CHECK_MODULES, (
-        f"qrcheck/checks/ holds {len(checks)} module(s); the plan's tree fixes at least "
-        f"{_PLANNED_CHECK_MODULES} (AAP §0.9.1)"
+    assert len(checks) >= _MIN_CHECK_MODULES, (
+        f"qrcheck/checks/ holds {len(checks)} module(s); the counted floor is "
+        f"{_MIN_CHECK_MODULES}"
     )
-    assert len(targets) >= _PLANNED_TARGET_MODULES, (
-        f"qrcheck/targets/ holds {len(targets)} module(s); the plan's tree fixes at least "
-        f"{_PLANNED_TARGET_MODULES} (AAP §0.9.1)"
+    assert len(targets) >= _MIN_TARGET_MODULES, (
+        f"qrcheck/targets/ holds {len(targets)} module(s); the counted floor is "
+        f"{_MIN_TARGET_MODULES}"
     )
     scanned = [path for path, _ in _sources(_PRODUCT_ROOT)]
     assert scanned, "the scan parsed no module at all"
@@ -452,8 +453,9 @@ def test_adapters_import_siblings_only_where_declared() -> None:
 def test_the_check_layer_imports_no_module_by_a_computed_name() -> None:
     """No check module imports a module whose name it cannot show to be inside the check package.
 
-    AAP §0.3.4 requires the scan to fail on a literal import of one of the five adapters, and
-    :func:`_literal_references` holds that. A name assembled at run time defeats a literal rule,
+    The extension boundary requires the scan to fail on a literal import of one of the five
+    adapters, and :func:`_literal_references` holds that. A name assembled at run time defeats a
+    literal rule,
     because the adapter's name never appears: ``importlib.import_module("qrcheck.targets." +
     name)``, ``__import__(module_name)`` and ``getattr(importlib, "import_module")(name)`` each
     reach an adapter while every literal assertion still passes. This rule constrains the form
@@ -465,8 +467,8 @@ def test_the_check_layer_imports_no_module_by_a_computed_name() -> None:
     violations = _computed_imports(_PRODUCT_ROOT, scope=_CHECKS_SCOPE)
     assert not violations, (
         "Check modules may import only a literal module name or one provably inside "
-        "qrcheck.checks, so no computed name reaches an adapter (AAP §0.3.4 extension "
-        "boundary). Offenders, as path:lineno:hook:\n"
+        "qrcheck.checks, so no computed name reaches an adapter. Offenders, as "
+        "path:lineno:hook:\n"
         f"{_format(violations)}"
     )
 

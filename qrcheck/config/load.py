@@ -36,7 +36,7 @@ __all__ = ["load_config"]
 
 # The probe file that proves ``report_dir`` is writable.  It is created inside the
 # report directory itself -- never in the system temporary directory, which the
-# artifact-cleanup check inspects -- and removed before this module returns, so it
+# artefact-cleanup check inspects -- and removed before this module returns, so it
 # leaves no trace: no marker file, no name a later run has to filter out.
 _PROBE_PREFIX: Final[str] = "qrcheck-probe-"
 _PROBE_SUFFIX: Final[str] = ".tmp"
@@ -172,7 +172,7 @@ def _prepare_report_dir(report_dir: Path) -> None:
     """Create ``report_dir`` if absent and prove it is writable.
 
     Writability is proven the only way it can be, by writing: a probe file is created inside the
-    directory -- never in the system temporary directory the artifact-cleanup check watches -- and
+    directory -- never in the system temporary directory the artefact-cleanup check watches -- and
     removed in a ``finally``, so a read-only directory, a full filesystem or a parent that is a
     regular file surfaces as the ``OSError`` the real write would have produced.
 
@@ -201,10 +201,8 @@ def _prepare_report_dir(report_dir: Path) -> None:
 
 # ---------------------------------------------------------------------------
 # Assembly
-#
 # The document handed to these builders has already been validated, so every value
 # below is present and of its declared kind.  Values are coerced in exactly two ways:
-#
 # * A number is cast to the type its record declares.  TOML spells a whole number
 #   as an integer, ``timeout_s = 30``, and the schema accepts either spelling for a
 #   float field, so this is the one place a number key becomes the ``float`` or the

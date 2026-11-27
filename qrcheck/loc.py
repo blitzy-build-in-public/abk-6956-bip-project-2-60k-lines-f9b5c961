@@ -86,7 +86,7 @@ def count_lines(root: str | os.PathLike[str]) -> LocReport:
 
     # Enumeration starts from the lexical absolute path -- a pure string
     # operation, no symlink resolution -- so each walked dir is an unambiguous
-    # prefix of the paths it yields and a report path never needs normalizing.
+    # prefix of the paths it yields and a report path never needs normalising.
     base = Path(os.path.abspath(os.fspath(given)))
     files: list[FileLines] = []
     excluded: list[str] = []

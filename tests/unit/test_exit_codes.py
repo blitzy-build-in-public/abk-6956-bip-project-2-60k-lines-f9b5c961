@@ -1,11 +1,11 @@
 """The process contract: one test per exit code, and the precedence between them.
 
-AAP §0.3.4 fixes four statuses and one order: ``0`` when the run completed with no ``failed``
-and no ``error`` result, a ``skipped`` result never changing the outcome; ``1`` for at least one
-``failed`` and none errored; ``2`` for a configuration, selection, corpus-filter, corpus-file,
-primary-decoder or target-availability fault decided **before any check runs**, so no report is
-written and the diagnostic names the key, selector, filter, dependency or path to fix; ``3`` for
-an ``error`` result, an unwritable ``report_dir`` or an unhandled framework exception.
+:mod:`qrcheck.cli.exit` fixes four statuses and one order: ``0`` when the run completed with no
+``failed`` and no ``error`` result, a ``skipped`` result never changing the outcome; ``1`` for at
+least one ``failed`` and none errored; ``2`` for a configuration, selection, corpus-filter,
+corpus-file, primary-decoder or target-availability fault decided **before any check runs**, so no
+report is written and the diagnostic names the key, selector, filter, dependency or path to fix;
+``3`` for an ``error`` result, an unwritable ``report_dir`` or an unhandled framework exception.
 Precedence is ``2`` before execution and, during and after a run, ``3`` outranking ``1``
 outranking ``0``, so exit code 2 never competes with a result -- which is why
 :func:`qrcheck.cli.exit.exit_code_for` cannot return it and the tests below assert that property
@@ -97,9 +97,9 @@ CAPABILITY_SKIP_CHECK: Final[str] = "SY-VERSION-MIN"
 #: an ordinary check, chosen because it sorts before the continuation witness, so "a result
 #: with a later check identifier" is a statement about the walk continuing rather than about
 #: which check happened to be selected. ``CL-ARTIFACTS`` cannot serve here -- it asserts a
-#: property of the whole run, so the runner executes it after every ordinary check (AAP §0.8.1)
-#: and a fault in it would prove nothing about the walk going on. ``IV-BAD-OPTION`` and
-#: ``IV-EMPTY`` are both synthetic and read no corpus record, and the two capabilities
+#: property of the whole run, so the runner executes it after every ordinary check and a fault in
+#: it would prove nothing about the walk going on. ``IV-BAD-OPTION`` and ``IV-EMPTY`` are both
+#: synthetic and read no corpus record, and the two capabilities
 #: ``IV-BAD-OPTION`` requires are the ones the stub target declares, so the pair keeps the
 #: continuation witness cheap and independent of the corpus.
 RAISING_CHECK: Final[str] = "IV-BAD-OPTION"
@@ -113,9 +113,10 @@ RAISING_MESSAGE: Final[str] = "deliberate failure injected by the exit-code suit
 
 #: The case identifier the runner files a result for a check whose case *generator* raised
 #: under, written as a literal so a renamed product constant fails this suite instead of being
-#: followed by it. AAP §0.3.4 gives a constructed case a ``synthetic:<name>`` identifier, and
-#: this one has to stay distinct from every name a check builds for itself and from the
-#: target-loss identifier, or a reader could not tell a broken generator from a broken target.
+#: followed by it. ``qrcheck.runner.CASES_FAILED_CASE_ID`` gives a constructed case a
+#: ``synthetic:<name>`` identifier, and this one has to stay distinct from every name a check
+#: builds for itself and from the target-loss identifier, or a reader could not tell a broken
+#: generator from a broken target.
 RAISING_GENERATOR_CASE_ID: Final[str] = "synthetic:cases"
 
 #: The diagnostic a target-availability prerequisite carries. Injected at the runner
@@ -124,9 +125,9 @@ UNAVAILABLE_TARGET: Final[str] = "remote"
 UNAVAILABLE_DETAIL: Final[str] = "connection refused"
 
 #: The stable half of the diagnostic an unwritable ``report_dir`` produces when no run result
-#: exists to stream. The probe decides before any case runs, so AAP §0.6.6 row 10's JSON-lines
-#: half is unreachable for that trigger and the empty stream has to be stated rather than left
-#: to be read as a truncation; this is the phrase a consumer can key on.
+#: exists to stream. The probe decides before any case runs, so the JSON-lines contract for such
+#: a directory is unreachable for that trigger and the empty stream has to be stated rather than
+#: left to be read as a truncation; this is the phrase a consumer can key on.
 NOTHING_STREAMED: Final[str] = "no result was streamed to stdout"
 
 #: The payload every stubbed decode returns. Deliberately not the payload of any corpus
@@ -309,10 +310,10 @@ def json_object_lines(stdout: str) -> list[dict[str, Any]]:
 
 
 def documented_code(*, failed: int, error: int) -> int:
-    """Return the status AAP §0.3.4 prescribes for a run carrying these two tallies. The rule is
-    stated once, here, in the form the plan states it: an ``error`` result outranks a
-    ``failed`` one, either outranks a clean run, and the ``skipped`` tally is not consulted at
-    all.
+    """Return the status :func:`qrcheck.cli.exit.exit_code_for` prescribes for a run carrying these
+    two tallies. The rule is stated once, here, in the form that function states it: an ``error``
+    result outranks a ``failed`` one, either outranks a clean run, and the ``skipped`` tally is
+    not consulted at all.
     """
     if error > 0:
         return EXIT_INTERNAL
@@ -321,10 +322,10 @@ def documented_code(*, failed: int, error: int) -> int:
     return EXIT_OK
 
 
-#: Every small combination of the four tallies, with the code the plan prescribes for it and
-#: a readable identifier. ``passed`` and ``skipped`` vary too, because a run whose outcome was
-#: read from a pass count or from a "nothing went wrong" flag would still pass a table that
-#: held them fixed.
+#: Every small combination of the four tallies, with the code :func:`exit_code_for` prescribes
+#: for it and a readable identifier. ``passed`` and ``skipped`` vary too, because a run whose
+#: outcome was read from a pass count or from a "nothing went wrong" flag would still pass a
+#: table that held them fixed.
 TALLY_TABLE: Final[tuple[Any, ...]] = tuple(
     pytest.param(
         failed,
@@ -391,10 +392,10 @@ def test_the_documented_corners(
     skipped: int,
     expected: int,
 ) -> None:
-    """The three corners the plan names, each with the code its sentence fixes. A skipped result
-    is counted in its own integer, so a run of skips and passes alone is a clean run; a single
-    failure is exit 1; and a failure beside an error is exit 3, because the two arms are not
-    additive and the internal fault is the one a reader has to see.
+    """The three corners :mod:`qrcheck.cli.exit` names, each with the code it fixes. A skipped
+    result is counted in its own integer, so a run of skips and passes alone is a clean run; a
+    single failure is exit 1; and a failure beside an error is exit 3, because the two arms are
+    not additive and the internal fault is the one a reader has to see.
     """
     run_result = run_with_tallies(
         make_case_result,
@@ -1020,7 +1021,7 @@ def test_exit_three_when_a_check_cannot_enumerate_its_cases(
     happens before any case can run, so the check contributes one ``synthetic:cases`` error
     result carrying its traceback and the walk moves on; a run that let the exception escape
     would build no :class:`~qrcheck.report.model.RunResult`, write no report and lose every
-    result after the broken check, which is the state AAP §0.6.6 row 11 forbids.
+    result after the broken check.
     """
     replace_cases_with_raising_generator(monkeypatch, RAISING_CHECK)
     install_adapter(monkeypatch, stub_adapter)
@@ -1137,9 +1138,9 @@ def test_exit_three_when_a_case_evidence_cannot_be_written(
     to become one ``error`` result per case, filed in that case's own place so the run never
     holds two results for one ``(check_id, case_id)`` pair, while the walk finishes, all three
     artefacts are written and the command exits 3. A run that let the ``OSError`` escape would
-    write no report, stream an empty stdout and state that the run produced no result, which is
-    the state AAP §0.6.6 row 11 forbids for an internal fault and §0.3.4 forbids for a report
-    directory that turns unusable.
+    write no report, stream an empty stdout and state that the run produced no result -- the one
+    outcome the exit-code contract rules out for an internal fault, and for a report directory
+    that turns unusable.
     """
 
     def fail_to_record(*args: object, **kwargs: object) -> str | None:
@@ -1216,9 +1217,9 @@ def test_exit_three_outranks_exit_one_when_a_run_both_fails_and_errors(
     report_dir: Path,
 ) -> None:
     """A run carrying a failure *and* an error exits 3, and the summary reports both counts. The
-    precedence the plan states is only meaningful when both faults are present at once: the
-    internal fault is the worse of the two, so it decides the status, but the failure is still
-    counted and still reported -- a report that collapsed them, or a code that took the
+    precedence :mod:`qrcheck.cli.exit` states is only meaningful when both faults are present at
+    once: the internal fault is the worse of the two, so it decides the status, but the failure is
+    still counted and still reported -- a report that collapsed them, or a code that took the
     failure, would each describe the run wrongly.
     """
     expected_failures = sum(

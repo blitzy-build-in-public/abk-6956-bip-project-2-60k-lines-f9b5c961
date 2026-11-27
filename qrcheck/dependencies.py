@@ -1,8 +1,8 @@
 """Whether each pinned dependency can actually be imported, and the diagnostic when it cannot.
 
-Every package the product declares in ``requirements.lock`` is a *blocking* prerequisite
-(AAP §0.7.2): a broken installation is an environment error -- exit code 2, decided before a single
-case runs, naming the distribution -- never a silent degradation and never an internal error.
+Every package the product declares in ``requirements.lock`` is a *blocking* prerequisite: a broken
+installation is an environment error -- exit code 2, decided before a single case runs, naming the
+distribution -- never a silent degradation and never an internal error.
 Deciding that needs one fact: **does the module the product imports load?** Installed metadata is
 not that fact: a distribution present in ``site-packages`` can still fail to import (a shadowing
 module on ``sys.path``, an extension built for another architecture) while
@@ -37,12 +37,12 @@ __all__ = [
     "problems",
 ]
 
-#: The lock file every pin comes from, named verbatim in every diagnostic (AAP §0.7.1).
+#: The lock file every pin comes from, named verbatim in every diagnostic.
 LOCK_FILE: Final[str] = "requirements.lock"
 
 #: The primary reference decoder -- the authority for every round-trip assertion, so its absence
-#: blocks the run (AAP §0.6.6 row 3) -- and the secondary one, a second opinion only, whose absence
-#: degrades the run to single-decoder mode instead of failing it (AAP §0.6.6 row 4).
+#: blocks the run -- and the secondary one, a second opinion only, whose absence degrades the run
+#: to single-decoder mode instead of failing it.
 PRIMARY_DECODER_DISTRIBUTION: Final[str] = "zxing-cpp"
 PRIMARY_DECODER_MODULE: Final[str] = "zxingcpp"
 SECONDARY_DECODER_DISTRIBUTION: Final[str] = "opencv-python-headless"
@@ -50,7 +50,7 @@ SECONDARY_DECODER_MODULE: Final[str] = "cv2"
 
 #: The oracle and the core libraries as ``(distribution, module)`` pairs, in declaration order: the
 #: module is the one the product really imports -- ``PIL.Image`` rather than ``Pillow``, because
-#: metadata says nothing about whether the image stack loads. Each blocks the run (AAP §0.7.2).
+#: metadata says nothing about whether the image stack loads. Each blocks the run.
 CORE_DEPENDENCIES: Final[tuple[tuple[str, str], ...]] = (
     ("segno", "segno"),
     ("numpy", "numpy"),
@@ -82,7 +82,7 @@ class DependencyProbe:
     @property
     def message(self) -> str:
         """Return the one-line diagnostic for this pair: the blocking one a caller writes before
-        exiting 2 (AAP §0.7.2) when it is unusable, the verified sentence otherwise.
+        exiting 2 when it is unusable, the verified sentence otherwise.
         """
         where = f"interpreter {platform.python_version()} on {sysconfig.get_platform()}"
         if self.problem is None:

@@ -24,7 +24,6 @@ from typing import Final, Literal, Mapping, get_args
 
 # ---------------------------------------------------------------------------
 # Vocabulary
-#
 # Each ``Literal`` alias states a closed set once, and the runtime tuple beside
 # it is derived from that alias with ``get_args`` so no member name is written
 # twice.  ``qrcheck.config.schema`` validates against the tuples; the adapters
@@ -121,7 +120,6 @@ LOOPBACK_HOSTS: Final[tuple[str, ...]] = ("127.0.0.1", "localhost", "::1")
 
 # ---------------------------------------------------------------------------
 # Threshold defaults
-#
 # Each constant is the fallback for exactly one configuration key, used when
 # ``qrcheck.toml`` omits it, and is the one place the fallback is written down;
 # the effective value a run uses is that file's whenever it supplies the key.
@@ -167,7 +165,6 @@ DEFAULT_CONTRAST_FLOOR: Final[float] = 7.0  # contrast_floor
 
 # ---------------------------------------------------------------------------
 # Records
-#
 # Frozen, so a resolved configuration cannot drift once the loader has built
 # it, and free of validation, so the single gate stays
 # ``qrcheck.config.schema.validate``.

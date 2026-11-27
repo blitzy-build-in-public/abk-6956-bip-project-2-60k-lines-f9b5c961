@@ -257,12 +257,12 @@ _PROHIBITED_BUILTIN_CALLS: frozenset[str] = frozenset({"hash", "id"})
 _WALL_CLOCK_ATTRS: frozenset[str] = frozenset({"time", "time_ns"})
 
 # Monotonic readers are deliberately NOT prohibited: a monotonic clock can only produce a duration,
-# AAP 0.5.4 masks ``duration_ms`` in every determinism comparison, and the performance checks read
-# one for their p95 figures outside ``qrcheck/checks/performance.py``. A *wall-clock* read is what
-# is prohibited outright.
+# every determinism comparison masks ``duration_ms``, and the performance checks read one for their
+# p95 figures outside ``qrcheck/checks/performance.py``. A *wall-clock* read is what is prohibited
+# outright.
 
 # OS-provided ambient identity: each value differs between machines or processes, and none may reach
-# an artefact (AAP 0.5.5) -- no hostname, user name or process ID in a report or a filename.
+# an artefact -- no hostname, user name or process ID in a report or a filename.
 _AMBIENT_IDENTITY_ATTRS: dict[str, frozenset[str]] = {
     "getpass": frozenset({"getuser"}),
     "os": frozenset({"getlogin", "getpid", "getrandom", "urandom"}),

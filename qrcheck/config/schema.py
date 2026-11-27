@@ -111,7 +111,6 @@ class KeySpec:
 
 # ---------------------------------------------------------------------------
 # Diagnostic vocabulary
-#
 # A message says what was expected and what was found.  Value kinds are named in
 # the reader's terms ("table", "array") rather than the parser's, and booleans are
 # named before integers because ``bool`` subclasses ``int``.
@@ -179,7 +178,6 @@ def _dotted(prefix: str, key: str) -> str:
 
 # ---------------------------------------------------------------------------
 # Generic validators
-#
 # Each takes what it needs and returns a ``Callable[[Any], str | None]`` matching
 # ``KeySpec.check``, so a range, a membership set or a composition of the two is
 # declared in the table instead of hand-written per key.
@@ -591,7 +589,6 @@ def _check_template_string(text: str, suffix: str) -> None:
 
 # ---------------------------------------------------------------------------
 # The declared tables
-#
 # One entry per key of the configuration contract, in the order the contract
 # tabulates them.  A table is built from its ``KeySpec`` list so a key is named
 # once -- in its spec -- and the mapping key can never disagree with it.
@@ -629,7 +626,7 @@ RENDER: Final[Mapping[str, KeySpec]] = _group(
 # Each default below is a ``models.DEFAULT_*`` fallback this table references by
 # name instead of restating the number; the effective value a run uses is the
 # committed ``qrcheck.toml``'s, so a floor is retuned in that file plus the
-# criterion that reads it.  A count may be an integer only; a latency or a
+# gate that reads it.  A count may be an integer only; a latency or a
 # throughput floor may be written either way and is cast to float by ``load.py``.
 PERFORMANCE: Final[Mapping[str, KeySpec]] = _group(
     KeySpec(
@@ -770,7 +767,6 @@ TARGET_DEFECTIVE: Final[Mapping[str, KeySpec]] = _group()
 
 # ---------------------------------------------------------------------------
 # The one exported table
-#
 # Keyed by the group path the document itself spells, with "" for the top level.
 # Everything below derives the document's structure from these keys, so adding a
 # table here is the whole of adding a table to the contract.

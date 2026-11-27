@@ -1,16 +1,16 @@
 """Contract test: the corpus's record schema, canonical wire form, inventory and predicates.
 
 ``corpus/default.jsonl`` is a committed repository file and the fixed input every corpus-driven
-case is built from, so three promises rest on it (AAP §0.8.2, §0.5.3, §0.4.2): the wire form
-is canonical -- one JSON object per line, keys sorted at every depth, non-ASCII payloads written
-literally rather than as escape sequences, LF endings and exactly one trailing newline -- which
-makes a regenerated corpus byte-comparable with the committed one
-(``tests/integration/test_corpus_determinism.py``); the inventory is the plan's, with
-``builder.CLASS_COUNTS`` against the §0.8.2 table, the 240-record total and the 40-record
-boundary subset; and the discriminating predicates hold, since the ``truncated_payload`` and
-``wrong_ec_level`` injections are observable only through a payload longer than the 64-byte
-truncation window and a boundary payload whose minimal version differs between EC L and M,
-without which witnesses they would be silently inert while every count assertion still passed.
+case is built from, so three promises rest on it: the wire form is canonical -- one JSON object
+per line, keys sorted at every depth, non-ASCII payloads written literally rather than as escape
+sequences, LF endings and exactly one trailing newline -- which makes a regenerated corpus
+byte-comparable with the committed one (``tests/integration/test_corpus_determinism.py``); the
+inventory is the builder's, with ``builder.CLASS_COUNTS`` matching the table below record for
+record, together with the 240-record total and the 40-record boundary subset; and the
+discriminating predicates hold, since the ``truncated_payload`` and ``wrong_ec_level``
+injections are observable only through a payload longer than the 64-byte truncation window and a
+boundary payload whose minimal version differs between EC L and M, without which witnesses they
+would be silently inert while every count assertion still passed.
 
 Two properties no single-record assertion would catch are asserted too: ``build_corpus`` run
 twice with one seed compares equal, because a builder iterating a ``set`` or seeding from
@@ -35,13 +35,12 @@ from qrcheck.corpus import builder, capacity, payloads
 from qrcheck.corpus.builder import CorpusRecord, build_corpus
 from qrcheck.corpus.io import filter_by_class, load_corpus, write_corpus
 
-# The plan's inventory, written out once: AAP §0.8.2 fixes 240 records over 14 classes, of
-# which the three ``boundary-*`` classes are the 40-record subset success criterion 2 runs at EC
-# L, Q and H. This is the one place a count literal is legitimate -- the plan states the numbers
-# and ``builder.CLASS_COUNTS`` must match them -- so every other assertion reads this table or
-# the builder.
+# The builder's inventory, written out once: 240 records over 14 classes, of which the three
+# ``boundary-*`` classes are the 40-record subset the L, Q and H runs are driven over. This is the
+# one place a count literal is legitimate -- ``builder.CLASS_COUNTS`` is the single home of those
+# numbers and must match this table -- so every other assertion reads this table or the builder.
 
-PLAN_CLASS_COUNTS: Final[dict[str, int]] = {
+EXPECTED_CLASS_COUNTS: Final[dict[str, int]] = {
     "boundary-alphanumeric": 12,
     "boundary-byte": 16,
     "boundary-numeric": 12,
@@ -58,21 +57,22 @@ PLAN_CLASS_COUNTS: Final[dict[str, int]] = {
     "wifi": 12,
 }
 
-# AAP §0.8.2: "total 240, boundary subset 40", and the three boundary classes that give the
-# subset its definition -- the `boundary-*` glob of criterion 2 selects exactly these.
-PLAN_TOTAL_RECORDS: Final[int] = 240
-PLAN_BOUNDARY_RECORDS: Final[int] = 40
-PLAN_BOUNDARY_CLASSES: Final[tuple[str, ...]] = (
+# The builder's own totals, ``builder.TOTAL_RECORDS`` and ``builder.BOUNDARY_RECORDS``, and the
+# three boundary classes that give the subset its definition -- the `boundary-*` glob selects
+# exactly these.
+EXPECTED_TOTAL_RECORDS: Final[int] = 240
+EXPECTED_BOUNDARY_RECORDS: Final[int] = 40
+EXPECTED_BOUNDARY_CLASSES: Final[tuple[str, ...]] = (
     "boundary-alphanumeric",
     "boundary-byte",
     "boundary-numeric",
 )
 
-# AAP §0.8.2: the classes the six ``MD-CHARSET`` coverages are drawn from -- ASCII from the
-# alphanumeric boundary class and ``otp``, UTF-8 multibyte from ``utf8-multibyte``, emoji and
-# four-byte code points from ``emoji`` plus the widest ``utf8-multibyte`` records,
-# right-to-left from ``rtl`` and an embedded NUL from ``nul-byte``.
-PLAN_MD_CHARSET_CLASSES: Final[tuple[str, ...]] = (
+# ``builder.MD_CHARSET_CLASSES``: the classes the six ``MD-CHARSET`` coverages are drawn from --
+# ASCII from the alphanumeric boundary class and ``otp``, UTF-8 multibyte from
+# ``utf8-multibyte``, emoji and four-byte code points from ``emoji`` plus the widest
+# ``utf8-multibyte`` records, right-to-left from ``rtl`` and an embedded NUL from ``nul-byte``.
+EXPECTED_MD_CHARSET_CLASSES: Final[tuple[str, ...]] = (
     "boundary-alphanumeric",
     "emoji",
     "nul-byte",
@@ -81,15 +81,15 @@ PLAN_MD_CHARSET_CLASSES: Final[tuple[str, ...]] = (
     "utf8-multibyte",
 )
 
-# AAP §0.4.2: the ``truncated_payload`` defect cuts a longer payload back to 64 bytes. The
-# window is a property of the defect the corpus must make observable, not a tunable, so it is
-# stated here once rather than read from the builder's private constant.
+# The ``truncated_payload`` defect cuts a longer payload back to 64 bytes. The window is a
+# property of the defect the corpus must make observable, not a tunable, so it is stated here
+# once rather than read from the builder's private constant.
 TRUNCATION_BYTES: Final[int] = 64
 
-# The seed this module builds its own corpora from. Any non-negative seed is equally valid --
-# the builder must be a pure function of whatever seed it is handed (AAP §0.5.1) -- and the
-# configured default seed is already exercised by the ``built_corpus`` fixture, so a
-# different one here is deliberate rather than an oversight.
+# The seed this module builds its own corpora from. Any non-negative seed is equally valid -- the
+# builder must be a pure function of whatever seed it is handed -- and the configured default seed
+# is already exercised by the ``built_corpus`` fixture, so a different one here is deliberate
+# rather than an oversight.
 TEST_SEED: Final[int] = 7
 
 # A second seed, used only to show the seed actually reaches the payloads: two seeds that
@@ -97,7 +97,7 @@ TEST_SEED: Final[int] = 7
 # nothing about reproducibility.
 OTHER_SEED: Final[int] = 8
 
-# AAP §0.8.2, the boundary record's ``notes`` text, exactly as
+# The boundary record's ``notes`` text, exactly as
 # ``qrcheck/corpus/payloads.py::_boundary_draft`` writes it:
 # "max_payload_bytes(2, 'L', 'byte') = 32; minimal version L=2, M=3, H=4".
 BOUNDARY_NOTES: Final[re.Pattern[str]] = re.compile(
@@ -106,7 +106,7 @@ BOUNDARY_NOTES: Final[re.Pattern[str]] = re.compile(
     r"M=(?P<m_version>\d{1,2}), H=(?P<h_version>\d{1,2})"
 )
 
-# AAP §0.8.2, a content record's ``notes`` text, exactly as
+# A content record's ``notes`` text, exactly as
 # ``qrcheck/corpus/payloads.py::_content_draft`` writes it:
 # "emoji[0]: 23 four-byte emoji code points, 92 payload bytes".
 CONTENT_NOTES: Final[re.Pattern[str]] = re.compile(
@@ -148,7 +148,7 @@ def corpus_path(records: list[CorpusRecord], tmp_path_factory: pytest.TempPathFa
 
 
 # ---------------------------------------------------------------------------
-# Canonical wire form and round trip (AAP §0.5.3, §0.5.4)
+# Canonical wire form and round trip
 # ---------------------------------------------------------------------------
 
 
@@ -170,7 +170,7 @@ def test_the_file_is_utf8_with_lf_endings_and_one_trailing_newline(corpus_path: 
     assert not text.endswith("\n\n"), "the file must end with exactly one newline"
     assert "\n\n" not in text, "a blank line would read back as a malformed record"
     lines = text.split("\n")[:-1]
-    assert len(lines) == PLAN_TOTAL_RECORDS
+    assert len(lines) == EXPECTED_TOTAL_RECORDS
     for line in lines:
         assert line == line.rstrip(), f"line ends with whitespace: {line[-20:]!r}"
 
@@ -224,33 +224,36 @@ def test_an_empty_corpus_writes_an_empty_file(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Inventory (AAP §0.8.2)
+# Inventory
 # ---------------------------------------------------------------------------
 
 
-def test_the_builder_inventory_is_the_plans_inventory() -> None:
-    """The builder's counts, total and boundary subset are the AAP §0.8.2 figures."""
-    assert builder.CLASS_COUNTS == PLAN_CLASS_COUNTS
-    assert builder.CLASS_NAMES == tuple(sorted(PLAN_CLASS_COUNTS))
-    assert builder.TOTAL_RECORDS == PLAN_TOTAL_RECORDS == sum(PLAN_CLASS_COUNTS.values())
-    assert builder.BOUNDARY_RECORDS == PLAN_BOUNDARY_RECORDS
-    assert builder.BOUNDARY_CLASSES == PLAN_BOUNDARY_CLASSES
-    assert sum(PLAN_CLASS_COUNTS[name] for name in PLAN_BOUNDARY_CLASSES) == PLAN_BOUNDARY_RECORDS
-    assert builder.MD_CHARSET_CLASSES == PLAN_MD_CHARSET_CLASSES
-    assert len(PLAN_CLASS_COUNTS) == 14
+def test_the_builder_inventory_is_the_declared_inventory() -> None:
+    """The builder's counts, total and boundary subset are the figures declared in this module."""
+    assert builder.CLASS_COUNTS == EXPECTED_CLASS_COUNTS
+    assert builder.CLASS_NAMES == tuple(sorted(EXPECTED_CLASS_COUNTS))
+    assert builder.TOTAL_RECORDS == EXPECTED_TOTAL_RECORDS == sum(EXPECTED_CLASS_COUNTS.values())
+    assert builder.BOUNDARY_RECORDS == EXPECTED_BOUNDARY_RECORDS
+    assert builder.BOUNDARY_CLASSES == EXPECTED_BOUNDARY_CLASSES
+    assert (
+        sum(EXPECTED_CLASS_COUNTS[name] for name in EXPECTED_BOUNDARY_CLASSES)
+        == EXPECTED_BOUNDARY_RECORDS
+    )
+    assert builder.MD_CHARSET_CLASSES == EXPECTED_MD_CHARSET_CLASSES
+    assert len(EXPECTED_CLASS_COUNTS) == 14
 
 
 def test_the_built_corpus_holds_the_inventory(records: list[CorpusRecord]) -> None:
     """240 records over the 14 classes, 40 of them boundary records and 200 of them not."""
     counts = Counter(record.class_name for record in records)
-    assert len(records) == builder.TOTAL_RECORDS == PLAN_TOTAL_RECORDS
+    assert len(records) == builder.TOTAL_RECORDS == EXPECTED_TOTAL_RECORDS
     assert counts == builder.CLASS_COUNTS
-    assert sorted(counts) == sorted(PLAN_CLASS_COUNTS)
+    assert sorted(counts) == sorted(EXPECTED_CLASS_COUNTS)
     boundary = [record for record in records if record.class_name in builder.BOUNDARY_CLASSES]
-    assert len(boundary) == builder.BOUNDARY_RECORDS == PLAN_BOUNDARY_RECORDS
-    assert len(records) == len(boundary) + (PLAN_TOTAL_RECORDS - PLAN_BOUNDARY_RECORDS)
+    assert len(boundary) == builder.BOUNDARY_RECORDS == EXPECTED_BOUNDARY_RECORDS
+    assert len(records) == len(boundary) + (EXPECTED_TOTAL_RECORDS - EXPECTED_BOUNDARY_RECORDS)
     for class_name in builder.BOUNDARY_CLASSES:
-        assert counts[class_name] == PLAN_CLASS_COUNTS[class_name]
+        assert counts[class_name] == EXPECTED_CLASS_COUNTS[class_name]
 
 
 def test_the_inventory_does_not_depend_on_the_seed(
@@ -266,18 +269,18 @@ def test_the_committed_corpus_carries_the_same_inventory(
 ) -> None:
     """A read-only count check on ``corpus/default.jsonl`` itself. Regeneration against the
     committed file is ``tests/integration/test_corpus_determinism.py``'s assertion; this module
-    only confirms the committed file holds the inventory the plan fixes.
+    only confirms the committed file holds the inventory ``builder`` declares.
     """
-    assert len(committed_corpus) == PLAN_TOTAL_RECORDS
+    assert len(committed_corpus) == EXPECTED_TOTAL_RECORDS
     assert Counter(record.class_name for record in committed_corpus) == builder.CLASS_COUNTS
     boundary = [
         record for record in committed_corpus if record.class_name in builder.BOUNDARY_CLASSES
     ]
-    assert len(boundary) == PLAN_BOUNDARY_RECORDS
+    assert len(boundary) == EXPECTED_BOUNDARY_RECORDS
 
 
 # ---------------------------------------------------------------------------
-# Record schema (AAP §0.8.2 "CorpusRecord")
+# Record schema (``qrcheck.corpus.builder.CorpusRecord``)
 # ---------------------------------------------------------------------------
 
 
@@ -354,7 +357,7 @@ def test_boundary_notes_recompute_through_the_capacity_tables(
     boundary = [
         record for record in records if record.class_name in builder.BOUNDARY_CLASSES
     ]
-    assert len(boundary) == PLAN_BOUNDARY_RECORDS
+    assert len(boundary) == EXPECTED_BOUNDARY_RECORDS
     for record in boundary:
         match = BOUNDARY_NOTES.fullmatch(record.notes)
         assert match, f"{record.id}: notes are not the boundary form: {record.notes!r}"
@@ -374,7 +377,7 @@ def test_boundary_notes_recompute_through_the_capacity_tables(
 
 
 # ---------------------------------------------------------------------------
-# Determinism (AAP §0.5.1: the corpus is a pure function of the seed)
+# Determinism: the corpus is a pure function of the seed
 # ---------------------------------------------------------------------------
 
 
@@ -408,19 +411,19 @@ def test_a_different_seed_selects_different_payloads(records: list[CorpusRecord]
 
 
 # ---------------------------------------------------------------------------
-# Class filtering (AAP §0.8.1 ``filter_by_class``; the empty result is the runner's exit-2
-# condition, so this module asserts the fact and not an exception)
+# Class filtering (``filter_by_class``; the empty result is the runner's exit-2 condition, so
+# this module asserts the fact and not an exception)
 # ---------------------------------------------------------------------------
 
 
 def test_filter_selects_the_boundary_subset(records: list[CorpusRecord]) -> None:
-    """``boundary-*`` selects exactly the 40 boundary records, in ``id`` order. The same view
-    success criterion 2 runs at EC L, Q and H, so the glob and the count are asserted together:
-    the count alone would not show which classes the glob reaches.
+    """``boundary-*`` selects exactly the 40 boundary records, in ``id`` order. It is the same view
+    the L, Q and H runs are driven over, so the glob and the count are asserted together: the count
+    alone would not show which classes the glob reaches.
     """
     selected = filter_by_class(records, ("boundary-*",))
     assert isinstance(selected, tuple)
-    assert len(selected) == builder.BOUNDARY_RECORDS == PLAN_BOUNDARY_RECORDS
+    assert len(selected) == builder.BOUNDARY_RECORDS == EXPECTED_BOUNDARY_RECORDS
     expected = [record for record in records if record.class_name in builder.BOUNDARY_CLASSES]
     assert list(selected) == expected
     assert {record.class_name for record in selected} == set(builder.BOUNDARY_CLASSES)
@@ -439,7 +442,7 @@ def test_filter_orders_its_result_independently_of_the_input_order(
 def test_filter_globs_are_or_combined(records: list[CorpusRecord]) -> None:
     """Two class globs select the union: ``url`` alone yields 30 records, ``otp`` 12, both 42."""
     selected = filter_by_class(records, ("url", "otp"))
-    assert len(selected) == PLAN_CLASS_COUNTS["url"] + PLAN_CLASS_COUNTS["otp"] == 42
+    assert len(selected) == EXPECTED_CLASS_COUNTS["url"] + EXPECTED_CLASS_COUNTS["otp"] == 42
     assert {record.class_name for record in selected} == {"url", "otp"}
     assert set(selected) == set(filter_by_class(records, ("url",))) | set(
         filter_by_class(records, ("otp",))
@@ -474,10 +477,10 @@ def test_filter_matching_is_case_sensitive(records: list[CorpusRecord]) -> None:
     assert filter_by_class(records, ("ur*",)) == filter_by_class(records, ("url",))
 
 
-# The six MD-CHARSET coverages (AAP §0.8.2 mapping). Each coverage is a predicate over the
-# payload's own decoded bytes rather than a class-name lookup: the point is that the corpus
-# carries a payload that really holds the thing the check exercises, so a class that stopped
-# emitting it would fail here.
+# The six MD-CHARSET coverages, mapped onto ``builder.MD_CHARSET_CLASSES`` below. Each coverage is
+# a predicate over the payload's own decoded bytes rather than a class-name lookup: the point is
+# that the corpus carries a payload that really holds the thing the check exercises, so a class
+# that stopped emitting it would fail here.
 
 # The code-point boundaries the coverage predicates read, as half-open intervals. The emoji
 # interval is the range ``qrcheck/corpus/payloads.py`` draws from, whose every member encodes
@@ -528,7 +531,7 @@ def _has_four_byte_code_point(payload: bytes) -> bool:
     return any(code_point >= FOUR_BYTE_FIRST for code_point in _code_points(payload))
 
 
-# The §0.8.2 coverage-to-class mapping, one row per (coverage, class) pair the plan names:
+# The coverage-to-class mapping, one row per (coverage, class) pair ``CHARSET_COVERAGES`` holds:
 # ASCII from ``otp`` and ``boundary-alphanumeric``; four-byte code points from ``emoji`` and
 # from the widest ``utf8-multibyte`` records.
 CHARSET_COVERAGES: Final[tuple[tuple[str, str, Callable[[bytes], bool]], ...]] = (
@@ -553,7 +556,9 @@ def test_the_six_documented_coverages_are_all_represented() -> None:
         "embedded NUL",
         "four-byte code point",
     }
-    assert {class_name for _, class_name, _ in CHARSET_COVERAGES} == set(PLAN_MD_CHARSET_CLASSES)
+    assert {class_name for _, class_name, _ in CHARSET_COVERAGES} == set(
+        EXPECTED_MD_CHARSET_CLASSES
+    )
 
 
 @pytest.mark.parametrize(("coverage", "class_name", "predicate"), CHARSET_COVERAGES)
@@ -573,7 +578,7 @@ def test_each_charset_coverage_resolves_to_a_record(
 
 
 # ---------------------------------------------------------------------------
-# The §0.4.2 discriminating predicates: the defective target's injections must be observable
+# The discriminating predicates: the defective target's injections must be observable
 # ---------------------------------------------------------------------------
 
 
@@ -683,7 +688,7 @@ def _versions_differ(record: CorpusRecord) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Malformed input (AAP §0.8.1 ``load_corpus``: a diagnostic naming the 1-based line number)
+# Malformed input (``load_corpus``: a diagnostic naming the 1-based line number)
 # ---------------------------------------------------------------------------
 
 

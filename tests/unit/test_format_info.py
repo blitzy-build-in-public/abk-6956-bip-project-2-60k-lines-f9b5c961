@@ -564,14 +564,14 @@ def test_decode_bits_accepts_any_index_and_rejects_everything_else() -> None:
 def test_encode_format_info_rejects_an_unknown_ec_level(ec_level: object) -> None:
     """Only the four names of Table 12 are encodable."""
     with pytest.raises(ValueError, match="EC level"):
-        encode_format_info(ec_level, 0)  # type: ignore[arg-type]
+        encode_format_info(ec_level, 0)
 
 
 @pytest.mark.parametrize("mask", (-1, 8, 1000, "3", None, 3.0), ids=repr)
 def test_encode_format_info_rejects_an_out_of_range_mask(mask: object) -> None:
     """The mask reference is three bits: 0-7, and nothing that merely looks like one."""
     with pytest.raises(ValueError, match="mask"):
-        encode_format_info("M", mask)  # type: ignore[arg-type]
+        encode_format_info("M", mask)
 
 
 def test_format_info_cannot_claim_more_damage_than_the_code_corrects() -> None:

@@ -247,7 +247,6 @@ def _version_for_module_count(module_count: int) -> int:
 # ISO/IEC 18004:2015(E) §7.9.1, copy 0 of 2 -- the copy wrapped around the
 # top-left finder pattern, indexed by bit number with bit 0 the least significant
 # bit of the 15-bit codeword:
-#
 #   down column 8        left along row 8
 #        0  (0, 8)        14  (8, 0)
 #        1  (1, 8)        13  (8, 1)
@@ -258,7 +257,6 @@ def _version_for_module_count(module_count: int) -> int:
 #   (6, 8) and (8, 6) are timing patterns and hold no format bit:
 #        6  (7, 8)         8  (8, 7)
 #        7  (8, 8)  -- the corner module itself
-#
 # The standard's figure numbers the modules from the most significant bit down, so
 # a reader accumulates MSB-first by walking this tuple in reverse.
 _COPY0_POSITIONS: Final[tuple[tuple[int, int], ...]] = (

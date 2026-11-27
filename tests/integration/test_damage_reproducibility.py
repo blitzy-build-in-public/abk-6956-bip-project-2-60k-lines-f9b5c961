@@ -1,17 +1,18 @@
 """`DM-SEEDED`'s integration proof: the recorded seed regenerates the damaged image.
 
-Held here over the whole 8-record by 7-kind matrix of AAP §0.8.1: ``results[].seed`` and
-``decoded.damage[]`` in ``summary.json`` (§0.6.1 #4), the single derivation point §0.5.2
-promises, the byte-identical ``damage-<kind>-<seed>.png`` of §0.5.4, and -- across two runs of
-one failing selection -- the same sorted evidence listing with byte-identical ``request.json``
-and ``decoded.json`` (§0.5.3 row 8, §0.5.4) -- observed through the damage module's public seam,
-never a second copy of a transform. A clean run writes no evidence, so the artefact half is
-observed by a probe whose ``[checks.damage]`` values are strictly harsher than the committed
-defaults, which can only add damage and so cannot mask a defect. The memo the two checks share is
-proven run-scoped as well: a ``DM-SEEDED`` invocation whose own run holds no ``DM-RESILIENCE``
-reports the documented ``missing_dependency`` skip for all 56 cases instead of comparing another
-run's artefacts (``docs/checks.md`` §3.3). Marker ``e2e``: the matrix needs both checks, so
-``-m "not e2e"`` deselects it, and nothing here marks a test skipped, retries it or mocks anything.
+Held here over the whole 8-record by 7-kind matrix: ``results[].seed`` and
+``decoded.damage[]`` in ``summary.json``, the single derivation point
+:func:`qrcheck.config.seeding.derive_seed` provides, the byte-identical
+``damage-<kind>-<seed>.png``, and -- across two runs of one failing selection -- the same sorted
+evidence listing with byte-identical ``request.json`` and ``decoded.json`` -- observed through the
+damage module's public seam, never a second copy of a transform. A clean run writes no evidence,
+so the artefact half is observed by a probe whose ``[checks.damage]`` values are strictly harsher
+than the committed defaults, which can only add damage and so cannot mask a defect. The memo the
+two checks share is proven run-scoped as well: a ``DM-SEEDED`` invocation whose own run holds no
+``DM-RESILIENCE`` reports the documented ``missing_dependency`` skip for all 56 cases instead of
+comparing another run's artefacts (``docs/checks.md`` §3.3). Marker ``e2e``: the matrix needs both
+checks, so ``-m "not e2e"`` deselects it, and nothing here marks a test skipped, retries it or
+mocks anything.
 """
 
 from __future__ import annotations
@@ -67,12 +68,12 @@ _SEEDED: Final[str] = damage_checks.DM_SEEDED
 _RUN_SEED: Final[int] = DEFAULT_SEED
 _OTHER_RUN_SEED: Final[int] = DEFAULT_SEED + 1
 
-#: The shape of the case matrix (AAP §0.8.1): eight sampled records, each damaged seven ways.
+#: The shape of the case matrix: eight sampled records, each damaged seven ways.
 _EXPECTED_RECORDS: Final[int] = 8
 _EXPECTED_CASES: Final[int] = _EXPECTED_RECORDS * len(DAMAGE_KINDS)
 
-#: The kinds whose pattern is drawn from the derived seed (AAP §0.5.1): occluder placement and
-#: additive noise; the other five are deterministic, so a different seed leaves them identical.
+#: The kinds whose pattern is drawn from the derived seed: occluder placement and additive
+#: noise; the other five are deterministic, so a different seed leaves them identical.
 _STOCHASTIC_KINDS: Final[frozenset[str]] = frozenset({"occluders", "noise"})
 
 #: The consensus vocabulary ``decoded["damage"][].agreement`` may hold.
@@ -303,7 +304,7 @@ def _capture_variants(
         if variant is None:
             raise AssertionError(
                 f"case {case_id}: DM-RESILIENCE holds no {kind!r} variant in the module's "
-                f"public memo, so the artefact criterion 4 measures cannot be regenerated"
+                f"public memo, so the artefact the case records cannot be regenerated"
             )
         captured[(record_id, kind)] = variant
     return captured
@@ -353,7 +354,7 @@ def damage_runs(
 
 
 def test_damage_kinds_are_the_declared_seven_in_order() -> None:
-    """Catch a reordered, renamed, duplicated or added damage kind (AAP §0.5.3)."""
+    """Catch a reordered, renamed, duplicated or added damage kind."""
     assert DAMAGE_KINDS == (
         "occluders",
         "blur",
@@ -386,7 +387,7 @@ def test_every_damage_case_records_its_derived_seed(
     seeded = _by_case_id(summary, _SEEDED)
     assert len(resilience) == _EXPECTED_CASES, (
         f"DM-RESILIENCE reported {len(resilience)} cases, expected {_EXPECTED_CASES} "
-        f"(§0.8.1's case matrix: {_EXPECTED_RECORDS} records by {len(DAMAGE_KINDS)} kinds)"
+        f"(the case matrix: {_EXPECTED_RECORDS} records by {len(DAMAGE_KINDS)} kinds)"
     )
     assert len(seeded) == _EXPECTED_CASES, (
         f"DM-SEEDED reported {len(seeded)} cases, expected {_EXPECTED_CASES}"
@@ -409,12 +410,12 @@ def test_every_damage_case_records_its_derived_seed(
 
         decoded = result["decoded"]
         assert isinstance(decoded, dict), (
-            f"case {case_id}: decoded is a {type(decoded).__name__}, not the projection "
-            f"criterion 4 measures"
+            f"case {case_id}: decoded is a {type(decoded).__name__}, not the damage "
+            f"projection the case records"
         )
         assert "damage" in decoded, (
-            f"case {case_id}: decoded carries no 'damage' key, which is the field "
-            f"AAP §0.6.1 #4 measures; keys present: {sorted(decoded)}"
+            f"case {case_id}: decoded carries no 'damage' key, so the case records nothing "
+            f"about the damage it applied; keys present: {sorted(decoded)}"
         )
         entries = decoded["damage"]
         assert isinstance(entries, list) and len(entries) == 1, (
@@ -438,7 +439,7 @@ def test_every_damage_case_records_its_derived_seed(
             f"case {case_id}: the applied threshold values are {entry['applied']!r}, so the "
             f"damage this case applied cannot be audited from its evidence"
         )
-        # The occlusion budget comes from the EC level the symbol reports (IM-5), so record it.
+        # The occlusion budget comes from the EC level the symbol reports, so record it.
         assert decoded["pristine"]["decoded_ec"] in {"L", "M", "Q", "H"}, (
             f"case {case_id}: the pristine reading reports EC level "
             f"{decoded['pristine']['decoded_ec']!r}, which no damage budget can be derived from"
@@ -457,7 +458,7 @@ def test_every_damage_case_records_its_derived_seed(
             f"declared kind {DAMAGE_KINDS}"
         )
 
-    # A clean run persists nothing (AAP §0.3.4), which is why the stricter-only probe below exists.
+    # A clean run persists nothing, which is why the stricter-only probe below exists.
     persisted = sorted(
         f"{check_id}:{case_id}"
         for check_id, results in ((_RESILIENCE, resilience), (_SEEDED, seeded))
@@ -505,7 +506,7 @@ def test_seeded_reapplication_reproduces_the_resilience_variant(
         decoded = result["decoded"]
         assert "variant" in decoded, (
             f"case {case_id}: DM-SEEDED's decoded carries no 'variant' block, which holds "
-            f"the byte comparison criterion 4 measures; keys present: {sorted(decoded)}"
+            f"the byte comparison the case records; keys present: {sorted(decoded)}"
         )
         variant = decoded["variant"]
         assert variant["regenerated_sha256"] == variant["recorded_sha256"], (
@@ -605,7 +606,7 @@ def test_damage_application_is_byte_identical_from_the_seed_alone(
         else:
             assert not changed, (
                 f"kind {kind!r} changed for {changed} under a different run seed, but it is "
-                f"a deterministic image operation with no seeded draw (AAP §0.5.1)"
+                f"a deterministic image operation with no seeded draw"
             )
 
 
@@ -613,7 +614,7 @@ def test_damage_application_is_byte_identical_from_the_seed_alone(
 
 
 def test_dm_seeded_issues_zero_adapter_calls(damage_runs: _DamageRun) -> None:
-    """Catch a ``DM-SEEDED`` that re-encodes instead of re-applying the damage (AAP §0.8.1)."""
+    """Catch a ``DM-SEEDED`` that re-encodes instead of re-applying the damage."""
     declared = damage_checks.EXPECTED_ENCODES[_SEEDED]
     assert declared == 0, (
         f"the damage family declares {declared} encodes for DM-SEEDED; this test asserts "
@@ -1023,7 +1024,7 @@ def _recorded_dirs(tree: _Probe, case_ids: Sequence[str]) -> dict[str, str]:
         if Path(evidence_dir).is_absolute():
             raise AssertionError(
                 f"case {case_id}: the recorded evidence_dir {evidence_dir!r} is absolute, "
-                f"which AAP §0.5.5 forbids in an artefact"
+                f"which no artefact may carry"
             )
         if not (tree.report_root / evidence_dir).is_dir():
             raise AssertionError(
@@ -1035,7 +1036,7 @@ def _recorded_dirs(tree: _Probe, case_ids: Sequence[str]) -> dict[str, str]:
 
 
 def _evidence_listing(tree: _Probe) -> list[str]:
-    """Return every path under the evidence root, relative posix and sorted (AAP §0.5.3)."""
+    """Return every path under the evidence root, relative posix and sorted."""
     root = tree.report_root / EVIDENCE_DIR_NAME
     return sorted(path.relative_to(root).as_posix() for path in root.rglob("*"))
 
@@ -1047,7 +1048,7 @@ def test_evidence_listing_and_bodies_are_byte_identical_across_two_runs(
 ) -> None:
     """Catch an evidence tree, or an evidence body, that a second run of the same case changes.
 
-    AAP §0.5.3 row 8, §0.5.4 row 2: byte-stable listing and bodies for one case and seed.
+    Byte-stable listing and bodies for one case and seed, across two runs of one selection.
     """
     first = _harsh_probe(tmp_path_factory, write_config, run_cli, label="evidence-first")
     second = _harsh_probe(tmp_path_factory, write_config, run_cli, label="evidence-second")

@@ -1,16 +1,14 @@
 """The reference run's gates: a conforming target must come back completely clean.
 
-This module asserts the acceptance evidence AAP §0.4.1 and §0.6.1 rows **#1, #2, #3, #5**,
-**#6**, **#8**, **#10** and **#11** require from a whole run over the committed 240-record
-corpus at EC M plus the boundary subset #2 replays at L, Q and H: a clean run, all 21 checks
-executed and passing, the workload equal to the case matrix, round-trip over every committed
-and boundary record, the configured performance floors, and the three report artefacts
-against their documented schemas.
+This module asserts the acceptance evidence a whole run must leave behind, over the committed
+240-record corpus at EC M plus the 40-record boundary subset replayed at L, Q and H: a clean
+run, all 21 checks executed and passing, the workload equal to the case matrix, round-trip over
+every committed and boundary record, the configured performance floors, and the three report
+artefacts against their documented schemas.
 
-Both runs come from the session-scoped fixtures in ``tests/integration/conftest.py``, so each
-is paid for once inside §0.6.1 #9's five-run budget; no wall-clock quantity is compared (AAP
-§0.5.5), every collection is walked in sorted order, and no threshold is written in this
-file."""
+Each run comes from the session-scoped fixtures in ``tests/integration/conftest.py``, so it is
+paid for once in the session's five full runs; no wall-clock quantity is compared, every
+collection is walked in sorted order, and no threshold is written in this file."""
 
 from __future__ import annotations
 
@@ -27,18 +25,19 @@ import pytest
 
 # Imported for its side effect only: ``qrcheck.checks`` registers the nine families in ``REGISTRY``,
 # without which the registry is empty in a fresh interpreter.
-import qrcheck.checks  # noqa: F401  (registration side effect)
+import qrcheck.checks
 from qrcheck.corpus.io import filter_by_class, load_corpus
 from qrcheck.registry.check import REGISTRY
 
-# A full 240-record run is the dominant cost, which AAP §0.6.1 puts in the ``e2e`` CI job.
+# A full 240-record run is the dominant cost, so the ``e2e`` marker confines it to the CI job.
 pytestmark = pytest.mark.e2e
 
 
 # The contract constants: each value is a fact the report is asserted against, never a threshold --
-# the identifiers and counts are AAP's, the seed and EC level the committed configuration's.
+# the identifiers and counts are the registry's and the documented schema's, the seed and EC level
+# the committed configuration's.
 
-#: The 21 check identifiers of AAP §0.3.4, verbatim.
+#: The 21 check identifiers the registry declares, verbatim.
 CHECK_IDS: Final[frozenset[str]] = frozenset(
     {
         "RT-ROUNDTRIP",
@@ -65,7 +64,7 @@ CHECK_IDS: Final[frozenset[str]] = frozenset(
     }
 )
 
-#: AAP §0.8.1's case matrix: the cases each check runs in one full run at EC M over 240 records.
+#: The case matrix: the cases each check runs in one full run at EC M over 240 records.
 CASE_MATRIX: Final[Mapping[str, int]] = {
     "RT-ROUNDTRIP": 240,
     "MD-MODE-OPTIMAL": 60,
@@ -93,7 +92,7 @@ CASE_MATRIX: Final[Mapping[str, int]] = {
 #: The total the matrix comes to, asserted separately from the rows.
 DECLARED_CASES: Final[int] = 1_283
 
-#: The nine top-level fields of ``summary.json`` (AAP §0.3.4), asserted as an exact set.
+#: The nine top-level fields of ``summary.json``, asserted as an exact set.
 SUMMARY_KEYS: Final[frozenset[str]] = frozenset(
     {
         "run_id",
@@ -108,7 +107,7 @@ SUMMARY_KEYS: Final[frozenset[str]] = frozenset(
     }
 )
 
-#: The ten fields of every result object (AAP §0.3.4), for the same reason.
+#: The ten fields of every result object, for the same reason.
 RESULT_KEYS: Final[frozenset[str]] = frozenset(
     {
         "check_id",
@@ -124,7 +123,7 @@ RESULT_KEYS: Final[frozenset[str]] = frozenset(
     }
 )
 
-#: The four tallies, four separate integers so a skip can never fold into a pass (AAP §0.3.4).
+#: The four tallies, four separate integers so a skip can never fold into a pass.
 COUNT_KEYS: Final[frozenset[str]] = frozenset({"passed", "failed", "skipped", "error"})
 
 #: The adapter the reference fixture runs, which must be the conforming built-in target.
@@ -134,23 +133,23 @@ REFERENCE_ADAPTER: Final[str] = "reference"
 RUN_EC_LEVEL: Final[str] = "M"
 RUN_SEED: Final[int] = 20240101
 
-#: The 40-record boundary subset criterion 2 replays at L, Q and H (AAP §0.6.1 #2).
+#: The 40-record boundary subset the boundary fixtures replay at L, Q and H.
 BOUNDARY_LEVELS: Final[tuple[str, ...]] = ("L", "Q", "H")
 BOUNDARY_CLASS_GLOB: Final[str] = "boundary-*"
 BOUNDARY_RECORDS: Final[int] = 40
 CORPUS_RECORDS: Final[int] = 240
 
-#: The committed corpus's location relative to the root (AAP §0.9.2), and the configuration's name.
+#: The committed corpus's location relative to the root, and the configuration's name.
 CORPUS_PATH: Final[tuple[str, ...]] = ("corpus", "default.jsonl")
 CONFIG_FILE_NAME: Final[str] = "qrcheck.toml"
 
-#: The prefix a corpus-driven case identifier carries (AAP §0.3.4: ``corpus:<record-id>``).
+#: The prefix a corpus-driven case identifier carries: ``corpus:<record-id>``.
 CORPUS_CASE_PREFIX: Final[str] = "corpus:"
 
-#: The three report artefacts a run writes (AAP §0.3.4), in the order the summary names them.
+#: The three report artefacts a run writes, in the order the summary names them.
 REPORT_ARTEFACTS: Final[tuple[str, ...]] = ("summary.json", "junit.xml", "index.html")
 
-#: The two attributes AAP §0.3.4 omits from ``junit.xml``; pytest's own writer emits both.
+#: The two volatile attributes ``junit.xml`` omits; pytest's own writer emits both.
 VOLATILE_XML_ATTRIBUTES: Final[frozenset[str]] = frozenset({"hostname", "timestamp"})
 
 #: How a reference to an external origin begins; a self-contained report may carry none of them.
@@ -177,7 +176,7 @@ def _results(summary: Mapping[str, Any]) -> list[Mapping[str, Any]]:
     results = summary.get("results")
     assert isinstance(results, list), (
         f"summary.json carries no 'results' list, but a {type(results).__name__}; a run "
-        f"always reports its cases (AAP §0.3.4)"
+        f"always reports its cases"
     )
     return results
 
@@ -194,8 +193,8 @@ def _single(summary: Mapping[str, Any], check_id: str) -> Mapping[str, Any]:
     """Return the one result ``check_id`` produced in a full run."""
     results = _results_of(summary, check_id)
     assert len(results) == 1, (
-        f"{check_id} must report exactly 1 case in a full run per AAP §0.8.1's case matrix, "
-        f"but the run reported {len(results)}: {[str(r.get('case_id')) for r in results]}"
+        f"{check_id} must report exactly 1 case in a full run per the case matrix, but the run "
+        f"reported {len(results)}: {[str(r.get('case_id')) for r in results]}"
     )
     return results[0]
 
@@ -210,8 +209,7 @@ def _assert_all_passed(results: Sequence[Mapping[str, Any]], what: str) -> None:
     )
     assert not offenders, (
         f"{what}: {len(offenders)} of {len(results)} case(s) are not passed against the "
-        f"conforming target, which AAP §0.4.1 requires to be clean; first offenders: "
-        f"{offenders[:10]}"
+        f"conforming target, which must come back clean; first offenders: {offenders[:10]}"
     )
 
 
@@ -226,7 +224,7 @@ def _corpus(repo_root: Path) -> list[Any]:
 
 
 def _committed_config(repo_root: Path) -> Mapping[str, Any]:
-    """Return the committed ``qrcheck.toml``, the single source of every threshold (AAP §0.6.2)."""
+    """Return the committed ``qrcheck.toml``, the single source of every threshold."""
     path = repo_root / CONFIG_FILE_NAME
     assert path.is_file(), (
         f"the committed configuration is missing at {path}; the thresholds a run reports in "
@@ -249,8 +247,8 @@ def _string_values(node: Any, path: str) -> Iterator[tuple[str, str]]:
 
 
 def _absolute_path_offenders(summary: Mapping[str, Any]) -> list[tuple[str, str]]:
-    """Return every field whose string value names an absolute path, sorted; AAP §0.5.5 forbids
-    one, and ``CL-ARTIFACTS``'s platform descriptor directory is the documented exemption."""
+    """Return every field whose string value names an absolute path, sorted; an artefact carries
+    none except ``CL-ARTIFACTS``'s platform descriptor directory, the documented exemption."""
     return sorted(
         (path, value)
         for path, value in _string_values(summary, "$")
@@ -279,31 +277,31 @@ def test_reference_run_is_clean(
     results = _results(summary)
 
     assert exit_code == 0, (
-        f"the reference run exited {exit_code} instead of 0; AAP §0.4.1 requires a conforming "
-        f"target to produce neither a failed nor an errored case (report root {report_root})"
+        f"the reference run exited {exit_code} instead of 0; a conforming target must produce "
+        f"neither a failed nor an errored case (report root {report_root})"
     )
     assert counts["failed"] == 0, (
-        f"{counts['failed']} case(s) failed against the conforming target, which AAP §0.4.1 "
-        f"forbids; failing checks: "
+        f"{counts['failed']} case(s) failed against the conforming target, which must not "
+        f"happen; failing checks: "
         f"{sorted({str(result['check_id']) for result in results if result['status'] == 'failed'})}"
     )
     assert counts["error"] == 0, (
-        f"{counts['error']} case(s) errored inside the framework, which AAP §0.4.1 forbids; "
-        f"errored checks: "
+        f"{counts['error']} case(s) errored inside the framework, which is a framework defect "
+        f"and never a verdict on the target; errored checks: "
         f"{sorted({str(result['check_id']) for result in results if result['status'] == 'error'})}"
     )
     skipped_checks = sorted(
         {str(result["check_id"]) for result in results if result["status"] == "skipped"}
     )
     assert counts["skipped"] == 0, (
-        f"{counts['skipped']} case(s) were skipped, but AAP §0.4.1 requires zero skips: a skip "
+        f"{counts['skipped']} case(s) were skipped, but this gate requires zero skips: a skip "
         f"would let a check pass CI without doing its work, as a skipped RN-SVG would rasterize "
         f"nothing (install the SVG rasterizer rather than accept the skip). Skipped checks: "
         f"{skipped_checks}"
     )
     assert sum(counts.values()) == len(results), (
         f"the four tallies sum to {sum(counts.values())} but the run reported {len(results)} "
-        f"results, so an outcome was folded into another bucket (AAP §0.3.4)"
+        f"results, so an outcome was folded into another bucket"
     )
     assert summary["adapter"] == REFERENCE_ADAPTER, (
         f"the run tested adapter {summary['adapter']!r}, not {REFERENCE_ADAPTER!r}; every case "
@@ -311,7 +309,7 @@ def test_reference_run_is_clean(
     )
     assert summary["ec_level"] == RUN_EC_LEVEL, (
         f"the run used EC level {summary['ec_level']!r} rather than {RUN_EC_LEVEL!r}, so the "
-        f"240-record whole-corpus run success criterion 2 names was not the one measured"
+        f"240-record whole-corpus round-trip run was not the one measured"
     )
     assert summary["seed"] == RUN_SEED, (
         f"the run used seed {summary['seed']!r} rather than the committed default {RUN_SEED}, "
@@ -320,7 +318,7 @@ def test_reference_run_is_clean(
     run_id = summary["run_id"]
     assert isinstance(run_id, str) and SHA256_HEX.fullmatch(run_id) is not None, (
         f"run_id must be the content hash over the run's parameters -- not a per-run UUID and "
-        f"not a reading of the wall clock (AAP §0.3.4) -- but it is {run_id!r}"
+        f"not a reading of the wall clock -- but it is {run_id!r}"
     )
 
 
@@ -342,7 +340,7 @@ def test_every_check_registered_is_executed_and_passes(
     )
     assert set(REGISTRY) == set(CHECK_IDS), (
         f"the registry holds {sorted(set(REGISTRY))} rather than the 21 declared identifiers; a "
-        f"check reachable only from a test would leave it short (AAP §0.6.1 #8)"
+        f"check reachable only from a test would leave it short"
     )
     without_pass = sorted(
         check_id
@@ -350,8 +348,8 @@ def test_every_check_registered_is_executed_and_passes(
         if not any(result["status"] == "passed" for result in check_results)
     )
     assert not without_pass, (
-        f"{without_pass} executed but produced no passed result; AAP §0.4.1 requires every "
-        f"check to have at least one, so presence alone can never count as a pass"
+        f"{without_pass} executed but produced no passed result; every check must have at least "
+        f"one, so presence alone can never count as a pass"
     )
     inconsistent = sorted(
         f"{result['check_id']}[{result['case_id']}] status={result['status']!r} "
@@ -361,8 +359,7 @@ def test_every_check_registered_is_executed_and_passes(
     )
     assert not inconsistent, (
         f"{len(inconsistent)} result(s) pair a status with the wrong reason: a passing case must "
-        f"carry no reason and every other status exactly one (AAP §0.3.4); first offenders: "
-        f"{inconsistent[:10]}"
+        f"carry no reason and every other status exactly one; first offenders: {inconsistent[:10]}"
     )
 
 
@@ -371,7 +368,7 @@ def test_case_matrix_matches_the_declared_workload(
 ) -> None:
     """Catch a re-balanced workload: any check running a number of cases the matrix denies.
 
-    AAP §0.8.1's 1,287 encode invocations and 1,462 primary decodes -- a decode column that
+    The declared 1,287 encode invocations and 1,462 primary decodes -- a decode column that
     counts only the damaged reads, so with ``DM-RESILIENCE``'s eight memoised pristine reads the
     declared workload is 1,470 decodes -- are **not** fields of ``summary.json``, and inventing a
     counter to make them observable would change the product to suit the test."""
@@ -383,8 +380,8 @@ def test_case_matrix_matches_the_declared_workload(
         if CASE_MATRIX.get(check_id) != observed.get(check_id)
     }
     assert not mismatched, (
-        f"{len(mismatched)} check(s) ran a number of cases AAP §0.8.1's matrix does not "
-        f"declare, as (declared, observed): {mismatched}"
+        f"{len(mismatched)} check(s) ran a number of cases the case matrix does not declare, "
+        f"as (declared, observed): {mismatched}"
     )
     assert sum(observed.values()) == DECLARED_CASES, (
         f"the full run reported {sum(observed.values())} cases, not the declared "
@@ -402,7 +399,7 @@ def test_roundtrip_covers_all_240_corpus_records(
 
     assert len(results) == CORPUS_RECORDS, (
         f"RT-ROUNDTRIP ran {len(results)} cases, but the committed corpus holds "
-        f"{CORPUS_RECORDS} records that success criterion 2 requires round-trip for"
+        f"{CORPUS_RECORDS} records the whole-corpus round-trip gate requires"
     )
     _assert_all_passed(results, "RT-ROUNDTRIP")
     case_ids = [str(result["case_id"]) for result in results]
@@ -428,12 +425,12 @@ def test_boundary_subset_passes_at_every_ec_level(
     """Catch a boundary subset that is not 40 records, or that breaks at L, Q or H."""
     assert set(boundary_runs) == set(BOUNDARY_LEVELS), (
         f"the boundary fixtures cover {sorted(boundary_runs)} rather than "
-        f"{list(BOUNDARY_LEVELS)}; success criterion 2 runs the subset at every remaining level"
+        f"{list(BOUNDARY_LEVELS)}; the boundary-subset gate runs the subset at every level"
     )
     boundary_records = filter_by_class(_corpus(repo_root), [BOUNDARY_CLASS_GLOB])
     assert len(boundary_records) == BOUNDARY_RECORDS, (
         f"the {BOUNDARY_CLASS_GLOB!r} class filter selects {len(boundary_records)} records, not "
-        f"the {BOUNDARY_RECORDS} success criterion 2 names"
+        f"the {BOUNDARY_RECORDS} the boundary-subset gate names"
     )
     expected_case_ids = [
         f"{CORPUS_CASE_PREFIX}{record.id}"
@@ -524,7 +521,8 @@ def test_performance_floors_are_asserted_by_the_product_from_one_source(
         f"configured {limits['decode_samples']}; a retried or dropped sample would show here"
     )
 
-    # The three floors the plan names by key, asserted one by one so an empty mapping cannot pass.
+    # The three floors ``qrcheck.toml`` declares by key, asserted one by one so an empty mapping
+    # cannot pass.
     for key in ("encode_p95_ms", "min_symbols_per_minute"):
         assert key in encode["expected"], (
             f"PF-ENCODE's expected block does not report {key!r}, so the budget it was measured "
@@ -532,8 +530,7 @@ def test_performance_floors_are_asserted_by_the_product_from_one_source(
         )
         assert encode["expected"][key] == limits[key], (
             f"PF-ENCODE measured against {key}={encode['expected'][key]!r}, but {CONFIG_FILE_NAME} "
-            f"declares {limits[key]!r}: the floor did not come from the single declaration "
-            f"(AAP §0.6.2)"
+            f"declares {limits[key]!r}: the floor did not come from the single declaration"
         )
     assert "decode_p95_ms" in decode["expected"], (
         f"PF-DECODE's expected block does not report 'decode_p95_ms', so the budget it was "
@@ -542,7 +539,7 @@ def test_performance_floors_are_asserted_by_the_product_from_one_source(
     assert decode["expected"]["decode_p95_ms"] == limits["decode_p95_ms"], (
         f"PF-DECODE measured against decode_p95_ms={decode['expected']['decode_p95_ms']!r}, but "
         f"{CONFIG_FILE_NAME} declares {limits['decode_p95_ms']!r}: the floor did not come from "
-        f"the single declaration (AAP §0.6.2)"
+        f"the single declaration"
     )
 
     # Every other budget the case reported is configured too: none of them may be restated.
@@ -582,8 +579,8 @@ def test_no_evidence_is_written_for_passing_cases(
         if result["evidence_dir"] is not None
     )
     assert not with_evidence, (
-        f"{len(with_evidence)} passing case(s) recorded an evidence directory, but AAP §0.3.4 "
-        f"writes evidence only for failing, errored and skipped cases; first offenders: "
+        f"{len(with_evidence)} passing case(s) recorded an evidence directory, but evidence is "
+        f"written only for failing, errored and skipped cases; first offenders: "
         f"{with_evidence[:10]}"
     )
     evidence_root = report_root / "evidence"
@@ -597,9 +594,9 @@ def test_no_evidence_is_written_for_passing_cases(
         )
     offenders = _absolute_path_offenders(summary)
     assert not offenders, (
-        f"{len(offenders)} field(s) of summary.json hold an absolute path, which AAP §0.5.5 "
-        f"forbids in an artefact (evidence paths are relative to report_dir and requests carry "
-        f"paths as configured), as field: value: {offenders[:10]}"
+        f"{len(offenders)} field(s) of summary.json hold an absolute path, which no artefact may "
+        f"carry (evidence paths are relative to report_dir and requests carry paths as "
+        f"configured), as field: value: {offenders[:10]}"
     )
 
 
@@ -614,7 +611,7 @@ def test_the_three_report_artefacts_exist_and_parse(
     for name in REPORT_ARTEFACTS:
         assert (report_root / name).is_file(), (
             f"the run wrote no {name} under {report_root}; a run owes its CI, tooling and human "
-            f"consumers all three artefacts (AAP §0.3.4, §0.6.1 #6)"
+            f"consumers all three artefacts"
         )
 
     root = ET.parse(report_root / "junit.xml").getroot()
@@ -655,7 +652,7 @@ def test_the_three_report_artefacts_exist_and_parse(
         }
     )
     assert not volatile, (
-        f"junit.xml carries {volatile}, which AAP §0.3.4 omits deliberately so the file is "
+        f"junit.xml carries {volatile}, which the writer omits deliberately so the file is "
         f"reproducible; pytest's own writer emits both and this one must not"
     )
 
@@ -672,7 +669,7 @@ def test_the_three_report_artefacts_exist_and_parse(
     )
     assert not external, (
         f"index.html references {external}, so it would need the network to render; every image "
-        f"is a data: URI by construction (AAP §0.3.4)"
+        f"is a data: URI by construction"
     )
 
 
@@ -691,7 +688,7 @@ def test_summary_schema_is_exact(
     counts = summary["counts"]
     assert set(counts) == set(COUNT_KEYS), (
         f"summary.json's counts object is {sorted(counts)}, not the four separate tallies "
-        f"{sorted(COUNT_KEYS)}; a folded tally would hide a skip (AAP §0.3.4)"
+        f"{sorted(COUNT_KEYS)}; a folded tally would hide a skip"
     )
     for name in sorted(COUNT_KEYS):
         assert type(counts[name]) is int and counts[name] >= 0, (
@@ -730,12 +727,11 @@ def test_summary_schema_is_exact(
     loc_limit = int(_committed_config(repo_root)["loc_limit"])
     loc_count = summary["loc_count"]
     assert type(loc_count) is int and loc_count > 0, (
-        f"loc_count is {loc_count!r}, not the positive integer the line budget is measured as "
-        f"(AAP §0.6.1 #11)"
+        f"loc_count is {loc_count!r}, not the positive integer the line budget is measured as"
     )
     assert loc_count <= loc_limit, (
         f"the run measured {loc_count} tracked physical lines against a ceiling of {loc_limit} "
-        f"from {CONFIG_FILE_NAME}; the line budget is breached (AAP §0.6.1 #11)"
+        f"from {CONFIG_FILE_NAME}; the line budget is breached"
     )
 
     for field in ("started_at", "finished_at"):

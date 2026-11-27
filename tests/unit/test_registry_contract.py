@@ -1,24 +1,24 @@
 """Contract test: check identity, the fields each check declares, and resolution to skips.
 
 ``qrcheck/registry/check.py`` owns check identity and ordering and
-``qrcheck/registry/resolve.py`` is the single place a shortfall becomes a skip (AAP §0.3.4). A
-check that never runs, an undeclared identifier or a shortfall counted as a pass lets a report
-describe a run that never happened:
+``qrcheck/registry/resolve.py`` is the single place a shortfall becomes a skip. A check that never
+runs, an undeclared identifier or a shortfall counted as a pass lets a report describe a run that
+never happened:
 
 * the registry holds **exactly** the twenty-one identifiers, and duplication raises;
 * every contract carries the declared fields; iteration is by identifier ascending, also after a
-  child process imports the families in reverse :data:`FAMILY_MODULES` order (§0.5.3);
-* the nine family modules, their identifier ownership and every check's requirements are the
-  plan's;
+  child process imports the families in reverse :data:`FAMILY_MODULES` order;
+* the nine family modules, their identifier ownership and every check's requirements are the ones
+  declared below;
 * an unmet capability is ``unsupported_capability``, a missing dependency
-  ``missing_dependency`` carrying the discovery order it was probed in (AAP §0.3.5, §0.7.2),
-  with the capability reason outranking and ``passed`` staying at zero (AAP §0.6.6 row 9);
+  ``missing_dependency`` carrying the discovery order it was probed in, with the capability reason
+  outranking and ``passed`` staying at zero;
 * each built-in target's expected failing set is the declared one and ``list --json`` lists
   them.
 
-The dependency column follows the AAP's table: ``PF-DECODE`` decodes a fixed probe image and
+The dependency column follows ``DEPENDENCY_TOKENS``: ``PF-DECODE`` decodes a fixed probe image and
 ``CL-ARTIFACTS`` observes the run, both carrying the primary decoder as their optional
-dependency, which can never become a skip for either (AAP §0.6.6 row 3)."""
+dependency, which can never become a skip for either."""
 
 from __future__ import annotations
 
@@ -72,10 +72,9 @@ from qrcheck.registry.resolve import (
 from qrcheck.report.model import CaseResult, Counts, Reason, Status
 from qrcheck.targets.base import Capability
 
-# The twenty-one check identifiers, and how many there are. Stated once from AAP §0.3.4's
-# checks table, which names each row exactly once and is the acceptance criterion the registry
-# is measured against: an identifier added, renamed, split or merged is a change to that table
-# and therefore to this literal, never a silent difference between a run and its report.
+# The twenty-one check identifiers, and how many there are, stated once here because every other
+# assertion in this module is measured against it: an identifier added, renamed, split or merged is
+# a change to this literal, never a silent difference between a run and its report.
 _EXPECTED_CHECK_IDS: Final[frozenset[str]] = frozenset(
     {
         "CL-ARTIFACTS",
@@ -103,9 +102,9 @@ _EXPECTED_CHECK_IDS: Final[frozenset[str]] = frozenset(
 )
 _EXPECTED_CHECK_COUNT: Final[int] = 21
 
-# The nine family modules, in the order AAP §0.8.1's repository tree lists them. The order is
-# not alphabetical on purpose: ``FAMILY_NAMES`` in the registry is, and the two must agree as
-# sets while the loader keeps the reviewable plan order.
+# The nine family modules, in the order ``qrcheck.checks.FAMILY_MODULES`` declares them. The order
+# is not alphabetical on purpose: ``FAMILY_NAMES`` in the registry is, and the two must agree as
+# sets while the loader keeps its own reviewable order.
 _EXPECTED_FAMILY_MODULES: Final[tuple[str, ...]] = (
     "roundtrip",
     "symbol",
@@ -118,9 +117,9 @@ _EXPECTED_FAMILY_MODULES: Final[tuple[str, ...]] = (
     "cleanup",
 )
 
-# Which identifiers each family module owns, from AAP §0.8.1's component-to-check-family
-# mapping. This is the one-module-per-family rule, and it fixes two output surfaces: the JUnit
-# ``classname="qrcheck.<family>"`` of every check and the section of the HTML report it lands in.
+# Which identifiers each family module owns. This is the one-module-per-family rule, and it fixes
+# two output surfaces: the JUnit ``classname="qrcheck.<family>"`` of every check and the section of
+# the HTML report it lands in.
 _EXPECTED_IDS_BY_FAMILY: Final[Mapping[str, frozenset[str]]] = MappingProxyType(
     {
         "cleanup": frozenset({"CL-ARTIFACTS"}),
@@ -138,24 +137,23 @@ _EXPECTED_IDS_BY_FAMILY: Final[Mapping[str, frozenset[str]]] = MappingProxyType(
 )
 
 # The capability names one group of checks requires, named once so the two requirement sets
-# below read as the plan's table rather than as twenty-one restatements.
+# below read as one table rather than as twenty-one restatements.
 _PNG_ONLY: Final[frozenset[Capability]] = frozenset({Capability.png})
 _PNG_AND_EC_LEVEL: Final[frozenset[Capability]] = frozenset(
     {Capability.png, Capability.ec_level}
 )
 
-# What each check requires of the target, from AAP §0.3.4's capability-requirement table. The
-# requirements are the whole reason a fourth adapter kind needs no check change, so they are
-# asserted per check rather than as a total: a check that lost one requirement would still total
-# the same number of capabilities if another gained one, and that pair would go unnoticed.
-#
-# Four rows are an additive clarification of that table rather than a departure from it:
-# RN-MODULE-SIZE adds ``quiet_zone``, RN-SVG adds ``quiet_zone``, RN-LOGO adds ``module_size`` and
-# IV-BAD-OPTION adds ``module_size``, ``quiet_zone`` and ``color``. AAP §0.4.2 and §0.8.1 fix the
-# request fields behind each one -- RN-MODULE-SIZE's dimension contract is stated in the request's
-# own quiet zone, RN-SVG's zero-module margin is what makes its canvas imply the module count at an
-# integral pitch, RN-LOGO sizes its overlay from the pinned edge, and each IV-BAD-OPTION probe sets
-# one option to an illegal value -- and honouring a pinned field needs the capability that owns it.
+# What each check requires of the target. The requirements are the whole reason a fourth adapter
+# kind needs no check change, so they are asserted per check rather than as a total: a check that
+# lost one requirement would still total the same number of capabilities if another gained one,
+# and that pair would go unnoticed.  Four rows declare a capability the check's own subject does
+# not imply, each because the check pins a request field that the capability owns: RN-MODULE-SIZE
+# adds ``quiet_zone``, RN-SVG adds ``quiet_zone``, RN-LOGO adds ``module_size`` and IV-BAD-OPTION
+# adds ``module_size``, ``quiet_zone`` and ``color``. The field behind each one is pinned --
+# RN-MODULE-SIZE's dimension contract is stated in the request's own quiet zone, RN-SVG's
+# zero-module margin is what makes its canvas imply the module count at an integral pitch, RN-LOGO
+# sizes its overlay from the pinned edge, and each IV-BAD-OPTION probe sets one option to an
+# illegal value -- and honouring a pinned field needs the capability that owns it.
 # `support._request_capabilities` derives the pre-I/O ``TargetUnsupported`` gate from exactly those
 # fields, while ``qrcheck list`` and ``resolve()`` decide runnability from this set, so the
 # declaration must predict what that gate refuses: a check that pins a field it does not declare is
@@ -212,10 +210,10 @@ _EXPECTED_REQUIRES: Final[Mapping[str, frozenset[Capability]]] = MappingProxyTyp
 
 _PRIMARY_DECODER_ONLY: Final[tuple[str, ...]] = (DEPENDENCY_PRIMARY_DECODER,)
 
-# The optional runtime dependencies each check declares, from AAP §0.3.4's requirement table.
-# A check declares what it needs, never what provides it -- ``checks/*`` imports no decoder and
-# no rasterizer discovery -- so a token is the whole declaration and an unexpected one would be
-# a check reaching for a tool through a route the layering test forbids.
+# The optional runtime dependencies each check declares. A check declares what it needs, never what
+# provides it -- ``checks/*`` imports no decoder and no rasterizer discovery -- so a token is the
+# whole declaration and an unexpected one would be a check reaching for a tool through a route the
+# layering test forbids.
 _EXPECTED_DEPENDENCIES: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType(
     {
         "CL-ARTIFACTS": _PRIMARY_DECODER_ONLY,
@@ -242,11 +240,10 @@ _EXPECTED_DEPENDENCIES: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType(
     }
 )
 
-# The eleven checks whose cases are drawn from the corpus the run loaded, from AAP §0.3.4's
-# condition that ``corpus_path`` must exist exactly when such a check is selected -- the ten
-# synthetic-only identifiers are its complement. One literal, so a check that quietly stopped
-# reading the corpus, or started to, fails here rather than changing what a run requires of a
-# machine where no corpus has ever been built.
+# The eleven checks whose cases are drawn from the corpus the run loaded: ``corpus_path`` must
+# exist exactly when such a check is selected, and the ten synthetic-only identifiers are its
+# complement. One literal, so a check that quietly stopped reading the corpus, or started to, fails
+# here rather than changing what a run requires of a machine where no corpus has ever been built.
 _EXPECTED_CORPUS_DRIVEN: Final[frozenset[str]] = frozenset(
     {
         "DM-RESILIENCE",
@@ -263,7 +260,7 @@ _EXPECTED_CORPUS_DRIVEN: Final[frozenset[str]] = frozenset(
     }
 )
 
-# The one check whose subject is the whole run rather than one case (AAP §0.8.1). The runner
+# The one check whose subject is the whole run rather than one case. The runner
 # takes its baseline immediately before the walk and executes it after every other check, so
 # declaring a second such check would change when that check runs and what it can observe.
 _EXPECTED_RUN_END: Final[frozenset[str]] = frozenset({"CL-ARTIFACTS"})
@@ -271,15 +268,15 @@ _EXPECTED_RUN_END: Final[frozenset[str]] = frozenset({"CL-ARTIFACTS"})
 # Every capability the port declares, and an availability mapping naming every dependency token
 # as present. Together they are the strongest possible declaration a target and a host can make,
 # which is what the conforming ``reference`` target makes: a check that still cannot run against
-# them has a requirement no target could satisfy (AAP §0.4.1's zero-skip gate).
+# them has a requirement no target could satisfy.
 _EVERY_CAPABILITY: Final[frozenset[Capability]] = frozenset(Capability)
 _EVERY_DEPENDENCY_AVAILABLE: Final[Mapping[str, bool]] = MappingProxyType(
     {token: True for token in sorted(DEPENDENCY_TOKENS)}
 )
 
-# The nine identifiers a ``--adapter defective`` run must fail, from AAP §0.4.2: the union of the
-# five injections' expected sets, which ``qrcheck/registry/expectations.py`` computes rather than
-# lists so an injection cannot gain or lose a consequence silently. Written here because
+# The nine identifiers a ``--adapter defective`` run must fail: the union of the five injections'
+# expected sets, which ``qrcheck/registry/expectations.py`` computes rather than lists so an
+# injection cannot gain or lose a consequence silently. Written here because
 # ``tests/integration/test_defective_run.py`` asserts set equality against it, and a framework
 # whose declared expectation drifted with its own implementation would prove nothing.
 _EXPECTED_DEFECTIVE_FAILURES: Final[frozenset[str]] = frozenset(
@@ -296,9 +293,9 @@ _EXPECTED_DEFECTIVE_FAILURES: Final[frozenset[str]] = frozenset(
     }
 )
 
-# The five injections of AAP §0.4.2, as the keys ``qrcheck.targets.defective`` names them in its
-# own ``DEFECTS`` table. Compared as a set so a renamed injection is a diff here rather than a
-# silently empty per-defect set.
+# The five injections, as the keys ``qrcheck.targets.defective`` names them in its own ``DEFECTS``
+# table. Compared as a set so a renamed injection is a diff here rather than a silently empty
+# per-defect set.
 _EXPECTED_DEFECT_NAMES: Final[frozenset[str]] = frozenset(
     {
         "wrong_ec_level",
@@ -337,8 +334,8 @@ _REVERSE_IMPORT_SCRIPT: Final[str] = (
 )
 
 # A bound on the child process, so a hung import fails this module instead of the session. It is
-# a guard rather than a performance budget: nothing in AAP §0.6's numeric floors is asserted
-# here, and the value is wide enough that a loaded host cannot make it flake.
+# a guard rather than a performance budget: nothing in the configuration's numeric floors is
+# asserted here, and the value is wide enough that a loaded host cannot make it flake.
 _SUBPROCESS_TIMEOUT_S: Final[float] = 300.0
 
 
@@ -362,7 +359,7 @@ def _families_loaded() -> tuple[str, ...]:
 
 
 def test_the_registry_holds_exactly_the_declared_check_ids() -> None:
-    """AAP §0.3.4: the registry holds the twenty-one declared identifiers and no others."""
+    """The registry holds the twenty-one declared identifiers and no others."""
     registered = registered_ids()
     assert set(registered) == _EXPECTED_CHECK_IDS, (
         f"the registry holds {sorted(set(registered) - _EXPECTED_CHECK_IDS)} beyond the "
@@ -471,10 +468,10 @@ def test_a_contract_carries_the_eight_fields_the_registry_declares(check_id: str
     )
 
 
-def test_the_two_declared_flags_name_exactly_the_planned_checks() -> None:
+def test_the_two_declared_flags_name_exactly_the_flag_bearing_checks() -> None:
     """``CL-ARTIFACTS`` alone observes the run's end, and eleven checks draw their cases from the
     corpus -- the two declarations that decide when a check runs and whether the corpus file has
-    to exist (AAP §0.8.1, §0.3.4)."""
+    to exist."""
     corpus_driven = frozenset(
         check_id for check_id in CHECK_IDS if get_check(check_id).corpus_driven
     )
@@ -487,7 +484,7 @@ def test_the_two_declared_flags_name_exactly_the_planned_checks() -> None:
     )
     assert run_end == _EXPECTED_RUN_END, (
         "the one check whose subject is the whole run is executed after the walk, so it observes "
-        f"the run's end (AAP §0.8.1); the registry declares {sorted(run_end)}"
+        f"the run's end; the registry declares {sorted(run_end)}"
     )
 
 
@@ -533,7 +530,7 @@ def test_a_malformed_declaration_is_refused_at_construction(
     declaration = _valid_declaration()
     declaration.update(defect)
     with pytest.raises(CheckRegistrationError) as raised:
-        CheckContract(**declaration)  # type: ignore[arg-type]
+        CheckContract(**declaration)
     assert named in str(raised.value), (
         f"the refusal must name {named!r} for the defect {defect}, got {raised.value}"
     )
@@ -544,7 +541,7 @@ def test_a_contract_normalises_the_two_collection_fields_it_is_given() -> None:
     declaration = _valid_declaration()
     declaration["requires"] = Capability.png.value
     declaration["dependencies"] = DEPENDENCY_PRIMARY_DECODER
-    contract = CheckContract(**declaration)  # type: ignore[arg-type]
+    contract = CheckContract(**declaration)
     assert contract.requires == frozenset({Capability.png}), (
         "a bare capability name must be one requirement rather than its characters"
     )
@@ -554,7 +551,7 @@ def test_a_contract_normalises_the_two_collection_fields_it_is_given() -> None:
 
     declaration["requires"] = None
     declaration["dependencies"] = None
-    bare = CheckContract(**declaration)  # type: ignore[arg-type]
+    bare = CheckContract(**declaration)
     assert bare.requires == frozenset(), "None must declare no capability"
     assert bare.dependencies == (), "None must declare no dependency token"
 
@@ -562,7 +559,7 @@ def test_a_contract_normalises_the_two_collection_fields_it_is_given() -> None:
 def test_registering_something_that_is_not_a_contract_is_refused() -> None:
     """``register`` is the only writer, and it accepts exactly one type."""
     with pytest.raises(CheckRegistrationError) as raised:
-        register("RT-ROUNDTRIP")  # type: ignore[arg-type]
+        register("RT-ROUNDTRIP")
     assert "CheckContract" in str(raised.value), (
         "the refusal must name the type register expects"
     )
@@ -572,7 +569,7 @@ def test_registering_something_that_is_not_a_contract_is_refused() -> None:
 
 
 def test_iteration_is_by_identifier_ascending_everywhere() -> None:
-    """AAP §0.3.4, §0.5.3: one order, whichever surface asks."""
+    """One order, whichever surface asks."""
     ids = registered_ids()
     assert tuple(ids) == tuple(sorted(ids)), "registered_ids() must ascend"
     assert tuple(contract.id for contract in iter_checks()) == ids, "iter_checks must agree"
@@ -609,8 +606,8 @@ def test_a_process_importing_the_families_in_reverse_order_holds_the_same_regist
 # The nine family modules and the identifiers each owns
 
 
-def test_the_nine_family_modules_are_the_ones_the_plan_names() -> None:
-    """AAP §0.8.1: nine modules, one per family, and no discovery at run time."""
+def test_the_nine_family_modules_are_the_ones_the_registry_names() -> None:
+    """Nine modules, one per family, and no discovery at run time."""
     assert FAMILY_MODULES == _EXPECTED_FAMILY_MODULES, "the family module order changed"
     assert sorted(FAMILY_MODULES) == sorted(FAMILY_NAMES), (
         "the loader's modules and the registry's family vocabulary must name the same nine"
@@ -618,12 +615,12 @@ def test_the_nine_family_modules_are_the_ones_the_plan_names() -> None:
 
 
 @pytest.mark.parametrize("family", sorted(_EXPECTED_IDS_BY_FAMILY))
-def test_each_family_owns_exactly_the_check_ids_the_plan_assigns_it(family: str) -> None:
+def test_each_family_owns_exactly_the_check_ids_the_registry_assigns_it(family: str) -> None:
     """The one-module-per-family rule, which fixes the JUnit classname and the report section."""
     assert family in FAMILY_MODULES, f"{family}: no family module owns this family"
     owning = frozenset(contract.id for contract in iter_checks() if contract.family == family)
     assert owning == _EXPECTED_IDS_BY_FAMILY[family], (
-        f"{family}: owns {sorted(owning)}, the plan assigns "
+        f"{family}: owns {sorted(owning)}, the table above assigns "
         f"{sorted(_EXPECTED_IDS_BY_FAMILY[family])}"
     )
 
@@ -651,23 +648,23 @@ def test_the_declared_tables_cover_every_check_identifier() -> None:
 
 
 @pytest.mark.parametrize("check_id", sorted(_EXPECTED_CHECK_IDS))
-def test_a_check_requires_exactly_the_capabilities_the_plan_declares(check_id: str) -> None:
-    """AAP §0.3.4's requirement table: the reason a fourth adapter kind needs no check change."""
+def test_a_check_requires_exactly_the_capabilities_the_table_declares(check_id: str) -> None:
+    """The requirement table above: the reason a fourth adapter kind needs no check change."""
     expected = _EXPECTED_REQUIRES[check_id]
     actual = get_check(check_id).requires
     assert actual == expected, (
-        f"{check_id}: requires {sorted(str(member) for member in actual)}, the plan declares "
-        f"{sorted(str(member) for member in expected)}"
+        f"{check_id}: requires {sorted(str(member) for member in actual)}, the table above "
+        f"declares {sorted(str(member) for member in expected)}"
     )
 
 
 @pytest.mark.parametrize("check_id", sorted(_EXPECTED_CHECK_IDS))
-def test_a_check_declares_exactly_the_runtime_dependencies_the_plan_names(check_id: str) -> None:
+def test_a_check_declares_exactly_the_runtime_dependencies_the_table_names(check_id: str) -> None:
     """A check declares the tool it needs as a token, never the module that provides it."""
     expected = _EXPECTED_DEPENDENCIES[check_id]
     actual = get_check(check_id).dependencies
     assert actual == expected, (
-        f"{check_id}: declares dependencies {actual}, the plan declares {expected}"
+        f"{check_id}: declares dependencies {actual}, the table above declares {expected}"
     )
     assert tuple(sorted(actual)) == actual, f"{check_id}: the registry must sort the tokens"
 
@@ -681,11 +678,10 @@ def test_the_two_target_independent_checks_require_nothing_of_the_target() -> No
             f"{check_id}: an undeclaring target must leave nothing unmet"
         )
     assert get_check("PF-DECODE").dependencies == _PRIMARY_DECODER_ONLY, (
-        "PF-DECODE decodes its own probe image, so it declares the primary decoder "
-        "(AAP §0.3.4, 'primary decoder (decode only)')"
+        "PF-DECODE decodes its own probe image, so it declares the primary decoder"
     )
     assert get_check("CL-ARTIFACTS").dependencies == _PRIMARY_DECODER_ONLY, (
-        "CL-ARTIFACTS declares the primary decoder that AAP §0.3.4's row gives it, and that "
+        "CL-ARTIFACTS declares the primary decoder the dependency table above gives it, and that "
         "token can never skip it: a run without the decoder exits 2 before resolution"
     )
 
@@ -706,7 +702,7 @@ def test_a_target_declaring_everything_satisfies_every_check() -> None:
 
 
 def test_a_capability_shortfall_resolves_to_a_skip_and_never_to_a_pass() -> None:
-    """AAP §0.3.4, §0.6.6 row 9: a shortfall is a skip, tallied separately and never a pass."""
+    """A shortfall is a skip, tallied separately and never a pass."""
     check_id = "RN-QUIET-ZONE"
     contract = get_check(check_id)
     missing = Capability.quiet_zone
@@ -740,10 +736,10 @@ def test_a_capability_shortfall_resolves_to_a_skip_and_never_to_a_pass() -> None
     assert result.status is Status.SKIPPED, f"{check_id}: a skip must not carry another status"
     assert result.reason is Reason.UNSUPPORTED_CAPABILITY
     assert result.case_id == CAPABILITY_CASE_ID == "synthetic:capability", (
-        "a pre-execution skip has the one case identifier the plan fixes for it"
+        "a pre-execution skip has the one case identifier ``CAPABILITY_CASE_ID`` declares"
     )
     assert result.evidence_dir is None, (
-        "this function is pure; the runner's evidence store attaches the directory (AAP §0.3.4)"
+        "this function is pure; the runner's evidence store attaches the directory"
     )
     assert result.request == {} and result.decoded == {}, (
         "a capability shortfall carries no request and no decode evidence"
@@ -760,7 +756,7 @@ def test_a_capability_shortfall_resolves_to_a_skip_and_never_to_a_pass() -> None
 
 
 def test_a_missing_runtime_dependency_resolves_to_a_missing_dependency_skip() -> None:
-    """AAP §0.3.4: an absent optional tool skips its check with ``missing_dependency``."""
+    """An absent optional tool skips its check with ``missing_dependency``."""
     check_id = "RN-SVG"
     contract = get_check(check_id)
     unavailable = {
@@ -844,7 +840,7 @@ def test_an_attempted_order_must_name_declared_tokens_and_candidate_names() -> N
     with pytest.raises(ValueError) as not_a_name:
         resolve(
             [contract], capabilities={Capability.svg}, availability=unavailable,
-            attempted={DEPENDENCY_SVG_RASTERIZER: (1,)},  # type: ignore[dict-item]
+            attempted={DEPENDENCY_SVG_RASTERIZER: (1,)},
         )
     assert DEPENDENCY_SVG_RASTERIZER in str(not_a_name.value), not_a_name.value
 
@@ -887,7 +883,7 @@ def test_a_target_declaring_nothing_leaves_only_the_capability_free_checks_runna
         "PF-DECODE requires no capability, so its only possible shortfall is the decoder"
     )
     assert reasons["CL-ARTIFACTS"] is Reason.MISSING_DEPENDENCY, (
-        "CL-ARTIFACTS declares the primary decoder as its optional dependency (AAP §0.3.4)"
+        "CL-ARTIFACTS declares the primary decoder as its optional dependency"
     )
     for check_id, reason in sorted(reasons.items()):
         assert reason in {Reason.UNSUPPORTED_CAPABILITY, Reason.MISSING_DEPENDENCY}, (
@@ -921,7 +917,7 @@ def test_a_skip_must_name_its_cause_and_the_requirements_it_lacks(
     }
     fields.update(defect)
     with pytest.raises(ValueError) as raised:
-        SkipOutcome(**fields)  # type: ignore[arg-type]
+        SkipOutcome(**fields)
     assert named in str(raised.value), (
         f"the refusal must name {named!r} for the defect {defect}, got {raised.value}"
     )
@@ -994,13 +990,13 @@ def test_resolve_names_a_malformed_argument_rather_than_skipping_a_check() -> No
     with pytest.raises(TypeError):
         unmet_capabilities(contract, capabilities=Capability.png.value)
     with pytest.raises(TypeError):
-        unmet_capabilities(contract, capabilities=5)  # type: ignore[arg-type]
+        unmet_capabilities(contract, capabilities=5)
     with pytest.raises(ValueError):
         unmet_capabilities(contract, capabilities={"not-a-capability"})
     with pytest.raises(TypeError):
-        unmet_dependencies(get_check("RN-SVG"), availability=5)  # type: ignore[arg-type]
+        unmet_dependencies(get_check("RN-SVG"), availability=5)
     with pytest.raises(TypeError):
-        resolve([object()])  # type: ignore[list-item]
+        resolve([object()])
 
 
 def test_an_availability_source_must_project_a_mapping() -> None:
@@ -1023,7 +1019,7 @@ def test_an_availability_source_must_project_a_mapping() -> None:
 
 
 def test_the_conforming_target_declares_no_expected_failure() -> None:
-    """AAP §0.4.1: every check must pass on ``reference``, and the set says so."""
+    """Every check must pass on ``reference``, and the set says so."""
     assert SELF_CHECK_TARGETS[_CONFORMING_TARGET] == frozenset(), (
         "the conforming target must declare no expected failure"
     )
@@ -1034,26 +1030,27 @@ def test_the_conforming_target_declares_no_expected_failure() -> None:
 
 
 def test_the_defective_target_declares_exactly_the_nine_expected_failures() -> None:
-    """AAP §0.4.2: the union of the five injections' expected sets, and nothing else."""
+    """The union of the five injections' expected sets, and nothing else."""
     declared = SELF_CHECK_TARGETS[_DEFECTIVE_TARGET]
     assert declared == _EXPECTED_DEFECTIVE_FAILURES, (
-        f"declared {sorted(declared)}, the plan declares {sorted(_EXPECTED_DEFECTIVE_FAILURES)}"
+        f"declared {sorted(declared)}, the literal above declares "
+        f"{sorted(_EXPECTED_DEFECTIVE_FAILURES)}"
     )
-    assert len(declared) == 9, "the five injections of AAP §0.4.2 must fail nine checks"
+    assert len(declared) == 9, "the five injections must fail nine checks"
     assert expected_failures(_DEFECTIVE_TARGET) == declared
     assert frozenset().union(*DEFECT_EXPECTATIONS.values()) == declared, (
         "the per-defect sets must derive the declared failing set"
     )
     assert frozenset(DEFECT_EXPECTATIONS) == _EXPECTED_DEFECT_NAMES, (
-        f"declared injections {sorted(DEFECT_EXPECTATIONS)}, the plan names five"
+        f"declared injections {sorted(DEFECT_EXPECTATIONS)}, the literal above names five"
     )
 
 
 def test_the_twelve_checks_outside_the_expected_set_must_pass() -> None:
-    """AAP §0.4.2: the complement must pass in the same run that fails the other nine."""
+    """The complement must pass in the same run that fails the other nine."""
     passing = expected_passing(_DEFECTIVE_TARGET)
     assert passing == _EXPECTED_CHECK_IDS - _EXPECTED_DEFECTIVE_FAILURES, (
-        f"expected to pass {sorted(passing)}, the plan declares "
+        f"expected to pass {sorted(passing)}, the literals above declare "
         f"{sorted(_EXPECTED_CHECK_IDS - _EXPECTED_DEFECTIVE_FAILURES)}"
     )
     assert passing & _EXPECTED_DEFECTIVE_FAILURES == frozenset(), (
@@ -1062,7 +1059,7 @@ def test_the_twelve_checks_outside_the_expected_set_must_pass() -> None:
     assert passing | _EXPECTED_DEFECTIVE_FAILURES == _EXPECTED_CHECK_IDS, (
         "no check may escape the expectation"
     )
-    assert len(passing) == 12, "the other twelve checks of AAP §0.4.2 must pass"
+    assert len(passing) == 12, "the other twelve checks must pass"
 
 
 def test_the_declared_expectations_hold_against_the_real_registry() -> None:
@@ -1134,7 +1131,7 @@ def test_a_target_with_no_declared_expectation_answers_none() -> None:
     )
 
 
-# Reachability: the machine-readable surface criterion 8 reads
+# Reachability: the machine-readable surface ``qrcheck list --json`` publishes
 
 
 def test_the_list_command_publishes_every_registered_check_as_json(cli_runner) -> None:
@@ -1159,8 +1156,8 @@ def test_the_list_command_publishes_every_registered_check_as_json(cli_runner) -
         )
         assert set(row["requires"]) == {
             member.value for member in _EXPECTED_REQUIRES[check_id]
-        }, f"{check_id}: the listing must publish the plan's requirements"
+        }, f"{check_id}: the listing must publish the declared requirements"
         assert tuple(row["dependencies"]) == _EXPECTED_DEPENDENCIES[check_id], (
-            f"{check_id}: the listing must publish the plan's dependency tokens"
+            f"{check_id}: the listing must publish the declared dependency tokens"
         )
 

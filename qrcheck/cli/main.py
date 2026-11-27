@@ -35,7 +35,7 @@ the check families load ``segno``, ``numpy``, ``PIL`` and ``httpx`` where each i
 exception raised while one of them loads is reported through
 :func:`qrcheck.dependencies.blocking_problem`, naming the distribution and ``requirements.lock``:
 every pin is declared in the lock file, so an unusable one means a broken install rather than a
-defect of this program (AAP §0.7.2), and only when no pinned dependency is broken does the
+defect of this program, and only when no pinned dependency is broken does the
 exception reach the last-resort arm and exit 3.
 
 The interpreter guard is the first statement of ``main`` and so runs before click parses anything,
@@ -245,7 +245,7 @@ def _register_commands() -> None:
 def _report_import_failure(exc: Exception) -> int:
     """Write the diagnostic for a failed import of a pinned dependency and return its exit code.
 
-    ``EXIT_CONFIG`` naming every unusable pin when one is broken (AAP §0.7.2), the last-resort
+    ``EXIT_CONFIG`` naming every unusable pin when one is broken, the last-resort
     wording otherwise. It may not raise: :func:`main` promises every exception a code, and the
     probe itself imports the pins, so the probe's own fault is what gets reported.
     """
@@ -320,7 +320,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     except SystemExit as exc:
         return EXIT_OK if exc.code in (0, None) else EXIT_INTERNAL
     # A pinned runtime dependency that cannot be imported is an environment fault, not a framework
-    # one, and AAP §0.7.2 makes it exit 2 naming the distribution and ``requirements.lock``. The
+    # one, and it is exit 2 naming the distribution and ``requirements.lock``. The
     # arm sits before the last-resort net so a probe, not the exception's type, decides: the
     # importing done here -- the command modules and, through them, the nine check families -- is
     # where ``segno``, ``numpy``, ``PIL`` and ``httpx`` load. When every dependency is usable the
@@ -330,8 +330,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _report_import_failure(exc)
     # The last-resort net, reached through the same dependency probe: a pin that cannot even
     # initialise raises whatever its own import raised -- ``RuntimeError`` as readily as
-    # ``ImportError`` -- and AAP §0.7.2 makes that an exit-2 environment fault naming the
-    # distribution, not a framework fault. `_report_import_failure` writes the last-resort
+    # ``ImportError`` -- and that is an exit-2 environment fault naming the distribution, not a
+    # framework fault. `_report_import_failure` writes the last-resort
     # wording and returns `EXIT_INTERNAL` when no pinned dependency is broken.
     except Exception as exc:
         return _report_import_failure(exc)

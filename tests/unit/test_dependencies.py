@@ -3,9 +3,9 @@
 :mod:`qrcheck.dependencies` answers the question every blocking-dependency gate asks -- *does the
 module the product imports actually load?* -- because installed metadata does not answer it. The
 table, the probe and its diagnostic (naming the distribution, the module, the interpreter, the
-platform and ``requirements.lock``, as AAP §0.7.2 requires) are held here. An absent pair is probed
-by name, and a present-but-unimportable one by blocking its module in :data:`sys.modules`. No test
-skips, retries or relaxes an assertion.
+platform and ``requirements.lock``) are held here. An absent pair is probed by name, and a
+present-but-unimportable one by blocking its module in :data:`sys.modules`. No test skips, retries
+or relaxes an assertion.
 """
 
 from __future__ import annotations
@@ -62,7 +62,7 @@ def test_an_absent_pair_reports_a_problem_naming_what_to_fix() -> None:
     """A distribution that is not installed yields the full blocking diagnostic.
 
     Breaks if the message stops naming the distribution to install, the module the product imports,
-    the interpreter running it or ``requirements.lock`` (AAP §0.7.2).
+    the interpreter running it or ``requirements.lock``.
     """
     found = probe(ABSENT_DISTRIBUTION, ABSENT_MODULE)
 

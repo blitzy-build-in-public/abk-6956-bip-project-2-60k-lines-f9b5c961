@@ -1,19 +1,14 @@
 """The two performance checks: encode latency with throughput, and decode latency.
 
-Plan item served: AAP §0.8.1's row ``checks/performance.py`` -> ``PF-ENCODE``, ``PF-DECODE``, with
-the case matrix it fixes -- 1 synthetic case per check: ``warmup + encode_samples`` encodes and no
-decode for ``PF-ENCODE``; no encode and ``warmup + decode_samples`` decodes of one fixed
-``decode_image_px``-square PNG for ``PF-DECODE`` -- and the budgets of AAP §0.6.2 with their
-environment in §0.6.3 (CPython 3.11, Linux x86_64, 2 vCPU, the pinned lock).
-
-These are the **only** two checks permitted to assert on a duration (AAP §0.12). Every other case's
-``duration_ms`` is recorded and never compared, because timing is environment-bound (AAP §0.5.5);
-that monopoly is why this module reads a monotonic clock and never a wall clock.
+These are the **only** two checks permitted to assert on a duration. Every other case's
+``duration_ms`` is recorded and never compared, because timing is environment-bound; the budgets
+themselves are fixed for CPython 3.11 on Linux x86_64 with 2 vCPU and the pinned lock, and that
+monopoly is why this module reads a monotonic clock and never a wall clock.
 
 Every threshold comes from the configuration: all seven numbers -- ``encode_p95_ms``,
 ``decode_p95_ms``, ``min_symbols_per_minute``, ``encode_samples``, ``decode_samples``, ``warmup``
 and ``decode_image_px`` -- are read from :attr:`qrcheck.config.models.Config.performance`, the
-``[checks.performance]`` table of the committed ``qrcheck.toml`` (AAP §0.6.2, §0.12).
+``[checks.performance]`` table of the committed ``qrcheck.toml``.
 
 What each check measures: ``PF-ENCODE`` asks the target for one symbol of a declared fixed payload
 ``warmup`` times unmeasured and then ``encode_samples`` times measured, asserting the nearest-rank
@@ -32,7 +27,7 @@ Reasons emitted: ``Reason.VALUE_MISMATCH`` when a floor is breached or the probe
 with the measured value and the configured threshold in ``decoded["message"]``, plus
 ``target_rejected`` and ``contract_error`` through
 :func:`qrcheck.checks.support.case_status_for_error`; ``TargetUnavailable`` and ``TargetTimeout``
-are deliberately **not** caught (AAP §0.6.6 row 6), and ``segno``, ``numpy`` and the image mux load
+are deliberately **not** caught, and ``segno``, ``numpy`` and the image mux load
 inside :func:`_probe_png`, so ``qrcheck list`` pays for none of them.
 """
 
@@ -76,8 +71,8 @@ __all__ = [
 _ENCODE_CHECK_ID: Final[str] = "PF-ENCODE"
 _DECODE_CHECK_ID: Final[str] = "PF-DECODE"
 
-# The constructed cases AAP §0.3.4 fixes: ``synthetic:<name>`` for a case the framework
-# builds rather than draws from the corpus.
+# The constructed cases: ``synthetic:<name>`` for a case the framework builds rather than draws
+# from the corpus.
 _ENCODE_CASE_ID: Final[str] = "synthetic:pf-encode"
 _DECODE_CASE_ID: Final[str] = "synthetic:pf-decode"
 
@@ -85,7 +80,7 @@ _DECODE_CASE_ID: Final[str] = "synthetic:pf-decode"
 # ``PF-ENCODE`` asks the target for one symbol ``warmup + encode_samples`` times, while
 # ``PF-DECODE`` asks it for nothing because it draws its own probe image.
 # tests/unit/test_checks_negative.py counts the calls a case makes, so a retry registers as
-# one more invocation and fails it (AAP §0.4.3).
+# one more invocation and fails it.
 _EXPECTED_DEFAULTS: Final[PerformanceLimits] = PerformanceLimits()
 EXPECTED_ENCODES: Final[dict[str, int]] = {
     _ENCODE_CHECK_ID: _EXPECTED_DEFAULTS.warmup + _EXPECTED_DEFAULTS.encode_samples,
@@ -157,10 +152,10 @@ def _run_encode(ctx: RunContext) -> CaseResult:
     """Time ``warmup + encode_samples`` encodes and assert the two configured floors.
 
     The warm-up invocations are deliberately unmeasured: a reported p95 has to describe a warmed
-    process rather than interpreter start-up (AAP §0.6.3), and the window's own elapsed time is
-    what the throughput is computed from. Returns a passed result carrying the metrics, or a failed
-    result carrying them beside the breached threshold -- a failure records the last artefact, the
-    request and the figures, because the measurement is the finding.
+    process rather than interpreter start-up, and the window's own elapsed time is what the
+    throughput is computed from. Returns a passed result carrying the metrics, or a failed result
+    carrying them beside the breached threshold -- a failure records the last artefact, the request
+    and the figures, because the measurement is the finding.
 
     Raises:
         TargetUnavailable: The target could not be reached; propagated unchanged so the runner can
@@ -408,7 +403,7 @@ def _probe_png(image_px: int, ec_level: str) -> bytes:
     """Return a PNG of the decode probe payload, exactly `image_px` pixels square.
 
     The image is the framework's own: the payload is encoded by segno at the run's error level with
-    ``boost_error=False``, so it occupies the smallest version that holds it (AAP §0.3.5).
+    ``boost_error=False``, so it occupies the smallest version that holds it.
     ``segno.make_qr`` is Model 2 by construction and has no ``micro`` parameter in the pinned 1.6.6
     release, so Micro QR cannot be drawn here.
 
@@ -567,6 +562,6 @@ def _elapsed_ms(started_at: float) -> float:
 
     The one place this module computes a duration from a clock reading, so every ``duration_ms`` and
     every sample is produced the same way. A wall clock is never read: a monotonic difference can
-    only be a duration, which is the only thing a report records (AAP §0.5.5).
+    only be a duration, which is the only thing a report records.
     """
     return max(time.perf_counter() - started_at, 0.0) * _MS_PER_SECOND

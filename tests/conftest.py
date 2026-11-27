@@ -33,7 +33,7 @@ import pytest
 from click.testing import CliRunner
 
 # Every local import below names a single owner of what a fixture hands out: the ``EvidenceStore``
-# type (AAP §0.8.1), the *real* ``decode_symbol`` :func:`patch_decode` replaces, and CliRunner.
+# type, the *real* ``decode_symbol`` :func:`patch_decode` replaces, and CliRunner.
 from qrcheck.config import models, schema
 from qrcheck.corpus.builder import CorpusRecord, build_corpus
 from qrcheck.corpus.io import filter_by_class, load_corpus
@@ -97,7 +97,7 @@ __all__ = [
 ]
 
 # Locations and fixed values. The repository root is needed for one purpose only: the committed
-# corpus is a repository file (AAP §0.9.2), not package data, so the fixtures name it from here.
+# corpus is a repository file, not package data, so the fixtures name it from here.
 
 #: The repository root, derived from this file's own location (``<root>/tests/conftest.py``).
 _REPO_ROOT: Final[Path] = Path(__file__).resolve().parents[1]
@@ -125,22 +125,22 @@ _MASKED_DURATION_MS: Final[float] = 0.0
 #: projection keeps the schema's type.
 _MASKED_METRIC: Final[float] = 0.0
 
-#: The one volatile field of a result, masked by :func:`mask_volatile` (AAP §0.5.4).
+#: The one volatile field of a result, masked by :func:`mask_volatile`.
 _RESULT_VOLATILE_FIELD: Final[str] = "duration_ms"
 
 #: The three *measured* fields inside a ``PF-*`` result's ``decoded.metrics``, masked by
-#: :func:`mask_volatile`. AAP §0.6.1 gate 10 requires those probes to record their measurement, so
-#: the determinism comparison masks it rather than dropping it, and AAP §0.5.5 keeps it out of
-#: every comparison: a measured latency or throughput is judged once against the configured floor
-#: in ``expected``, never against another run's measurement. The rest of the block -- ``samples``,
-#: ``warmup`` and ``image_px`` -- is copied from configuration and stays compared.
+#: :func:`mask_volatile`. A ``PF-*`` probe records its measurement, so the determinism comparison
+#: masks it rather than dropping it, and a measured latency or throughput is judged once against
+#: the configured floor in ``expected``, never against another run's measurement. The rest of the
+#: block -- ``samples``, ``warmup`` and ``image_px`` -- is copied from configuration and stays
+#: compared.
 _METRIC_VOLATILE_FIELDS: Final[tuple[str, str, str]] = (
     "encode_p95_ms",
     "decode_p95_ms",
     "symbols_per_minute",
 )
 
-#: The two volatile fields of a run, masked by :func:`mask_volatile` (AAP §0.5.4).
+#: The two volatile fields of a run, masked by :func:`mask_volatile`.
 _RUN_VOLATILE_FIELDS: Final[tuple[str, str]] = ("started_at", "finished_at")
 
 #: Fixed timestamps the run-result factory starts from: constants, never a clock reading, since
@@ -155,11 +155,10 @@ _CHECKS_PACKAGE: Final[str] = "qrcheck.checks"
 _DECODE_ATTRIBUTE: Final[str] = "decode_symbol"
 
 
-# Configuration values, read from the one document
-#
-# The committed ``qrcheck.toml`` is the source of every configuration value a fixture hands out,
-# and the schema's declared default fills only a key that document omits, so a retune of the file
-# reaches every test instead of leaving the unit tier asserting the fallback (AAP §0.6.2).
+# Configuration values, read from the one document: the committed ``qrcheck.toml`` is the source
+# of every configuration value a fixture hands out, and the schema's declared default fills only
+# a key that document omits, so a retune of the file reaches every test instead of leaving the
+# unit tier asserting the fallback.
 
 
 @lru_cache(maxsize=None)
@@ -195,8 +194,7 @@ def _committed_table(group: str) -> Mapping[str, Any]:
 
 
 def _schema_default(group: str, key: str) -> Any:
-    """Return one key's declared default: the fallback for a document that omits it
-    (AAP §0.6.2)."""
+    """Return one key's declared default: the fallback for a document that omits it."""
     return schema.SCHEMA[group][key].default
 
 
@@ -222,12 +220,12 @@ def _group_values(group: str) -> dict[str, Any]:
     return {key: _value(group, key) for key in schema.SCHEMA[group]}
 
 
-#: The two built-in self-check targets a configuration declares (AAP §0.4), in ``sorted()`` order
-#: so iteration over the mapping they build is reproducible (AAP §0.5.3).
+#: The two built-in self-check targets a configuration declares, in ``sorted()`` order so
+#: iteration over the mapping they build is reproducible.
 _SELF_CHECK_TARGETS: Final[tuple[str, ...]] = ("defective", "reference")
 
 #: The numeric ``[targets.<name>]`` keys a built-in target takes from the committed document; a key
-#: its table omits is left to the record's own ``models.DEFAULT_*`` default (AAP §0.6.2).
+#: its table omits is left to the record's own ``models.DEFAULT_*`` default.
 _TARGET_NUMERIC_KEYS: Final[tuple[str, ...]] = ("timeout_s", "contrast_floor")
 
 
@@ -409,7 +407,7 @@ class CountingAdapter(StubAdapter):
 
 
 class RaisingAdapter(StubAdapter):
-    """A stub whose ``generate`` raises one of the five adapter errors (AAP §0.3.4)."""
+    """A stub whose ``generate`` raises one of the five adapter errors."""
 
     def __init__(
         self,
@@ -651,7 +649,7 @@ def _mask_metrics(item: dict[str, Any]) -> None:
 
 
 def mask_volatile(value: RunResult | Mapping[str, Any]) -> dict[str, Any]:
-    """Return a summary-shaped copy with the documented volatile fields masked (AAP §0.5.4).
+    """Return a summary-shaped copy with the documented volatile fields masked.
 
     The inventory is the run's two timestamps, each result's ``duration_ms`` and the measured
     leaves of a ``PF-*`` result's ``decoded.metrics`` (:data:`_METRIC_VOLATILE_FIELDS`). Everything
@@ -720,7 +718,7 @@ def _is_loopback_destination(address: object) -> bool:
 
 @pytest.fixture(autouse=True)
 def no_outbound_network(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Block every socket connection outside loopback, for every test (AAP §0.12)."""
+    """Block every socket connection outside loopback, for every test."""
     real_connect = socket.socket.connect
     real_connect_ex = socket.socket.connect_ex
 
@@ -761,7 +759,7 @@ def config_factory(tmp_path: Path, report_dir: Path) -> Callable[..., models.Con
     """Return a callable building the configuration the committed ``qrcheck.toml`` declares.
 
     Every value is that document's, and a key it omits takes the schema's declared default, so a
-    retune of the committed file reaches every test (AAP §0.6.2). The report directory is the
+    retune of the committed file reaches every test. The report directory is the
     per-test one and the corpus path is resolved against the repository root.
     """
     config_path = (tmp_path / _CONFIG_FILE_NAME).resolve()

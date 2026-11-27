@@ -1,13 +1,13 @@
 """``qrcheck doctor``: verify the target and the local toolchain before any check runs.
 
-``doctor`` is the pre-flight verification of functional requirement FR-2.  It decides whether this
-host can test this target at all, and it reports every prerequisite rather than stopping at the
-first fault, because a reader fixing an environment needs the whole list.  It runs no check,
-decodes no symbol, writes no report and asserts nothing about a generated symbol; the one symbol it
-asks a target for is the probe below, which makes this module the **only** place outside a run that
-is allowed to call ``generate``.
+``doctor`` is that pre-flight verification.  It decides whether this host can test this target at
+all, and it reports every prerequisite rather than stopping at the first fault, because a reader
+fixing an environment needs the whole list.  It runs no check, decodes no symbol, writes no
+report and asserts nothing about a generated symbol; the one symbol it asks a target for is the
+probe below, which makes this module the **only** place outside a run that is allowed to call
+``generate``.
 
-What it verifies, and what each outcome means (AAP §0.7.2, §0.6.6 rows 3 and 4).  A blocking
+What it verifies, and what each outcome means, prerequisite by prerequisite.  A blocking
 prerequisite fails the command with exit 2, naming the culprit: the configuration file (the dotted
 key, or the path of a file that cannot be read, since nothing else can be resolved without it), a
 CPython older than 3.11, an undeclared target adapter (the diagnostic echoing the declared list) or
@@ -22,7 +22,7 @@ rasterizer makes ``RN-SVG`` report ``skipped`` with reason ``missing_dependency`
 order it attempted.  A ``degraded`` entry never fails the gate, and a missing secondary decoder
 never becomes a skipped or a passing check: degradation is recorded, never inferred as health.
 
-Output contract (AAP §0.8.3).  One result object with exactly six keys -- ``adapter``, ``type``,
+Output contract.  One result object with exactly six keys -- ``adapter``, ``type``,
 ``reachable``, ``capabilities``, ``dependencies`` and ``svg_rasterizer`` -- is emitted once, on both
 the passing and the failing path, so a CI consumer reads one shape and finds a machine-readable
 failure instead of an empty stream.  Each dependency entry carries exactly ``name``, ``version``,
@@ -47,10 +47,10 @@ The public surface is two names, split exactly as ``qrcheck/cli/loc.py`` splits 
 ``loc_command``: ``doctor_command`` is the click object ``qrcheck.cli.main`` registers, and
 :func:`doctor` is the function behind it, returning the exit code to a direct caller and to a test.
 
-Exit codes (AAP §0.3.4): ``0`` when every blocking prerequisite passes, ``2`` when one fails or the
-configuration, the adapter name or the probe does, and ``3`` when an unexpected framework fault
-occurred -- a probe that raises outside the adapter error vocabulary, an adapter that cannot be
-closed, or a ``report_dir`` that cannot be prepared.
+Exit codes, from :mod:`qrcheck.cli.exit`: ``0`` when every blocking prerequisite passes, ``2`` when
+one fails or the configuration, the adapter name or the probe does, and ``3`` when an unexpected
+framework fault occurred -- a probe that raises outside the adapter error vocabulary, an adapter
+that cannot be closed, or a ``report_dir`` that cannot be prepared.
 """
 
 from __future__ import annotations
@@ -60,13 +60,13 @@ import sys
 import unicodedata
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
-from pathlib import Path
 from typing import TYPE_CHECKING, Final, Literal
 
 import click
 
 from qrcheck.checks.render import RasterizerStatus, discover_svg_rasterizer
 from qrcheck.cli.exit import EXIT_CONFIG, EXIT_INTERNAL, EXIT_OK
+from qrcheck.cli.support import DEFAULT_CONFIG_PATH, ExitCodeCommand, resolve_config_path
 from qrcheck.config import Config, ConfigError, load_config
 from qrcheck.decode import DecoderAvailability, decoder_availability
 from qrcheck.dependencies import (
@@ -95,16 +95,6 @@ if TYPE_CHECKING:  # Annotation resolution only: this module constructs no recor
 
 __all__ = ("doctor", "doctor_command")
 
-# Read only when nothing in the group context supplies the option, which happens when this
-# module's function is called directly rather than through the CLI. The group's own --config
-# option keeps the value a real command line uses.
-DEFAULT_CONFIG_PATH: Final[str] = "qrcheck.toml"
-
-# The names a group's context object, or the group's own click parameters, may carry the
-# --config value under; tried in this order. ``qrcheck.cli.main`` owns that option, so this
-# module reads all three shapes rather than requiring one of them.
-_CONFIG_KEYS: Final[tuple[str, ...]] = ("config", "config_path", "config_file")
-
 # Every diagnostic carries this prefix and goes to stderr, so a line on stdout is always
 # either the report object or the table, and a line on stderr is always something to act on.
 _DIAGNOSTIC_PREFIX: Final[str] = "qrcheck doctor: "
@@ -120,15 +110,13 @@ _UNPRINTABLE_CATEGORIES: Final[frozenset[str]] = frozenset({"Cc", "Cf", "Cs", "Z
 # colours -- a request every conforming target must encode -- built through
 # :func:`qrcheck.targets.base.build_request` so an impossible probe fails loudly instead of
 # reaching a target. Nothing reads the probe symbol: its arrival is the whole assertion.
-#
 # No geometry is pinned: ``module_size_px`` and ``quiet_zone_modules`` keep their ``None``
 # default, so the probe asks for the output format and nothing else, and the capability set it
 # demands is the one the adapter really needs. A target that omits an optional capability --
 # declaring nothing but ``png``, the single capability ``RT-ROUNDTRIP`` requires -- is valid
 # configuration: the checks that do need that capability are resolved to
-# ``skipped``/``unsupported_capability`` by ``qrcheck/registry/resolve.py`` (AAP §0.3.4,
-# §0.12), so such a shortfall is reported by the affected checks skipping and never by this
-# command failing.
+# ``skipped``/``unsupported_capability`` by ``qrcheck/registry/resolve.py``, so such a
+# shortfall is reported by the affected checks skipping and never by this command failing.
 PROBE_PAYLOAD: Final[bytes] = b"qrcheck doctor probe"
 PROBE_EC_LEVEL: Final[str] = "M"
 
@@ -140,16 +128,16 @@ STATUS_OK: Final[_Status] = "ok"
 STATUS_MISSING: Final[_Status] = "missing"
 STATUS_DEGRADED: Final[_Status] = "degraded"
 
-# The supported interpreter, exactly: CPython 3.11 (AAP §0.1.1 NFR-4). Below it the
-# configuration cannot even be parsed on 3.10 (no ``tomllib``), and above it the product runs
-# untested, which is reported as a degradation rather than as health.
+# The supported interpreter, exactly: CPython 3.11. Below it the configuration cannot even be
+# parsed on 3.10 (no ``tomllib``), and above it the product runs untested, which is reported as
+# a degradation rather than as health.
 _SUPPORTED_PYTHON: Final[tuple[int, int]] = (3, 11)
 _LOWEST_PYTHON: Final[tuple[int, int]] = (3, 11)
 _CPYTHON: Final[str] = "CPython"
 
 # The architectures whose Linux wheels the pinned primary decoder does not publish. This is
-# the one platform gap in the resolution matrix (AAP §0.2.3), so its diagnostic names the
-# missing tag instead of leaving a reader to deduce it from an ImportError.
+# the one platform gap in the pinned dependency set, so its diagnostic names the missing tag
+# instead of leaving a reader to deduce it from an ImportError.
 _AARCH64_MACHINES: Final[frozenset[str]] = frozenset({"aarch64", "arm64"})
 _AARCH64_WHEEL_TAG: Final[str] = "manylinux_2_17_aarch64"
 _LINUX_WHEEL_TAG_PREFIX: Final[str] = "manylinux_2_17_"
@@ -229,7 +217,7 @@ class _ProbeOutcome:
 
 @dataclass(frozen=True, slots=True)
 class _DoctorReport:
-    """The result object ``doctor --json`` emits: exactly the six keys of AAP §0.8.3.
+    """The result object ``doctor --json`` emits: exactly the six keys :meth:`as_dict` projects.
 
     Every field has an "unknown" value -- ``None`` or an empty sequence -- so a fault that
     stops the command early still emits a complete object rather than a partial one.
@@ -417,7 +405,7 @@ def _host_dependencies(notes: list[_Note]) -> list[_Dependency]:
 
 
 def _python_dependency(notes: list[_Note]) -> _Dependency:
-    """Report the interpreter against the CPython 3.11 contract (AAP §0.7.2).
+    """Report the interpreter against the CPython 3.11 contract.
 
     Below 3.11 the product cannot run at all -- ``tomllib`` arrived in 3.11 -- so the status is
     ``missing`` and blocks. A newer 3.x, or another implementation at a supported version, runs
@@ -451,7 +439,7 @@ def _python_dependency(notes: list[_Note]) -> _Dependency:
 def _primary_decoder_dependency(
     availability: DecoderAvailability, notes: list[_Note]
 ) -> _Dependency:
-    """Report the primary reference decoder, whose absence blocks the run (AAP §0.6.6 row 3).
+    """Report the primary reference decoder, whose absence blocks the run.
 
     ``availability`` comes from :func:`qrcheck.decode.decoder_availability`, whose probe never
     imports the binding. That probe reports a module which is present, and this function then
@@ -470,7 +458,7 @@ def _primary_decoder_dependency(
 def _secondary_decoder_dependency(
     availability: DecoderAvailability, notes: list[_Note]
 ) -> _Dependency:
-    """Report the secondary reference decoder, whose absence degrades the run (AAP §0.6.6 row 4).
+    """Report the secondary reference decoder, whose absence degrades the run.
 
     Its status is ``ok`` or ``degraded`` and never ``missing``: there is no state in which the
     corroborating decoder blocks anything, and no check may pass or skip on its absence.
@@ -683,9 +671,9 @@ def _probe_target(target: TargetConfig, name: str, notes: list[_Note]) -> _Probe
         )
         outcome = replace(outcome, reachable=True)
     except TargetRejected as exc:
-        # str(exc) is exactly what the target said, and it is carried unchanged: AAP §0.3.4
-        # requires the rejection text verbatim. It is escaped only where it is rendered, by
-        # _printable in _finish and in _verdict_line.
+        # str(exc) is exactly what the target said, and it is carried unchanged: the rejection
+        # text is recorded verbatim. It is escaped only where it is rendered, by _printable in
+        # _finish and in _verdict_line.
         notes.append(_Note(str(exc), True))
         outcome = replace(outcome, reachable=True)
     except TargetUnavailable as exc:
@@ -880,26 +868,7 @@ def _verdict_line(notes: Sequence[_Note]) -> str:
 # ---------------------------------------------------------------------------
 
 
-class _ExitCodeCommand(click.Command):
-    """A command whose integer return value becomes the process exit code.
-
-    Click 8.1 discards a callback's return value when the command runs standalone, so a
-    callback that merely returned :data:`qrcheck.cli.exit.EXIT_CONFIG` would leave the process
-    status at 0 however the verification went -- and every gate built on this command would
-    pass silently. The callback still returns the integer, so a caller and a test read the
-    result directly; this class is where that integer becomes the process status, and in
-    non-standalone mode click turns it back into the very same return value.
-    """
-
-    def invoke(self, ctx: click.Context) -> object:
-        """Run the callback and, when it returned an exit code, exit with it."""
-        result = super().invoke(ctx)
-        if isinstance(result, int):
-            ctx.exit(result)
-        return result
-
-
-@click.command(name="doctor", cls=_ExitCodeCommand)
+@click.command(name="doctor", cls=ExitCodeCommand)
 @click.option(
     "--adapter",
     type=str,
@@ -916,41 +885,5 @@ class _ExitCodeCommand(click.Command):
 @click.pass_context
 def doctor_command(ctx: click.Context, adapter: str | None, as_json: bool) -> int:
     """Verify the target and the local toolchain before any check runs."""
-    return doctor(adapter, as_json, config_path=_config_path(ctx))
-
-
-def _config_path(ctx: click.Context | None) -> str:
-    """Return the configuration file the group's ``--config`` option selected.
-
-    ``qrcheck.cli.main`` owns that option, and how it hands the value down is its contract
-    rather than this module's: the group may leave the raw string in the context object, keep a
-    mapping or a namespace there, or hold the value only in its own click parameters. All three
-    are read, in that order, so registering this command under the group needs no adaptation of
-    either module. When none of them carries a value -- including a call with no click context
-    at all -- the default configuration file name stands.
-    """
-    if ctx is not None:
-        found = _config_value(ctx.obj)
-        if found is not None:
-            return found
-        root_params = ctx.find_root().params
-        for key in _CONFIG_KEYS:
-            found = _config_value(root_params.get(key))
-            if found is not None:
-                return found
-    return DEFAULT_CONFIG_PATH
-
-
-def _config_value(value: object) -> str | None:
-    """Return the configuration path ``value`` holds, or ``None`` when it holds none."""
-    if isinstance(value, str | Path):
-        text = str(value)
-        return text or None
-    if value is None:
-        return None
-    for key in _CONFIG_KEYS:
-        entry = value.get(key) if isinstance(value, Mapping) else getattr(value, key, None)
-        if isinstance(entry, str | Path) and str(entry):
-            return str(entry)
-    return None
+    return doctor(adapter, as_json, config_path=resolve_config_path(ctx))
 

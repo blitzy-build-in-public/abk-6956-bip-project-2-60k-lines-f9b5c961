@@ -1,11 +1,11 @@
 """The run-level target-loss policy: one error result per affected check, never per case.
 
-AAP §0.3.4 fixes what a consumer reports when a target is unreachable or times out -- "``error``
-result, ``case_id`` ``synthetic:target``, message naming the transport failure; one such result
-per affected check, not per corpus record" -- and §0.6.6 row 6 names this module as that gate.
-The defect it prevents is quadratic noise: ``RT-ROUNDTRIP`` alone has one case per corpus record,
-so a policy applied per case would turn one dead target into two hundred and forty identical
-errors.
+The run contract fixes what a consumer reports when a target is unreachable or times out --
+"``error`` result, ``case_id`` ``synthetic:target``, message naming the transport failure; one
+such result per affected check, not per corpus record" -- and this module is the gate that holds
+it. The defect it prevents is quadratic noise: ``RT-ROUNDTRIP`` alone has one case per corpus
+record, so a policy applied per case would turn one dead target into two hundred and forty
+identical errors.
 
 Five properties are pinned: **exactly one error per affected check**, counted from the
 selection's own capability requirements rather than typed; **the diagnostic names the cause** --
@@ -49,12 +49,13 @@ from qrcheck.targets.base import (
     TargetUnavailable,
 )
 
-# The case identifier every target-loss result is filed under, stated as AAP §0.3.4 states it
-# rather than imported from the runner: it is a public field of ``summary.json`` that a CI consumer
-# keys on, so the test pins the contract instead of the constant the implementation names today.
+# The case identifier every target-loss result is filed under, written out as the run contract
+# states it rather than imported from the runner: it is a public field of ``summary.json`` that a
+# CI consumer keys on, so the test pins the contract instead of the constant the implementation
+# names today.
 TARGET_LOSS_CASE_ID: Final[str] = "synthetic:target"
 
-# The nine top-level keys AAP §0.3.4 fixes for ``summary.json``, and the ten fields of one
+# The nine top-level keys the run contract fixes for ``summary.json``, and the ten fields of one
 # ``results[]`` entry, written out rather than read from the model, so a field added, dropped or
 # renamed fails here instead of silently shrinking a machine-readable surface.
 SUMMARY_FIELDS: Final[tuple[str, ...]] = (
@@ -82,9 +83,9 @@ RESULT_FIELDS: Final[tuple[str, ...]] = (
 )
 COUNT_FIELDS: Final[tuple[str, ...]] = ("passed", "failed", "skipped", "error")
 
-# The two checks that invoke no adapter at all (AAP §0.4.1, §0.8.1): the witnesses that
-# prove a run kept going after the target was lost.  ``CL-ARTIFACTS`` sorts before every
-# other identifier, so it also runs *before* the loss; ``PF-DECODE`` sorts after it.
+# The two checks that invoke no adapter at all: the witnesses that prove a run kept going after
+# the target was lost.  ``CL-ARTIFACTS`` sorts before every other identifier, so it also runs
+# *before* the loss; ``PF-DECODE`` sorts after it.
 TARGET_INDEPENDENT_WITNESSES: Final[tuple[str, ...]] = ("CL-ARTIFACTS", "PF-DECODE")
 
 # The selections this module drives: each names only registered identifiers, so a rename fails at
@@ -167,7 +168,7 @@ def selected_contracts(
 
 def target_dependent_ids(contracts: Sequence[CheckContract]) -> tuple[str, ...]:
     """Return the identifiers of the contracts that require a capability of the target -- exactly
-    the set AAP §0.6.6 row 6 says receives one error result each."""
+    the set that receives one error result each."""
     return tuple(sorted(contract.id for contract in contracts if contract.requires))
 
 

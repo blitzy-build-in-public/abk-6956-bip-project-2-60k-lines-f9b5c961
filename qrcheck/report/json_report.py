@@ -6,16 +6,16 @@ canonical text, :func:`write_canonical_text` encodes such a text and writes it, 
 the evidence store (``qrcheck.report.evidence``) serialises ``request.json`` and ``decoded.json``
 itself and writes both through :func:`write_canonical_text`, because it must hold both texts before
 it creates a directory; ``qrcheck.report.junit`` renders a failure body with
-:func:`dumps_canonical`. One formatter is what makes the same model value yield the same bytes,
-which is what makes AAP §0.5.4's "byte-identical for the same case and seed" true; a second
-formatter could order keys, escape characters or terminate the file differently.
+:func:`dumps_canonical`. One formatter is what makes the same model value yield the same bytes, so
+an artefact is byte-identical for the same case and seed; a second formatter could order keys,
+escape characters or terminate the file differently.
 
 The form is fixed rather than configurable: keys sorted lexicographically at every depth, two-space
 indent, UTF-8 with non-ASCII characters written literally, exactly one trailing newline per file.
 The literal characters matter because the ``emoji``, ``rtl`` and ``utf8-multibyte`` corpus classes
 appear verbatim in evidence, and sorted keys are what makes two runs comparable field by field once
-the documented volatile fields are masked (AAP §0.5.3-§0.5.5): ``started_at``, ``finished_at``,
-every ``results[].duration_ms``, and the measured leaves of the two ``PF-*`` results'
+the documented volatile fields are masked: ``started_at``, ``finished_at``, every
+``results[].duration_ms``, and the measured leaves of the two ``PF-*`` results'
 ``decoded.metrics`` -- ``encode_p95_ms``, ``decode_p95_ms`` and ``symbols_per_minute``. Those three
 are a measurement judged once against the configured floor in ``expected`` and never against
 another run's measurement, while the metrics a probe copies from configuration -- ``samples``,
@@ -29,7 +29,7 @@ The single substitution this module makes is about bytes rather than JSON: a cod
 cannot encode -- the unpaired surrogate a target's own JSON can carry, which ``json.loads``
 materialises and ``ensure_ascii=False`` would otherwise write straight through -- is replaced with
 U+FFFD by :func:`make_utf8_encodable`, so text a target supplied becomes a written artefact instead
-of a :exc:`UnicodeEncodeError` that would abort the run reporting it (AAP §0.3.2, §0.6.6 row 11).
+of a :exc:`UnicodeEncodeError` that would abort the run reporting it.
 """
 
 import json
@@ -109,8 +109,7 @@ def dumps_canonical(payload: Any) -> str:
     code point UTF-8 cannot encode -- the lone surrogate a target's ``"\\ud800"`` escape becomes --
     with U+FFFD, in a text of the same length, while every character UTF-8 can encode is still
     written exactly as it arrived. A payload a target influenced therefore yields a document
-    instead of the :exc:`UnicodeEncodeError` that would abort the run writing it (AAP §0.3.2,
-    §0.6.6 row 11).
+    instead of the :exc:`UnicodeEncodeError` that would abort the run writing it.
     """
     try:
         text = json.dumps(payload, sort_keys=True, indent=2, ensure_ascii=False, allow_nan=False)
@@ -135,7 +134,7 @@ def write_canonical_text(text: str, path: Path) -> Path:
     """Write canonical JSON ``text`` to ``path`` and return ``path``.
 
     Exactly one ``\\n`` is appended, so the file is UTF-8 with ``\\n`` line endings, no byte-order
-    mark and a single trailing newline: byte-identical across runs and platforms (AAP §0.5.4). The
+    mark and a single trailing newline: byte-identical across runs and platforms. The
     parent directory is created when it is missing, and the text is encoded to UTF-8 before any
     filesystem I/O, so a text UTF-8 cannot represent leaves no file at all rather than an empty or
     truncated one. Reaching that refusal takes a caller assembling a text of its own: the canonical
@@ -143,9 +142,9 @@ def write_canonical_text(text: str, path: Path) -> Path:
     (:func:`make_utf8_encodable`), which is what a lone surrogate from a target needs. The bytes
     are written directly rather than through a temporary file and a rename, because a temporary
     file inside the report directory would be an artefact outside the closed evidence layout that
-    ``CL-ARTIFACTS`` inspects for (AAP §0.3.4). Filesystem errors propagate untouched:
+    ``CL-ARTIFACTS`` inspects for. Filesystem errors propagate untouched:
     ``qrcheck.cli.run`` is the single place that turns them into exit code 3, and the product has
-    no retry path (AAP §0.3.4, §0.5.6).
+    no retry path.
 
     ``text`` is written exactly as given -- nothing escaped, replaced, dropped or re-encoded -- and
     ``path`` is used as given, never resolved to an absolute path. Raises :exc:`UnicodeEncodeError`
@@ -166,10 +165,9 @@ def write_canonical_json(payload: Any, path: Path) -> Path:
     A one-line composition of :func:`dumps_canonical` with :func:`write_canonical_text`: the text is
     serialised and encoded before the file is opened, and the file is written directly rather than
     through a temporary file, so an unserialisable payload leaves no artefact to parse and nothing
-    appears outside the closed evidence layout ``CL-ARTIFACTS`` inspects for (AAP §0.3.4). The file
-    is UTF-8 with ``\\n`` line endings, one trailing newline and no byte-order mark (AAP §0.5.4),
-    and filesystem errors propagate untouched for ``qrcheck.cli.run`` to turn into exit code 3 (AAP
-    §0.3.4, §0.5.6).
+    appears outside the closed evidence layout ``CL-ARTIFACTS`` inspects for. The file
+    is UTF-8 with ``\\n`` line endings, one trailing newline and no byte-order mark,
+    and filesystem errors propagate untouched for ``qrcheck.cli.run`` to turn into exit code 3.
 
     Raises :exc:`TypeError` for a value that is not JSON-serialisable, :exc:`ValueError` for a
     non-finite float (``nan``, ``inf``, ``-inf``), and :exc:`OSError` when the directory or the file
@@ -195,13 +193,13 @@ def write_summary(run_result: RunResult, path: Path) -> Path:
     would break every machine consumer, and a field that has to appear belongs in ``as_dict`` rather
     than assembled here. ``results`` is not re-sorted, because :class:`RunResult` already stores it
     ordered by ``(check_id, case_id)`` and a second sort would be a second ordering rule for the
-    same artefact (AAP §0.5.3).
+    same artefact.
 
     Raises :exc:`TypeError` for a field value that is not JSON-serialisable and :exc:`ValueError`
     for a non-finite float such as a metric computed from a zero elapsed time -- both raised before
     the destination is opened, so no ``summary.json`` is left behind. Unencodable text is not one
     of them: a code point UTF-8 cannot encode, which a target-influenced field can carry, is
-    replaced with U+FFFD by the canonical formatter and the report is still written (AAP §0.6.6 row
-    11). Raises :exc:`OSError` when the destination cannot be created or written.
+    replaced with U+FFFD by the canonical formatter and the report is still written. Raises
+    :exc:`OSError` when the destination cannot be created or written.
     """
     return write_canonical_json(run_result.as_dict(), path)

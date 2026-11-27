@@ -6,11 +6,11 @@ the only list of those nine modules (:data:`FAMILY_MODULES`) and the single entr
 imports them (:func:`load_families`). The tuple is explicit rather than discovered, so a stray
 ``.py`` cannot join the run and a missing module raises :class:`ImportError` at import of this
 package instead of shrinking the registry. Import order is not significant:
-:func:`qrcheck.registry.check.iter_checks` sorts by check identifier (AAP §0.3.4, §0.5.3).
+:func:`qrcheck.registry.check.iter_checks` sorts by check identifier.
 
 What a full run costs: 1,283 cases at EC M over the default 240-record corpus, 1,287 target
 invocations and 1,470 primary decodes. Each family publishes its share of the encode count as
-``EXPECTED_ENCODES`` and the sum is that 1,287. The decode count is the 1,462 of AAP §0.8.1's
+``EXPECTED_ENCODES`` and the sum is that 1,287. The decode count is the 1,462 of the nine families'
 case matrix plus eight, because ``DM-RESILIENCE`` also decodes each of its eight sampled
 records' pristine symbol once -- a memoised read the damage budget needs -- so the matrix's
 decode column counts only the damaged reads. A conforming target performs 1,469 of them: the
@@ -40,8 +40,8 @@ __all__: list[str] = [
 # the four ``SY-*``; ``MD-MODE-OPTIMAL`` and ``MD-CHARSET``; the five ``RN-*``; ``DM-RESILIENCE``
 # and ``DM-SEEDED``; the three ``IV-*``; ``DT-DETERMINISTIC``; ``PF-ENCODE`` and ``PF-DECODE``;
 # ``CL-ARTIFACTS``.  Twenty-one checks, nine modules; ``support`` is excluded on purpose, being
-# the shared helper every family imports that registers nothing.  The order is the plan's tree
-# order, not the sorted order, and does not need to be: see the module docstring.
+# the shared helper every family imports that registers nothing.  The order is the package's own
+# module order, not the sorted order, and does not need to be: see the module docstring.
 FAMILY_MODULES: tuple[str, ...] = (
     "roundtrip",
     "symbol",
@@ -55,7 +55,6 @@ FAMILY_MODULES: tuple[str, ...] = (
 )
 
 # The imported module objects, keyed by family name in ``FAMILY_MODULES`` order.
-#
 # Populated by importing the package, which runs each module's ``@check`` decorators, and refreshed
 # by :func:`load_families`.  Held for the tests that need a family's own declarations -- its
 # ``EXPECTED_ENCODES`` -- without a second import path, which would register its checks twice and

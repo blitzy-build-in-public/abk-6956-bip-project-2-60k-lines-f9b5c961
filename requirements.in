@@ -8,7 +8,13 @@ click==8.1.8  # CLI structure, option validation, CliRunner test harness
 httpx==0.27.2  # HTTP target adapter: explicit timeouts, connection reuse, loopback client
 numpy==1.26.4  # seeded PCG64 generator and array ops for damage synthesis and measurement
 opencv-python-headless==4.10.0.84  # secondary reference decoder, OpenCV detector; headless, no GUI libs
-Pillow==10.4.0  # image IO, grid sampling, resize/rotate/warp/blur/JPEG/noise, PNG encode
+Pillow==13.0.0  # image IO, grid sampling, resize/rotate/warp/blur/JPEG/noise, PNG encode
+# The floor is 13.0.0 and not the 10.4.0 pinned before: CVE-2026-112399 is an APNG whose first
+# frame uses OP_BACKGROUND disposal, so PngImageFile._open() allocates and fills the whole IHDR
+# canvas before Image._decompression_bomb_check() runs -- present since 8.1.0 and fixed only in
+# 13.0.0 -- and the PNG a target returns is the untrusted image that reaches Pillow's decoder
+# (qrcheck/targets/base.py, qrcheck/evidence/mux.py). The advisories this pin set still accepts,
+# and why, are recorded with the other dependency decisions in docs/dependencies.md.
 segno==1.6.6  # golden encoder used strictly as the expectation oracle
 zxing-cpp==2.2.0  # primary decoder: payload bytes, EC level, content type, corner position
 # zxing-cpp publishes no cp311 wheel for Linux aarch64, where qrcheck doctor blocks with

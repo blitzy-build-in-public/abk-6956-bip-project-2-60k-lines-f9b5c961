@@ -2,27 +2,27 @@
 
 ``RT-ROUNDTRIP`` asserts exactly one property: a symbol a target produced for a payload decodes,
 under the framework's primary decoder, back to the very bytes requested. Each of the corpus's 240
-records contributes one case, so a full run is 240 cases, 240 encodes and 240 decodes (AAP §0.8.1),
-which :data:`EXPECTED_ENCODES` declares. The check is one of the nine identifiers a ``--adapter
+records contributes one case, so a full run is 240 cases, 240 encodes and 240 decodes, which
+:data:`EXPECTED_ENCODES` declares. The check is one of the nine identifiers a ``--adapter
 defective`` run must fail: the ``truncated_payload`` injection encodes only the first 64 bytes of a
-longer payload, so the symbol still decodes but to the wrong bytes (AAP §0.4.2).
+longer payload, so the symbol still decodes but to the wrong bytes.
 
 The assertion is ``payload_bytes == request.payload`` and nothing else. Version, level, mask,
 geometry, quiet zone and encoding mode belong to ``SY-*``, ``MD-*`` and ``RN-*``; repeating one here
-would make a single defect fail several checks (AAP §0.4.2).
+would make a single defect fail several checks.
 
-Three outcomes fail a case, in this order: ``agreement == "disagree"`` is a finding in its own right
-(AAP §0.3.2), reported as ``Reason.DECODER_DISAGREEMENT`` with both payloads and metadata blocks;
+Three outcomes fail a case, in this order: ``agreement == "disagree"`` is a finding in its own
+right, reported as ``Reason.DECODER_DISAGREEMENT`` with both payloads and metadata blocks;
 ``payload_bytes is None`` is ``Reason.VALUE_MISMATCH`` with the decoder's own error text, and the
 secondary decoder's payload is never consulted; a payload that differs is ``Reason.VALUE_MISMATCH``
 with both digests and the offset of the first divergence.
 
 Requests: a PNG at the run's EC level with no pin, so ``requires={png}`` is the complete statement
-of what the check needs (AAP §0.3.4). ``TargetRejected``, ``TargetContractError`` and
-``TargetUnsupported`` are turned into a result by
-:func:`qrcheck.checks.support.case_status_for_error`; ``TargetUnavailable`` and ``TargetTimeout``
-propagate to the runner. Only a non-passing case persists evidence, ``decoded.json`` carries no
-duration and no path, and only :mod:`qrcheck.targets.base` is imported from ``qrcheck.targets``.
+of what the check needs. ``TargetRejected``, ``TargetContractError`` and ``TargetUnsupported`` are
+turned into a result by :func:`qrcheck.checks.support.case_status_for_error`;
+``TargetUnavailable`` and ``TargetTimeout`` propagate to the runner. Only a non-passing case
+persists evidence, ``decoded.json`` carries no duration and no path, and only
+:mod:`qrcheck.targets.base` is imported from ``qrcheck.targets``.
 """
 
 from __future__ import annotations
@@ -55,20 +55,20 @@ __all__ = ["EXPECTED_ENCODES", "cases"]
 CHECK_ID: Final[str] = "RT-ROUNDTRIP"
 
 # One encode and one decode per corpus record, so the expected count is the record count: the 240
-# records of AAP §0.8.1 (200 non-boundary plus 40 boundary).  A literal rather than a configuration
-# value because it is an acceptance count, not a tunable threshold; the counting stub of
-# tests/unit/test_checks_negative.py compares the invocations it observes against it (AAP §0.4.3).
+# records the corpus builder emits (200 non-boundary plus 40 boundary).  A literal rather than a
+# configuration value because it is an acceptance count, not a tunable threshold; the counting stub
+# of tests/unit/test_checks_negative.py compares the invocations it observes against it.
 _EXPECTED_ENCODES_PER_RUN: Final[int] = 240
 
 # The expected adapter-invocation count of every check this module registers, keyed by check
-# identifier and read-only: no run can mutate the declaration (AAP §0.4.3, §0.14.1).
+# identifier and read-only: no run can mutate the declaration.
 EXPECTED_ENCODES: Final[Mapping[str, int]] = MappingProxyType(
     {CHECK_ID: _EXPECTED_ENCODES_PER_RUN}
 )
 
-# The one ``Agreement`` value that is a finding in its own right (AAP §0.3.2): two payloads that
-# differ.  ``qrcheck.decode.base`` publishes the vocabulary as a ``Literal``, so the value is named
-# here rather than spelled out at the comparison.
+# The one ``Agreement`` value that is a finding in its own right: two payloads that differ.
+# ``qrcheck.decode.base`` publishes the vocabulary as a ``Literal``, so the value is named here
+# rather than spelled out at the comparison.
 _DISAGREE: Final[str] = "disagree"
 
 # The expected outcome, recorded beside every case's measurements so a reader of
@@ -88,12 +88,11 @@ def cases(ctx: RunContext) -> Iterator[Case]:
     """Yield one round-trip case per corpus record, ascending by record ``id``.
 
     The corpus is already filtered (``--class``) and owned by the runner, so an empty passed-in
-    corpus yields no cases and the runner decides what an empty selection means (AAP §0.5.3). Cases
-    are built through :func:`qrcheck.checks.support.corpus_cases`, which owns the identifier form
-    and the ordering rule. The primary decoder is declared as a dependency, but its absence never
-    becomes a skip: a run without it exits 2 naming zxing-cpp (AAP §0.6.6 row 3). The decorator
-    replaces this name with the registered contract, so the registry stays the single accessor of
-    check identity.
+    corpus yields no cases and the runner decides what an empty selection means. Cases are built
+    through :func:`qrcheck.checks.support.corpus_cases`, which owns the identifier form and the
+    ordering rule. The primary decoder is declared as a dependency, but its absence never becomes a
+    skip: a run without it exits 2 naming zxing-cpp. The decorator replaces this name with the
+    registered contract, so the registry stays the single accessor of check identity.
 
     Yields:
         One case per corpus record, ascending, each named ``corpus:<record-id>``.
@@ -152,7 +151,7 @@ def _execute_case(ctx: RunContext, record: CorpusRecord, case_id: str) -> CaseRe
         )
         # No artefact exists for a rejection or a contract failure, and a skip is a real
         # outcome a reader must be able to inspect, so the request and the decoder-or-error
-        # text are persisted either way (AAP §0.3.4 evidence policy).
+        # text are persisted either way.
         return support.record_evidence(ctx, translated)
 
     duration_ms = support.elapsed_ms(started)
@@ -189,10 +188,9 @@ def _execute_case(ctx: RunContext, record: CorpusRecord, case_id: str) -> CaseRe
 def _failure_reason(result: DecodeResult, requested: bytes) -> Reason | None:
     """Return why `result` does not round-trip `requested`, or ``None`` when it does.
 
-    Two differing payloads are a decoder disagreement before they are a payload mismatch (AAP
-    §0.3.2); no payload at all is a mismatch, because the authority produced nothing to compare;
-    and a payload that differs is a mismatch. The comparison is byte-exact -- never text, never a
-    decoded string.
+    Two differing payloads are a decoder disagreement before they are a payload mismatch; no
+    payload at all is a mismatch, because the authority produced nothing to compare; and a payload
+    that differs is a mismatch. The comparison is byte-exact -- never text, never a decoded string.
     """
     if result.agreement == _DISAGREE:
         return Reason.DECODER_DISAGREEMENT
@@ -210,8 +208,9 @@ def _evidence(request: GenerateRequest, result: DecodeResult) -> dict[str, Any]:
     their ``status`` and ``polarity``, the consensus ``agreement``, the applied
     ``polarity_applied``, the symbology identifier, the EC-level pair, the version and the mask.
     This adds the authoritative payload's length and digest, the requested payload's digest, and the
-    first differing offset -- the evidence AAP §0.4.5 requires of a ``truncated_payload`` finding.
-    No duration, timestamp or path is included, so two runs of one case produce the same bytes.
+    first differing offset, so a ``truncated_payload`` failure names the byte where the payloads
+    diverge. No duration, timestamp or path is included, so two runs of one case produce the same
+    bytes.
     """
     decoded = result.payload_bytes
     evidence = result.as_dict()

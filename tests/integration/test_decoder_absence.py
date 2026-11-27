@@ -1,10 +1,10 @@
-"""The absent-dependency rows of the state-handling table, held as gates.
+"""The two absent-dependency states, held as gates: blocking, then degrading.
 
-AAP §0.6.6 names this module for two rows and AAP §0.7.2 fixes the distinction between them.
-Row 3: ``zxing-cpp`` is the authority for every round-trip assertion, so its absence is
+This module holds both states, and the distinction between them is the gate. The primary decoder
+missing: ``zxing-cpp`` is the authority for every round-trip assertion, so its absence is
 *blocking* -- ``qrcheck doctor`` and ``qrcheck run`` both exit 2 naming the dependency, and no
 check is silently skipped in its place, the observable proof being that the run writes no report
-at all, since exit 2 is decided before a single case runs (AAP §0.3.4). Row 4:
+at all, since exit 2 is decided before a single case runs. The secondary decoder missing:
 ``opencv-python-headless`` corroborates and never decides, so its absence is a *supported
 degradation* -- doctor stays green and reports the entry as degraded, the run proceeds in
 single-decoder mode, every decoded result records ``agreement == "primary_only"`` with one
@@ -12,8 +12,8 @@ single-decoder mode, every decoded result records ``agreement == "primary_only"`
 why, the evidence a failing case writes shows the same decoder set, and ``index.html`` states the
 degradation.
 
-A third degradation is held here too (AAP §0.3.5, §0.7.2): with no SVG rasterizer, ``RN-SVG``
-skips whole, carrying its discovery order and its evidence directory, and never counts as a pass.
+A third degradation is held here too: with no SVG rasterizer, ``RN-SVG`` skips whole, carrying
+its discovery order and its evidence directory, and never counts as a pass.
 
 Absence is forced honestly: nothing is uninstalled and nothing inside the product is patched. A
 ``None`` entry in ``sys.modules`` makes ``import zxingcpp`` raise :exc:`ImportError` and
@@ -22,7 +22,7 @@ present", and the decoder wrappers resolve their binding lazily on every call, s
 wrapper can short-circuit the probe; ``monkeypatch`` restores both entries at teardown, which
 :func:`test_module_state_is_restored_after_a_stubbed_call` asserts. Every stubbed invocation
 therefore runs **in this interpreter** through ``run_cli(..., in_process=True)``, because a
-child process does not inherit a ``sys.modules`` entry, while row 3's harder state -- a binding
+child process does not inherit a ``sys.modules`` entry, while the harder state -- a binding
 **present but unimportable**, which ``find_spec`` cannot produce -- runs out of process through
 the :func:`unimportable_module` fixture's stub file ahead of ``site-packages`` on
 ``PYTHONPATH``. The degradation is reached a second way and held here too: an *installed* but
@@ -30,13 +30,12 @@ unimportable binding passes the availability probe, so the decode pipeline probe
 finds it cannot be loaded, and records it as an unavailable decoder instead of asking it -- with
 only :func:`qrcheck.decode.opencv._load_cv2` replaced.
 
-No test here skips for an absent decoder: every supported platform has a wheel (AAP §0.2.3), so
-a genuinely missing one means a broken environment and must surface as a loud failure naming the
-distribution and ``requirements.lock``. There is no ``xfail``, no retry and no ``pytest-mock``
-(AAP §0.4.3, §0.5.6); no threshold is restated (§0.12); every run is bounded by a
-``--checks`` selection, narrowed by ``--class`` where the selected check walks the corpus, so the
-module carries no ``e2e`` marker; and every artefact lands under the test's ``tmp_path`` with a
-fresh report root per test.
+No test here skips for an absent decoder: every supported platform has a wheel, so a genuinely
+missing one means a broken environment and must surface as a loud failure naming the distribution
+and ``requirements.lock``. There is no ``xfail``, no retry and no ``pytest-mock``; no threshold
+is restated; every run is bounded by a ``--checks`` selection, narrowed by ``--class`` where the
+selected check walks the corpus, so the module carries no ``e2e`` marker; and every artefact
+lands under the test's ``tmp_path`` with a fresh report root per test.
 """
 
 from __future__ import annotations
@@ -62,9 +61,9 @@ from qrcheck.decode import (
 from qrcheck.report import HTML_FILENAME, SUMMARY_FILENAME
 
 # The names the mechanism turns on. The importable module names key a ``sys.modules`` entry; the
-# distribution names are how AAP §0.7.2 writes the dependencies a reader has to install, and
-# they are what the diagnostics below assert. Different vocabularies for the same two packages,
-# so both are named here.
+# distribution names are how a reader is told which package to install, and they are what the
+# diagnostics below assert. Different vocabularies for the same two packages, so both are named
+# here.
 
 #: The primary decoder's importable module, which a blocked ``sys.modules`` entry hides.
 PRIMARY_MODULE: Final[str] = "zxingcpp"
@@ -72,7 +71,8 @@ PRIMARY_MODULE: Final[str] = "zxingcpp"
 #: The secondary decoder's importable module, blocked the same way.
 SECONDARY_MODULE: Final[str] = "cv2"
 
-#: The primary decoder's distribution name, spelled with the hyphen as AAP §0.7.2 spells it.
+#: The primary decoder's distribution name, spelled with the hyphen the lock and the diagnostics
+#: use.
 PRIMARY_DISTRIBUTION: Final[str] = "zxing-cpp"
 
 #: The secondary decoder's distribution name.
@@ -85,7 +85,7 @@ DECODER_WRAPPERS: Final[tuple[str, str]] = (
     "qrcheck.decode.opencv",
 )
 
-#: The dependency statuses ``qrcheck doctor --json`` publishes (AAP §0.8.3): ``missing`` blocks and
+#: The dependency statuses ``qrcheck doctor --json`` publishes: ``missing`` blocks and
 #: ``degraded`` does not, which is the whole difference between rows 3 and 4.
 STATUS_OK: Final[str] = "ok"
 STATUS_MISSING: Final[str] = "missing"
@@ -94,7 +94,7 @@ STATUS_DEGRADED: Final[str] = "degraded"
 STATUS_SKIPPED: Final[str] = "skipped"
 REASON_MISSING_DEPENDENCY: Final[str] = "missing_dependency"
 
-#: The six keys the doctor report object carries, exactly (AAP §0.8.3), so a field that is added,
+#: The six keys the doctor report object carries, exactly, so a field that is added,
 #: dropped or renamed fails here instead of shrinking a machine-readable surface.
 DOCTOR_REPORT_KEYS: Final[frozenset[str]] = frozenset(
     {"adapter", "type", "reachable", "capabilities", "dependencies", "svg_rasterizer"}
@@ -113,7 +113,7 @@ DEGRADATION_LABEL: Final[str] = "degrad"
 
 # The selections every run in this module is bounded by: one corpus class and one check per run
 # keeps the module in the fast job while still exercising the real encode, the real decoders and
-# the real report writers. ``otp`` holds twelve ASCII records at AAP §0.8.1's case matrix and
+# the real report writers. ``otp`` holds twelve ASCII records in the committed corpus and
 # both decoders read them, which is what makes the single-decoder and two-decoder runs
 # comparable.
 
@@ -131,8 +131,8 @@ CORPUS_CLASS: Final[str] = "otp"
 ROUNDTRIP_CHECK: Final[str] = "RT-ROUNDTRIP"
 
 #: The check whose failure against the defective target writes evidence: ``wrong_ec_level``
-#: encodes one level below the request at EC M (AAP §0.4.2), so every case fails and every
-#: case carries a ``decoded.json``.
+#: encodes one level below the request at EC M, so every case fails and every case carries a
+#: ``decoded.json``.
 EC_CHECK: Final[str] = "SY-EC-MATCH"
 
 #: A check that needs no target at all, used to prove the primary-decoder refusal is not
@@ -143,12 +143,13 @@ TARGET_INDEPENDENT_CHECK: Final[str] = "CL-ARTIFACTS"
 SVG_CHECK: Final[str] = "RN-SVG"
 RASTERIZER_TOKEN: Final[str] = "svg-rasterizer"
 
-#: The discovery order AAP §0.3.4 fixes for ``[render] svg_rasterizer = "auto"``: the importable
-#: ``cairosvg`` first, then the four command-line rasterizers on ``PATH``, which AAP §0.7.2
-#: requires ``RN-SVG``'s ``missing_dependency`` skip to record. Spelled as a literal on purpose,
-#: so the gate below pins the documented order instead of reading back the constant it exists to
-#: check; AAP §0.12's single-declaration rule governs configurable thresholds, and this is a
-#: contract value of AAP §0.3.4 rather than one of those.
+#: The discovery order the ``[render] svg_rasterizer = "auto"`` setting walks, identical to
+#: :data:`qrcheck.checks.render.SVG_RASTERIZER_AUTO_ORDER`: the importable ``cairosvg`` first,
+#: then the four command-line rasterizers on ``PATH``, which ``RN-SVG``'s ``missing_dependency``
+#: skip records as the order it attempted. Spelled as a literal on purpose, so the gate below
+#: pins the documented order instead of reading back the constant it exists to check; the
+#: single-declaration rule governs configurable thresholds, and this is a contract value of the
+#: render stage rather than one of those.
 SVG_RASTERIZER_DISCOVERY_ORDER: Final[tuple[str, ...]] = (
     "cairosvg",
     "rsvg-convert",
@@ -178,8 +179,8 @@ DIAGNOSTIC_CHARS: Final[int] = 800
 #: difference between a module this session never imported and a stub that outlived its test.
 PRESENT: Final[object] = object()
 
-#: The two fragments that mark a framework fault rather than an environment one. AAP §0.7.2 makes
-#: an unusable decoder exit 2 with a named dependency, so neither may appear in its diagnostic.
+#: The two fragments that mark a framework fault rather than an environment one. An unusable
+#: decoder exits 2 with a named dependency, so neither may appear in its diagnostic.
 INTERNAL_FAULT_MARKERS: Final[tuple[str, ...]] = ("internal error", "Traceback")
 
 
@@ -255,6 +256,19 @@ def invoke(run_cli: Callable[..., Any], space: Workspace, *arguments: str) -> An
     return run_cli(*arguments, config=space.config, in_process=True)
 
 
+def run_selection(run_cli: Callable[..., Any], space: Workspace, target: str, check: str) -> Any:
+    """Run one check against one target over this module's corpus class, in this interpreter.
+
+    Every run here is bounded the same way -- one check, one EC level and the one corpus class both
+    decoders read -- so a test states only what makes its run different from the others: the target
+    and the check.
+    """
+    return invoke(
+        run_cli, space, "run", "--adapter", target, "--ec", EC_LEVEL, "--checks", check,
+        "--class", CORPUS_CLASS,
+    )
+
+
 def diagnostic(result: Any) -> str:
     """Return the outcome of one invocation, bounded, for a failure message.
 
@@ -327,7 +341,7 @@ def unconsulted_reasons(decoded: Mapping[str, Any], where: str) -> dict[str, str
     """Return ``decoded``'s ``unavailable_decoders``, requiring the secondary decoder in it.
 
     The degradation has to stay recorded in the evidence even though it no longer reaches
-    ``per_decoder`` (AAP §0.6.6 row 4, §0.14.1), so this is the one assertion every
+    ``per_decoder``, so this is the one assertion every
     single-decoder test here makes about that record: exactly the secondary decoder, and a reason
     a reader can act on. ``where`` names the result in a failure message.
     """
@@ -348,7 +362,7 @@ def unconsulted_reasons(decoded: Mapping[str, Any], where: str) -> dict[str, str
 
 
 # ---------------------------------------------------------------------------
-# Row 3: the primary decoder is missing, and that blocks everything
+# The primary decoder missing: it blocks everything
 # ---------------------------------------------------------------------------
 
 
@@ -362,7 +376,7 @@ def test_doctor_blocks_when_primary_decoder_is_missing(
 
     Breaks if ``doctor`` stops treating ``zxing-cpp`` as blocking -- it would print a table and exit
     0 -- or if its diagnostic stops naming the distribution a reader has to install, the interpreter
-    and the platform whose wheel tag the pin would have to match (AAP §0.6.6 row 3, §0.7.2).
+    and the platform whose wheel tag the pin would have to match.
     """
     module_absent(monkeypatch, PRIMARY_MODULE)
     space = workspace(write_config, tmp_path, target=REFERENCE_TARGET)
@@ -425,7 +439,7 @@ def test_run_refuses_to_start_without_the_primary_decoder(
 
     Breaks if ``run`` degrades instead of refusing -- by letting ``RT-ROUNDTRIP`` become
     ``skipped`` -- or if it starts writing a report before the prerequisite is decided. The gate is
-    the *absence* of any report: exit 2 is settled before a single case runs (AAP §0.3.4), so no
+    the *absence* of any report: exit 2 is settled before a single case runs, so no
     result list exists in which a skip could hide, and the second selection proves the refusal is
     not a property of the one check whose name mentions a round trip.
     """
@@ -433,19 +447,7 @@ def test_run_refuses_to_start_without_the_primary_decoder(
     space = workspace(write_config, tmp_path, target=REFERENCE_TARGET)
 
     for selection in (ROUNDTRIP_CHECK, TARGET_INDEPENDENT_CHECK):
-        result = invoke(
-            run_cli,
-            space,
-            "run",
-            "--adapter",
-            REFERENCE_TARGET,
-            "--ec",
-            EC_LEVEL,
-            "--checks",
-            selection,
-            "--class",
-            CORPUS_CLASS,
-        )
+        result = run_selection(run_cli, space, REFERENCE_TARGET, selection)
         assert result.exit_code == EXIT_CONFIG, (
             f"run --checks {selection} exited {result.exit_code} with the primary decoder "
             f"absent; {diagnostic(result)}"
@@ -466,7 +468,7 @@ def test_run_refuses_to_start_without_the_primary_decoder(
 
 
 # ---------------------------------------------------------------------------
-# Row 3 again, against the state a broken install really has: present but unimportable
+# Primary decoder present but unimportable: the state a broken install really has
 # ---------------------------------------------------------------------------
 
 
@@ -482,7 +484,7 @@ def test_doctor_and_run_refuse_a_present_but_unimportable_primary_decoder(
     while the guarded import fails on every call. Breaks if ``run`` reaches its checks in that
     state: the review found it exiting 1 with a complete report of twelve ``value_mismatch``
     failures and ``agreement: secondary_only`` against a conforming target -- one blocking error
-    reported as twelve fabricated generator defects (AAP §0.3.5, §0.6.6 row 3, §0.7.2). Both
+    reported as twelve fabricated generator defects. Both
     verbs are asserted here on purpose: they must agree about whether the decoder is usable.
     """
     unimportable_module(PRIMARY_MODULE)
@@ -529,7 +531,7 @@ def test_doctor_and_run_refuse_a_present_but_unimportable_primary_decoder(
 
 
 # ---------------------------------------------------------------------------
-# Row 4: the secondary decoder is missing, and that only degrades the run
+# The secondary decoder missing: it only degrades the run
 # ---------------------------------------------------------------------------
 
 
@@ -543,7 +545,7 @@ def test_doctor_degrades_when_only_the_secondary_decoder_is_missing(
 
     Breaks if the corroborating decoder starts blocking a run -- ``doctor`` would exit 2 -- or if
     its absence stops being reported at all, which would leave a reader to infer a single-decoder
-    run from the results alone (AAP §0.6.6 row 4, §0.7.2).
+    run from the results alone.
     """
     module_absent(monkeypatch, SECONDARY_MODULE)
     space = workspace(write_config, tmp_path, target=REFERENCE_TARGET)
@@ -582,24 +584,12 @@ def test_run_degrades_to_single_decoder_mode(
 
     Breaks if a missing optional decoder turns a case into a ``skipped`` result -- which would let a
     check pass CI without measuring anything -- or if the consensus layer stops recording which
-    decoders actually ran, which is the evidence row 4 is about.
+    decoders actually ran, which is the evidence the secondary decoder's absence is about.
     """
     module_absent(monkeypatch, SECONDARY_MODULE)
     space = workspace(write_config, tmp_path, target=REFERENCE_TARGET)
 
-    result = invoke(
-        run_cli,
-        space,
-        "run",
-        "--adapter",
-        REFERENCE_TARGET,
-        "--ec",
-        EC_LEVEL,
-        "--checks",
-        ROUNDTRIP_CHECK,
-        "--class",
-        CORPUS_CLASS,
-    )
+    result = run_selection(run_cli, space, REFERENCE_TARGET, ROUNDTRIP_CHECK)
     assert result.exit_code == EXIT_OK, (
         f"the single-decoder run exited {result.exit_code}; a supported degradation must "
         f"not change the outcome of a conforming target; {diagnostic(result)}"
@@ -645,28 +635,16 @@ def test_evidence_records_a_single_decoder_block(
 ) -> None:
     """A failing case's ``decoded.json`` states the single decoder, in canonical form.
 
-    A passing case records ``evidence_dir`` as ``null`` by design (AAP §0.3.4), so this needs a
+    A passing case records ``evidence_dir`` as ``null`` by design, so this needs a
     case that really fails: the defective target's ``wrong_ec_level`` injection encodes one level
-    below the request at EC M and makes every ``SY-EC-MATCH`` case fail (AAP §0.4.2). Breaks if the
+    below the request at EC M and makes every ``SY-EC-MATCH`` case fail. Breaks if the
     evidence store writes a decoder block the summary does not, or if the file stops being
     sorted-key JSON with one trailing newline, which keeps two runs of one case byte-identical.
     """
     module_absent(monkeypatch, SECONDARY_MODULE)
     space = workspace(write_config, tmp_path, target=DEFECTIVE_TARGET)
 
-    result = invoke(
-        run_cli,
-        space,
-        "run",
-        "--adapter",
-        DEFECTIVE_TARGET,
-        "--ec",
-        EC_LEVEL,
-        "--checks",
-        EC_CHECK,
-        "--class",
-        CORPUS_CLASS,
-    )
+    result = run_selection(run_cli, space, DEFECTIVE_TARGET, EC_CHECK)
     assert result.exit_code == EXIT_FAILED, (
         f"the defective run exited {result.exit_code}, expected {EXIT_FAILED}: the "
         f"wrong_ec_level injection must fail {EC_CHECK}; {diagnostic(result)}"
@@ -712,27 +690,15 @@ def test_report_states_the_degradation(
     """The single-decoder run's ``index.html`` states the reduced decoder set.
 
     Breaks if a reader can no longer tell from the report that only one decoder ran -- the
-    degradation would then be inferable only from an empty column, which is what AAP §0.6.6 row 4
-    forbids. The exact sentence is not asserted: the wording belongs to
+    degradation would then be inferable only from an empty column, which the banner exists to
+    prevent. The exact sentence is not asserted: the wording belongs to
     :mod:`qrcheck.report.html`, so a copy edit must not break this gate. What is asserted is that
     the notice exists inside the writer's own delimited banner element.
     """
     module_absent(monkeypatch, SECONDARY_MODULE)
     space = workspace(write_config, tmp_path, target=REFERENCE_TARGET)
 
-    result = invoke(
-        run_cli,
-        space,
-        "run",
-        "--adapter",
-        REFERENCE_TARGET,
-        "--ec",
-        EC_LEVEL,
-        "--checks",
-        ROUNDTRIP_CHECK,
-        "--class",
-        CORPUS_CLASS,
-    )
+    result = run_selection(run_cli, space, REFERENCE_TARGET, ROUNDTRIP_CHECK)
     assert result.exit_code == EXIT_OK, (
         f"the single-decoder run exited {result.exit_code}; {diagnostic(result)}"
     )
@@ -759,8 +725,9 @@ def test_run_degrades_when_the_secondary_decoder_cannot_be_imported(
 ) -> None:
     """A decoder that is installed but unusable degrades the run, and the report says so.
 
-    ``module_absent`` above is the easy half of row 4: ``find_spec`` answers ``None``, the run
-    resolves the secondary decoder as unavailable, and its name never reaches ``per_decoder``. A
+    ``module_absent`` above is the easy half of the secondary decoder's absence: ``find_spec``
+    answers ``None``, the run resolves the secondary decoder as unavailable, and its name never
+    reaches ``per_decoder``. A
     binding that is *installed* but cannot be imported is the half that looks different while
     meaning the same thing -- the availability probe finds the module, so the run's resolution keeps
     the decoder, and the decode pipeline's own probe is what discovers that it cannot be loaded. It
@@ -769,7 +736,7 @@ def test_run_degrades_when_the_secondary_decoder_cannot_be_imported(
     unimportable binding goes back to leaving a second ``per_decoder`` entry -- a consumer counting
     entries would then read two decoders where one answered -- or if ``index.html`` goes silent
     again for this shape, which is how a degraded run came to be indistinguishable from a fully
-    corroborated one (AAP §0.6.6 row 4, §0.7.2).
+    corroborated one.
     """
     assert importlib.util.find_spec(SECONDARY_MODULE) is not None, (
         f"{SECONDARY_MODULE!r} is not installed in this environment, so the binding could not be "
@@ -779,19 +746,7 @@ def test_run_degrades_when_the_secondary_decoder_cannot_be_imported(
     monkeypatch.setattr("qrcheck.decode.opencv._load_cv2", lambda: None)
     space = workspace(write_config, tmp_path, target=REFERENCE_TARGET)
 
-    result = invoke(
-        run_cli,
-        space,
-        "run",
-        "--adapter",
-        REFERENCE_TARGET,
-        "--ec",
-        EC_LEVEL,
-        "--checks",
-        ROUNDTRIP_CHECK,
-        "--class",
-        CORPUS_CLASS,
-    )
+    result = run_selection(run_cli, space, REFERENCE_TARGET, ROUNDTRIP_CHECK)
     assert result.exit_code == EXIT_OK, (
         f"the present-but-unusable run exited {result.exit_code}; an unusable corroborating "
         f"decoder is a supported degradation, so a conforming target must still pass; "
@@ -863,19 +818,7 @@ def test_reference_run_uses_both_decoders_when_present(
     """
     space = workspace(write_config, tmp_path, target=REFERENCE_TARGET)
 
-    result = invoke(
-        run_cli,
-        space,
-        "run",
-        "--adapter",
-        REFERENCE_TARGET,
-        "--ec",
-        EC_LEVEL,
-        "--checks",
-        ROUNDTRIP_CHECK,
-        "--class",
-        CORPUS_CLASS,
-    )
+    result = run_selection(run_cli, space, REFERENCE_TARGET, ROUNDTRIP_CHECK)
     assert result.exit_code == EXIT_OK, (
         f"the two-decoder run exited {result.exit_code}; {diagnostic(result)}"
     )
@@ -917,15 +860,15 @@ def test_rn_svg_skips_with_the_discovery_order_it_attempted(
 ) -> None:
     """An absent rasterizer skips ``RN-SVG`` and the skip names the order it walked.
 
-    AAP §0.3.5 and §0.7.2: the rasterizer degrades to ``skipped``/``missing_dependency`` with the
-    discovery order it attempted, and AAP §0.3.4 requires evidence for the skip. Breaks if the
-    product's ``auto`` order departs from the one AAP §0.3.4 fixes, if the order stops reaching the
-    result, or if the degradation becomes a failure, an error or a pass.
+    The rasterizer degrades to ``skipped``/``missing_dependency`` with the discovery order it
+    attempted, and the skip carries its evidence. Breaks if the product's ``auto`` order departs
+    from the one pinned above, if the order stops reaching the result, or if the degradation
+    becomes a failure, an error or a pass.
     """
     documented_order = list(SVG_RASTERIZER_DISCOVERY_ORDER)
     assert list(SVG_RASTERIZER_AUTO_ORDER) == documented_order, (
         f"the product's ``auto`` discovery order is {list(SVG_RASTERIZER_AUTO_ORDER)}, not the "
-        f"{documented_order} AAP §0.3.4 fixes; a reordering or a dropped candidate changes the "
+        f"{documented_order} this module pins; a reordering or a dropped candidate changes the "
         f"order every report states it attempted"
     )
     rasterizer_absent(monkeypatch)
@@ -952,13 +895,13 @@ def test_rn_svg_skips_with_the_discovery_order_it_attempted(
     assert entry["reason"] == REASON_MISSING_DEPENDENCY, entry["reason"]
     assert entry["expected"] == {"missing": [RASTERIZER_TOKEN]}, entry["expected"]
     assert entry["decoded"] == {"attempted": documented_order}, (
-        f"the skip's decoded payload is {entry['decoded']!r}; AAP §0.3.5 and §0.7.2 require the "
-        f"discovery order it attempted, which AAP §0.3.4 fixes as {documented_order}"
+        f"the skip's decoded payload is {entry['decoded']!r}; the skip must record the discovery "
+        f"order it attempted as {documented_order}"
     )
 
     evidence_dir = entry["evidence_dir"]
     assert isinstance(evidence_dir, str) and evidence_dir, (
-        f"a skipped-with-reason case records its evidence directory (AAP §0.3.4); got "
+        f"a skipped-with-reason case records its evidence directory; got "
         f"{evidence_dir!r}"
     )
     assert not Path(evidence_dir).is_absolute(), evidence_dir
@@ -982,8 +925,8 @@ def test_module_state_is_restored_after_a_stubbed_call() -> None:
     ``monkeypatch`` restores every ``sys.modules`` entry it touched, and this test is the assertion
     of that postcondition: a leaked ``None`` entry would make every later module in the session see
     a decoder that is not missing. The availability probes are asserted too, and they *fail* rather
-    than skip on a genuinely absent decoder: every supported platform has a wheel (AAP §0.2.3), so
-    an absent one means the environment is broken and must be reported by name.
+    than skip on a genuinely absent decoder: every supported platform has a wheel, so an absent
+    one means the environment is broken and must be reported by name.
     """
     for module in (PRIMARY_MODULE, SECONDARY_MODULE):
         blocked = sys.modules.get(module, PRESENT) is None

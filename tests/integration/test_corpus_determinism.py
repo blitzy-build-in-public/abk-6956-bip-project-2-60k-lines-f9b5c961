@@ -1,16 +1,14 @@
 """The corpus drift gate: rebuild from the committed seed and compare bytes, never rewrite.
 
 ``corpus/default.jsonl`` is a committed repository file and the fixed input every
-corpus-driven case is built from, so AAP §0.5.4 promises it is **byte-identical** when
-regenerated from ``--seed``, and the §0.6.4 CI drift step re-runs exactly that. This module
-is the executable form of that step: it drives the real command line, builds into
-``tmp_path`` and compares **bytes**.
+corpus-driven case is built from, so it is **byte-identical** when regenerated from ``--seed``,
+and the CI drift step re-runs exactly that. This module is the executable form of that step: it
+drives the real command line, builds into ``tmp_path`` and compares **bytes**.
 
-It also holds the committed file to the canonical form of §0.5.3 and §0.5.4, the
-compare-then-fail ordering of ``corpus build`` (exit 2 unless ``--force``), the writer's
-canonical form in isolation, the seed reaching generation in both directions, and the guard
-that nothing here writes the committed corpus. No marker, skip, retry, monkeypatch or
-threshold appears."""
+It also holds the committed file to its canonical form, the compare-then-fail ordering of
+``corpus build`` (exit 2 unless ``--force``), the writer's canonical form in isolation, the seed
+reaching generation in both directions, and the guard that nothing here writes the committed
+corpus. No marker, skip, retry, monkeypatch or threshold appears."""
 
 from __future__ import annotations
 
@@ -29,30 +27,30 @@ import pytest
 from qrcheck.corpus.builder import CorpusRecord
 from qrcheck.corpus.io import load_corpus, write_corpus
 
-# The plan's numbers, written out once: AAP §0.3.4 declares the default seed and §0.8.2 the corpus
-# inventory, and the seed is also what the §0.6.4 CI drift step rebuilds with, so a test using a
-# different seed would disagree with CI about what drift means.
+# The numbers, written out once: ``qrcheck.toml`` declares the default seed and the committed
+# corpus holds the inventory, and the seed is also what the CI drift step rebuilds with, so a test
+# using a different seed would disagree with CI about what drift means.
 
-#: The configured default seed (AAP §0.3.4): the corpus was built from it and CI regenerates it
-#: with it, so a test using another would disagree with CI about what drift means.
-PLAN_SEED: Final[int] = 20240101
+#: The configured default seed, ``qrcheck.toml``'s ``seed``: the corpus was built from it and CI
+#: regenerates it with it, so a test using another would disagree with CI about what drift means.
+DEFAULT_SEED: Final[int] = 20240101
 
 #: A seed the committed bytes must **not** be reproducible from, or a seed-ignoring builder passes.
 OTHER_SEED: Final[int] = 7
 
-#: The committed corpus, relative to the repository root (AAP §0.9.2).
+#: The committed corpus, relative to the repository root.
 COMMITTED_CORPUS_RELPATH: Final[Path] = Path("corpus") / "default.jsonl"
 
-#: The class-name prefix of the three classes making the 40-record boundary subset (AAP §0.8.2).
+#: The class-name prefix of the three classes making the 40-record boundary subset.
 BOUNDARY_CLASS_PREFIX: Final[str] = "boundary-"
 
-#: AAP §0.8.2: 240 records in total, of which the boundary subset is 40.
-PLAN_TOTAL_RECORDS: Final[int] = 240
-PLAN_BOUNDARY_RECORDS: Final[int] = 40
+#: 240 records in total, of which the boundary subset is 40.
+EXPECTED_TOTAL_RECORDS: Final[int] = 240
+EXPECTED_BOUNDARY_RECORDS: Final[int] = 40
 
-#: AAP §0.8.2's 14-class inventory, compared as a mapping so moving records between classes fails
-#: instead of passing on an unchanged total.
-PLAN_CLASS_COUNTS: Final[dict[str, int]] = {
+#: The committed corpus's 14-class inventory, compared as a mapping so moving records between
+#: classes fails instead of passing on an unchanged total.
+EXPECTED_CLASS_COUNTS: Final[dict[str, int]] = {
     "boundary-alphanumeric": 12,
     "boundary-byte": 16,
     "boundary-numeric": 12,
@@ -69,16 +67,16 @@ PLAN_CLASS_COUNTS: Final[dict[str, int]] = {
     "wifi": 12,
 }
 
-#: AAP §0.8.2: the three values a record's ``expected_mode`` may hold.
+#: The three values a record's ``expected_mode`` may hold.
 EXPECTED_MODES: Final[frozenset[str]] = frozenset({"numeric", "alphanumeric", "byte"})
 
-#: AAP §0.8.2: an id is ``<class>-<3-digit index>``, so the captured group must equal the class.
+#: An id is ``<class>-<3-digit index>``, so the captured group must equal the class.
 RECORD_ID: Final[re.Pattern[str]] = re.compile(
     r"(?P<class_name>[a-z0-9][a-z0-9-]*)-(?P<index>\d{3})"
 )
 
-#: AAP §0.8.2: a boundary record's ``notes`` states the capacity arithmetic that produced its
-#: length, exactly as ``qrcheck/corpus/builder.py`` writes it, e.g.
+#: A boundary record's ``notes`` states the capacity arithmetic that produced its length, exactly
+#: as ``qrcheck/corpus/builder.py`` writes it, e.g.
 #: ``max_payload_bytes(2, 'L', 'byte') = 32; minimal version L=2, M=3, H=4``; the same pattern
 #: shows a non-boundary record claims no such note.
 CAPACITY_ARITHMETIC: Final[re.Pattern[str]] = re.compile(
@@ -135,8 +133,8 @@ def _canonical_record(line: str, number: int) -> dict[str, Any]:
     pairs = json.loads(line, object_pairs_hook=list)
     keys = [key for key, _ in pairs]
     assert keys == sorted(keys), (
-        f"corpus line {number} does not hold its keys in sorted order: {keys}; AAP §0.5.3 "
-        f"requires sorted keys in every JSON artefact, and a reordering would make the file "
+        f"corpus line {number} does not hold its keys in sorted order: {keys}; the canonical "
+        f"form requires sorted keys in every JSON artefact, and a reordering would make the file "
         f"fail the byte comparison even with identical records"
     )
     return dict(pairs)
@@ -169,7 +167,7 @@ def corpus_config(
         default_adapter="reference",
         report_dir=tmp_path / "reports",
         corpus_path=committed_corpus_path,
-        seed=PLAN_SEED,
+        seed=DEFAULT_SEED,
     )
 
 
@@ -201,7 +199,7 @@ def corpus_fingerprint(committed_corpus_path: Path) -> Iterator[tuple[int, str]]
     )
 
 
-# The drift gate (AAP §0.5.4, §0.6.4)
+# The drift gate
 
 
 def test_build_reproduces_committed_corpus_byte_for_byte(
@@ -216,13 +214,13 @@ def test_build_reproduces_committed_corpus_byte_for_byte(
         "corpus",
         "build",
         "--seed",
-        str(PLAN_SEED),
+        str(DEFAULT_SEED),
         "--out",
         str(built),
         config=corpus_config,
     )
     assert result.exit_code == 0, (
-        f"corpus build --seed {PLAN_SEED} exited {result.exit_code}, not 0; "
+        f"corpus build --seed {DEFAULT_SEED} exited {result.exit_code}, not 0; "
         f"stdout {result.stdout!r}, stderr {result.stderr!r}"
     )
     assert built.is_file(), (
@@ -232,7 +230,7 @@ def test_build_reproduces_committed_corpus_byte_for_byte(
     _assert_same_bytes(
         built.read_bytes(),
         committed_corpus_path.read_bytes(),
-        f"corpus build --seed {PLAN_SEED} against {COMMITTED_CORPUS_RELPATH.as_posix()}",
+        f"corpus build --seed {DEFAULT_SEED} against {COMMITTED_CORPUS_RELPATH.as_posix()}",
     )
 
 
@@ -244,14 +242,14 @@ def _assert_ids(records: Sequence[Mapping[str, Any]]) -> None:
     for previous, current in zip(ids, ids[1:]):
         assert previous < current, (
             f"record {current!r} follows {previous!r}, so the file is not in ascending id order; "
-            f"AAP §0.5.3 makes file order a contract, and a reordering fails the byte comparison "
+            f"file order is part of the canonical form, and a reordering fails the byte comparison "
             f"while every record stays the same"
         )
     for record in records:
         record_id = str(record["id"])
         match = RECORD_ID.fullmatch(record_id)
         assert match is not None, (
-            f"record id {record_id!r} is not '<class>-<3-digit index>' (AAP §0.8.2)"
+            f"record id {record_id!r} is not '<class>-<3-digit index>'"
         )
         assert match["class_name"] == record["class"], (
             f"record {record_id!r} states class {record['class']!r}, but its id names "
@@ -260,10 +258,10 @@ def _assert_ids(records: Sequence[Mapping[str, Any]]) -> None:
 
 
 def _assert_inventory(records: Sequence[Mapping[str, Any]]) -> None:
-    """Assert the per-class counts and the boundary subset are the plan's."""
+    """Assert the per-class counts and the boundary subset are the declared ones."""
     counts = Counter(str(record["class"]) for record in records)
     observed = dict(sorted(counts.items()))
-    expected = dict(sorted(PLAN_CLASS_COUNTS.items()))
+    expected = dict(sorted(EXPECTED_CLASS_COUNTS.items()))
     assert observed == expected, (
         f"the corpus inventory drifted: expected {expected}, saw {observed}"
     )
@@ -272,9 +270,9 @@ def _assert_inventory(records: Sequence[Mapping[str, Any]]) -> None:
         for record in records
         if str(record["class"]).startswith(BOUNDARY_CLASS_PREFIX)
     ]
-    assert len(boundary) == PLAN_BOUNDARY_RECORDS, (
-        f"the boundary subset holds {len(boundary)} record(s); AAP §0.8.2 makes it "
-        f"{PLAN_BOUNDARY_RECORDS}, which is the set success criterion 2 runs at EC L, Q and H"
+    assert len(boundary) == EXPECTED_BOUNDARY_RECORDS, (
+        f"the boundary subset holds {len(boundary)} record(s); it must hold "
+        f"{EXPECTED_BOUNDARY_RECORDS}, which is the set the boundary runs replay at EC L, Q and H"
     )
 
 
@@ -286,7 +284,7 @@ def _assert_payload_fields(records: Sequence[Mapping[str, Any]]) -> None:
         has_base64 = "payload_b64" in record
         assert has_text != has_base64, (
             f"record {record_id!r} carries {'both' if has_text else 'neither'} of payload_utf8 "
-            f"and payload_b64; AAP §0.8.2 makes the two mutually exclusive"
+            f"and payload_b64; the two are mutually exclusive"
         )
         if has_base64:
             encoded = str(record["payload_b64"])
@@ -315,7 +313,7 @@ def _assert_notes(records: Sequence[Mapping[str, Any]]) -> None:
         arithmetic = CAPACITY_ARITHMETIC.search(notes)
         if str(record["class"]).startswith(BOUNDARY_CLASS_PREFIX):
             assert notes.strip(), (
-                f"boundary record {record_id!r} carries no notes; AAP §0.8.2 requires the "
+                f"boundary record {record_id!r} carries no notes; it must state the "
                 f"capacity arithmetic that produced its length"
             )
             assert arithmetic is not None, (
@@ -329,7 +327,7 @@ def _assert_notes(records: Sequence[Mapping[str, Any]]) -> None:
 
 
 def test_committed_corpus_is_canonically_formed(committed_corpus_path: Path) -> None:
-    """The committed file must itself be the canonical corpus of §0.5.3 and §0.5.4."""
+    """The committed file must itself be in canonical form."""
     data = committed_corpus_path.read_bytes()
     assert b"\r" not in data, (
         f"{committed_corpus_path} contains a carriage return; the corpus is written with \\n "
@@ -348,9 +346,9 @@ def test_committed_corpus_is_canonically_formed(committed_corpus_path: Path) -> 
         f"record"
     )
     lines = text.split("\n")[:-1]
-    assert len(lines) == PLAN_TOTAL_RECORDS, (
-        f"{committed_corpus_path} holds {len(lines)} record(s); the plan's inventory is "
-        f"{PLAN_TOTAL_RECORDS} (AAP §0.8.2)"
+    assert len(lines) == EXPECTED_TOTAL_RECORDS, (
+        f"{committed_corpus_path} holds {len(lines)} record(s); the inventory is "
+        f"{EXPECTED_TOTAL_RECORDS}"
     )
     records = [_canonical_record(line, number) for number, line in enumerate(lines, 1)]
     _assert_ids(records)
@@ -359,7 +357,7 @@ def test_committed_corpus_is_canonically_formed(committed_corpus_path: Path) -> 
     _assert_notes(records)
 
 
-# Compare then fail, never overwrite first (AAP §0.6.4, §0.8.3)
+# Compare then fail, never overwrite first
 
 
 def test_build_refuses_to_overwrite_without_force(
@@ -373,14 +371,14 @@ def test_build_refuses_to_overwrite_without_force(
         "corpus",
         "build",
         "--seed",
-        str(PLAN_SEED),
+        str(DEFAULT_SEED),
         "--out",
         str(differing_corpus),
         config=corpus_config,
     )
     assert result.exit_code == 2, (
         f"corpus build over a differing destination without --force exited "
-        f"{result.exit_code}, not 2 (AAP §0.3.4); stdout {result.stdout!r}, "
+        f"{result.exit_code}, not 2; stdout {result.stdout!r}, "
         f"stderr {result.stderr!r}"
     )
     assert "--force" in result.stderr, (
@@ -409,7 +407,7 @@ def test_force_flag_overwrites_with_the_canonical_bytes(
         "corpus",
         "build",
         "--seed",
-        str(PLAN_SEED),
+        str(DEFAULT_SEED),
         "--out",
         str(differing_corpus),
         "--force",
@@ -422,11 +420,11 @@ def test_force_flag_overwrites_with_the_canonical_bytes(
     _assert_same_bytes(
         differing_corpus.read_bytes(),
         committed_corpus_path.read_bytes(),
-        f"corpus build --seed {PLAN_SEED} --force",
+        f"corpus build --seed {DEFAULT_SEED} --force",
     )
 
 
-# The writer's canonical form on its own (AAP §0.5.4)
+# The writer's canonical form on its own
 
 
 def test_load_write_round_trip_is_byte_stable(
@@ -434,9 +432,9 @@ def test_load_write_round_trip_is_byte_stable(
 ) -> None:
     """Reading and re-writing the committed corpus must reproduce it byte for byte."""
     records: list[CorpusRecord] = load_corpus(committed_corpus_path)
-    assert len(records) == PLAN_TOTAL_RECORDS, (
-        f"load_corpus read {len(records)} record(s) from {committed_corpus_path}; the plan's "
-        f"inventory is {PLAN_TOTAL_RECORDS}"
+    assert len(records) == EXPECTED_TOTAL_RECORDS, (
+        f"load_corpus read {len(records)} record(s) from {committed_corpus_path}; the inventory "
+        f"is {EXPECTED_TOTAL_RECORDS}"
     )
     round_tripped = tmp_path / "roundtrip.jsonl"
     write_corpus(records, round_tripped)
@@ -447,7 +445,7 @@ def test_load_write_round_trip_is_byte_stable(
     )
 
 
-# The seed reaches generation (AAP §0.5.1, §0.5.4)
+# The seed reaches generation
 
 
 def test_seed_is_actually_wired_into_the_generated_content(
@@ -475,23 +473,23 @@ def test_seed_is_actually_wired_into_the_generated_content(
         "corpus",
         "build",
         "--seed",
-        str(PLAN_SEED),
+        str(DEFAULT_SEED),
         "--out",
         str(rebuilt),
         config=corpus_config,
     )
     assert rebuilt_result.exit_code == 0, (
-        f"corpus build --seed {PLAN_SEED} exited {rebuilt_result.exit_code}, not 0; "
+        f"corpus build --seed {DEFAULT_SEED} exited {rebuilt_result.exit_code}, not 0; "
         f"stdout {rebuilt_result.stdout!r}, stderr {rebuilt_result.stderr!r}"
     )
     _assert_same_bytes(
         rebuilt.read_bytes(),
         committed,
-        f"corpus build --seed {PLAN_SEED} after the {OTHER_SEED} build",
+        f"corpus build --seed {DEFAULT_SEED} after the {OTHER_SEED} build",
     )
 
 
-# The guard: the suite never writes the baseline (AAP §0.11.1)
+# The guard: the suite never writes the baseline
 
 
 def test_committed_corpus_is_never_modified_by_the_suite(

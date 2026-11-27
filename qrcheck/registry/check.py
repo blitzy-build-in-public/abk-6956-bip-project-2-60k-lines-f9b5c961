@@ -63,7 +63,6 @@ __all__ = [
 ]
 
 # The twenty-one registered check identifiers, in ascending ASCII order.
-#
 # This tuple is the only literal list of check identifiers in the product: the registry validates
 # against it, ``qrcheck list`` and the reports print what the registry holds, and the reachability
 # gate compares the two sets. Ascending order shows an added or removed check where it belongs in
@@ -128,28 +127,23 @@ FAMILY_BY_PREFIX: Final[Mapping[str, str]] = MappingProxyType(
 )
 
 # The runtime dependencies a check may declare, as tokens rather than module names.
-#
 # A check declares *what it needs*, never *what provides it*: ``checks/*`` may not import a
 # decoder or the rasterizer's discovery logic, and each token's availability is resolved once per
 # run by the runner into :attr:`RunContext.availability`.
-#
 # A missing primary decoder (zxing-cpp) blocks the run: ``qrcheck doctor`` and ``qrcheck run``
 # exit 2, naming zxing-cpp and the interpreter/platform, before any check runs, so
-# ``RT-ROUNDTRIP`` is never silently skipped (AAP §0.3.5, §0.6.6 row 3, §0.7.2 row 1). A check
-# still declares :data:`DEPENDENCY_PRIMARY_DECODER`, because that is the honest record of what it
-# needs -- notably ``PF-DECODE`` and ``CL-ARTIFACTS``, which decode but need nothing from the
-# target -- and resolution can never turn that record into a skip, because a run without the
-# primary decoder never reaches resolution.
-#
+# ``RT-ROUNDTRIP`` is never silently skipped. A check still declares
+# :data:`DEPENDENCY_PRIMARY_DECODER`, because that is the honest record of what it needs --
+# notably ``PF-DECODE`` and ``CL-ARTIFACTS``, which decode but need nothing from the target --
+# and resolution can never turn that record into a skip, because a run without the primary
+# decoder never reaches resolution.
 # Only two tools degrade. The secondary decoder (opencv) leaves the run in single-decoder mode,
 # reported as ``primary_only``. The SVG rasterizer makes ``RN-SVG`` report ``skipped`` with reason
 # ``missing_dependency`` and the discovery order it attempted.
-#
 # The vocabulary is closed at three, one per runtime tool whose availability a check can depend
 # on. There is deliberately no token for the platform file-descriptor directory: a declared token
 # can only produce a whole-check ``missing_dependency`` skip, whereas ``CL-ARTIFACTS`` reports its
-# handle half per case as ``unsupported_platform`` while its temporary-file half still asserts
-# (AAP §0.8.1).
+# handle half per case as ``unsupported_platform`` while its temporary-file half still asserts.
 DEPENDENCY_PRIMARY_DECODER: Final[str] = "primary-decoder"
 DEPENDENCY_SECONDARY_DECODER: Final[str] = "secondary-decoder"
 DEPENDENCY_SVG_RASTERIZER: Final[str] = "svg-rasterizer"
@@ -228,8 +222,8 @@ class RunContext:
     ``temp_baseline`` is the temporary-file snapshot the run began with: the names in
     :func:`tempfile.gettempdir` that carried the framework's ``qrcheck-`` prefix when the runner
     took it, at the last instant before any check could run. The runner observes it through the
-    check layer's own :func:`qrcheck.checks.cleanup.temp_entries` (AAP §0.8.1), and only
-    ``CL-ARTIFACTS`` reads it. A context built directly -- as a test does -- carries the empty
+    check layer's own :func:`qrcheck.checks.cleanup.temp_entries`, and only ``CL-ARTIFACTS`` reads
+    it. A context built directly -- as a test does -- carries the empty
     default, under which any prefixed entry present is reported as leaked: the safe direction for
     a snapshot nobody took. The instance is frozen, so a check cannot change what another check
     sees.
@@ -349,16 +343,15 @@ class CheckContract:
     it does under ``--fail-fast``, is the runner's decision.
 
     ``corpus_driven`` says whether the cases this check yields are drawn from the corpus the run
-    loaded, which is what decides whether the corpus file has to exist: AAP §0.3.4 conditions
-    ``corpus_path``'s "must exist" rule on a corpus-driven check being selected, so a run of
-    synthetic-only checks can complete on a machine where no corpus has ever been built. It is
-    declared rather than inferred, because only the check knows whether it reads
-    :attr:`RunContext.corpus`.
+    loaded, which is what decides whether the corpus file has to exist: the runner reads
+    ``corpus_path`` only when a corpus-driven check is selected, so a run of synthetic-only checks
+    can complete on a machine where no corpus has ever been built. It is declared rather than
+    inferred, because only the check knows whether it reads :attr:`RunContext.corpus`.
 
     ``observes_run_end`` says whether the check asserts a property of the whole run rather than of
     one case. It is true for exactly one check, ``CL-ARTIFACTS``, whose subject is the footprint the
     finished run leaves behind: the runner takes that check's "before" snapshot immediately before
-    the walk and executes the check after it, so the two snapshots bracket the run (AAP §0.8.1).
+    the walk and executes the check after it, so the two snapshots bracket the run.
     Every other check leaves it false and has its cases executed in the ordinary identifier order.
     """
 
@@ -412,14 +405,13 @@ class CheckContract:
         if not isinstance(self.corpus_driven, bool):
             raise CheckRegistrationError(
                 f"check {check_id!r} declares corpus_driven={self.corpus_driven!r}, which is "
-                f"not a bool; it decides whether the corpus file must exist for this run "
-                f"(AAP §0.3.4)"
+                f"not a bool; it decides whether the corpus file must exist for this run"
             )
         if not isinstance(self.observes_run_end, bool):
             raise CheckRegistrationError(
                 f"check {check_id!r} declares observes_run_end={self.observes_run_end!r}, which "
                 f"is not a bool; it decides whether the runner executes this check after the walk, "
-                f"so that it observes the run's end (AAP §0.8.1)"
+                f"so that it observes the run's end"
             )
         object.__setattr__(self, "requires", _coerce_requires(self.requires, check_id))
         object.__setattr__(
@@ -488,10 +480,10 @@ def check(
     declare for the check to run, ``dependencies`` the tokens it needs, from
     :data:`DEPENDENCY_TOKENS`, and ``corpus_driven`` whether its cases are drawn from the corpus
     the run loaded -- which is what makes the corpus file a prerequisite of a run that selects it,
-    and nothing else one (AAP §0.3.4). ``observes_run_end`` says whether the check asserts a
-    property of the whole run rather than of one case, which is true for the one check the runner
-    executes after the walk so that it observes the run's end (AAP §0.8.1), and false for every
-    other check. Returns a decorator mapping a ``cases`` generator to its registered contract, and
+    and nothing else one. ``observes_run_end`` says whether the check asserts a property of the
+    whole run rather than of one case, which is true for the one check the runner executes after
+    the walk so that it observes the run's end, and false for every other check. Returns a
+    decorator mapping a ``cases`` generator to its registered contract, and
     raises :class:`CheckRegistrationError` when the declaration is invalid or the identifier is
     already registered - raised when the returned decorator is applied, since that is when the
     contract is built.

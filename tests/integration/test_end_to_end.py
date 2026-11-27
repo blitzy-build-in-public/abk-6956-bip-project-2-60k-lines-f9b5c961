@@ -1,19 +1,19 @@
-"""The end-to-end proof: one command, five runs, one ceiling (AAP §0.6.1 #9).
+"""The end-to-end proof: one command, five runs, one ceiling.
 
-``pytest -m e2e`` is the whole of success criterion 9. In one command this module builds the
+``pytest -m e2e`` is the whole of the end-to-end proof. In one command this module builds the
 corpus and proves it has not drifted, consumes the five runs the session fixtures pay for --
 ``reference`` and ``defective`` at EC M plus the 40-record boundary subset at L, Q and H --
 and asserts, from the artefacts those runs left on disk, that the sequence is five runs into
 five distinct report roots, that each root carries a parseable ``summary.json``,
 ``junit.xml`` and ``index.html``, that ``reference`` failed nothing while ``defective``
-failed exactly the nine checks AAP §0.4.2 declares, that the five finished inside the 600 000
-ms ceiling, that every failing case's evidence and image are in the page, and that nothing
-was written into the repository.
+failed exactly the nine checks `SELF_CHECK_TARGETS` declares, that the five finished inside the
+600 000 ms ceiling, that every failing case's evidence and image are in the page, and that
+nothing was written into the repository.
 
 It starts no run of its own, because a sixth ``run`` would break the budget this module
 asserts. Check and decoder behaviour, the HTML contract and each command's exit code are held
 elsewhere, and the one wall-clock assertion in this folder -- the ceiling -- lives here
-because AAP §0.5.5 permits only the ``PF-*`` checks and this gate to read a clock."""
+because only the ``PF-*`` checks and this gate may read a clock."""
 
 from __future__ import annotations
 
@@ -31,25 +31,26 @@ from xml.etree import ElementTree as ET
 
 import pytest
 
-# The single declaration of what each self-check target must produce, so criterion 1 has one clause.
+# The single declaration of what each self-check target must produce, so the non-vacuity proof
+# has one clause.
 from qrcheck.registry.expectations import SELF_CHECK_TARGETS
 
 # The run sequence is the dominant cost, so the marker covers the module (pyproject registers it).
 pytestmark = pytest.mark.e2e
 
-# The seed the committed corpus was generated from, also the top-level `seed` default (AAP §0.3.4).
+# The seed the committed corpus was generated from, also the top-level `seed` default.
 _CORPUS_SEED: Final[int] = 20240101
 
-# The committed corpus relative to the root (§0.9.2: a repository file, not package data).
+# The committed corpus relative to the root: a repository file, not package data.
 _CORPUS_RELATIVE: Final[tuple[str, ...]] = ("corpus", "default.jsonl")
 
-# The directory runtime artefacts must never land in (§0.11.1), and the three report files.
+# The directory runtime artefacts must never land in, and the three report files.
 _REPORTS_DIR: Final[str] = "reports"
 _SUMMARY_NAME: Final[str] = "summary.json"
 _JUNIT_NAME: Final[str] = "junit.xml"
 _HTML_NAME: Final[str] = "index.html"
 
-# The nine top-level keys of `summary.json`, in the order §0.3.4 documents them.
+# The nine top-level keys of `summary.json`, as the schema documents them.
 _SUMMARY_KEYS: Final[frozenset[str]] = frozenset(
     {
         "adapter",
@@ -64,18 +65,18 @@ _SUMMARY_KEYS: Final[frozenset[str]] = frozenset(
     }
 )
 
-# The four tallies, separate integers so a `skipped` can never fold into `passed` (§0.3.4).
+# The four tallies, separate integers so a `skipped` can never fold into `passed`.
 _COUNT_KEYS: Final[frozenset[str]] = frozenset({"passed", "failed", "skipped", "error"})
 
 # The statuses that fail the gate; a `skipped` is deliberately not one, being counted separately.
 _FAILED_OR_ERROR: Final[frozenset[str]] = frozenset({"failed", "error"})
 
-# The one child element each status writes in `junit.xml`, and none for a pass (§0.3.4 shape).
+# The one child element each status writes in `junit.xml`, and none for a pass.
 _STATUS_ELEMENT: Final[Mapping[str, str | None]] = MappingProxyType(
     {"error": "error", "failed": "failure", "passed": None, "skipped": "skipped"}
 )
 
-# The nine check identifiers a `--adapter defective` run must fail, as a literal (§0.4.2).
+# The nine check identifiers a `--adapter defective` run must fail, as a literal.
 _EXPECTED_DEFECTIVE_IDS: Final[frozenset[str]] = frozenset(
     {
         "DT-DETERMINISTIC",
@@ -90,23 +91,23 @@ _EXPECTED_DEFECTIVE_IDS: Final[frozenset[str]] = frozenset(
     }
 )
 
-# The two self-check targets, the fixtures' level and the three criterion-2 levels (§0.6.1 #2).
+# The two self-check targets, the fixtures' level and the three boundary levels.
 _CONFORMING_TARGET: Final[str] = "reference"
 _DEFECTIVE_TARGET: Final[str] = "defective"
 _DEFAULT_EC_LEVEL: Final[str] = "M"
 _BOUNDARY_LEVELS: Final[tuple[str, ...]] = ("L", "Q", "H")
 
-# Exit codes the sequence must produce (§0.3.4): clean is 0, failures 1, an internal error 3.
+# Exit codes the sequence must produce: clean is 0, failures 1, an internal error 3.
 _EXIT_OK: Final[int] = 0
 _EXIT_FAILED: Final[int] = 1
 
-# The ceiling on the five-run sequence in milliseconds (§0.6.1 #9, §0.6.2).
+# The ceiling on the five-run sequence in milliseconds.
 _RUN_CEILING_MS: Final[float] = 600_000.0
 
-# A `run_id` is a sha256 content hash, never a UUID or a timestamp (§0.3.4): 64 lowercase hex.
+# A `run_id` is a sha256 content hash, never a UUID or a timestamp: 64 lowercase hex.
 _RUN_ID: Final[re.Pattern[str]] = re.compile(r"[0-9a-f]{64}\Z")
 
-# The two evidence files every failing case carries (§0.3.4), and the data-URI prefix of an image.
+# The two evidence files every failing case carries, and the data-URI prefix of an image.
 _EVIDENCE_FILES: Final[tuple[str, str]] = ("request.json", "decoded.json")
 _DATA_URI_PREFIX: Final[str] = "data:image/"
 
@@ -116,7 +117,7 @@ _RESOURCE_ATTRIBUTE: Final[re.Pattern[str]] = re.compile(
     r"""\b(?:src|href)\s*=\s*(?:"([^"]*)"|'([^']*)')""", re.IGNORECASE
 )
 
-# The value prefixes that would make the report depend on a remote origin (§0.3.4, §0.8.4).
+# The value prefixes that would make the report depend on a remote origin.
 _FOREIGN_ORIGINS: Final[tuple[str, ...]] = ("http:", "https:", "//")
 
 
@@ -142,8 +143,7 @@ class SuiteRun:
 
     @property
     def results(self) -> tuple[Mapping[str, Any], ...]:
-        """Return the run's results in the summary's
-        own ``(check_id, case_id)`` order (AAP §0.5.3)."""
+        """Return the run's results in the summary's own ``(check_id, case_id)`` order."""
         return tuple(self.summary["results"])
 
     @property
@@ -203,8 +203,8 @@ def run_sequence(
     missing = sorted(set(_BOUNDARY_LEVELS) - set(boundary_runs))
     if missing:
         pytest.fail(
-            f"the boundary fixture produced no run for level(s) {missing}; success criterion "
-            f"2 replays the boundary subset at {list(_BOUNDARY_LEVELS)}"
+            f"the boundary fixture produced no run for level(s) {missing}; the subset must be "
+            f"replayed at {list(_BOUNDARY_LEVELS)}"
         )
 
     requested: tuple[tuple[str, str, str, tuple[Path, dict[str, Any], int]], ...] = (
@@ -282,8 +282,8 @@ def test_corpus_build_and_drift_inside_the_proof(
     run_cli: Callable[..., Any],
     repo_root: Path,
 ) -> None:
-    """A regeneration from the committed seed is byte-identical to the
-    committed corpus -- the §0.6.4 drift step as a test, written under ``tmp_path``."""
+    """A regeneration from the committed seed is byte-identical to the committed corpus -- the
+    drift check the CI job runs, as a test, written under ``tmp_path``."""
     committed_path = repo_root.joinpath(*_CORPUS_RELATIVE)
     committed = committed_path.read_bytes()
 
@@ -328,13 +328,13 @@ def test_the_sequence_is_exactly_five_runs_into_five_distinct_roots(
     run_sequence: Mapping[str, SuiteRun],
     tmp_path_factory: pytest.TempPathFactory,
 ) -> None:
-    """The tier is five runs, each into its own root under
-    the temporary base, so no run overwrites another's evidence (AAP IM-8)."""
+    """The tier is five runs, each into its own root under the temporary base, so no run
+    overwrites another's evidence."""
     expected_labels = {_CONFORMING_TARGET, _DEFECTIVE_TARGET} | {
         f"boundary-{level}" for level in _BOUNDARY_LEVELS
     }
     assert set(run_sequence) == expected_labels, (
-        f"the sequence is not the five runs of AAP §0.6.1 #9: expected "
+        f"the sequence is not the five runs this tier pays for: expected "
         f"{sorted(expected_labels)}, got {sorted(run_sequence)}"
     )
 
@@ -348,7 +348,7 @@ def test_the_sequence_is_exactly_five_runs_into_five_distinct_roots(
     )
     assert shared == [], (
         f"the runs share report root(s) {shared}, so a later run would overwrite an earlier "
-        f"run's evidence and its failures would stop being attributable (AAP IM-8)"
+        f"run's evidence and its failures would stop being attributable"
     )
     assert len(distinct) == len(roots), (
         f"the sequence produced {len(distinct)} distinct report roots for {len(roots)} runs"
@@ -358,7 +358,7 @@ def test_the_sequence_is_exactly_five_runs_into_five_distinct_roots(
         assert root.is_dir(), f"the {label} run's report root {root} is not a directory"
         assert root.is_relative_to(base), (
             f"the {label} run wrote into {root}, which is outside the session temporary base "
-            f"{base}; runtime artefacts are not committed deliverables (AAP §0.11.1)"
+            f"{base}; runtime artefacts are not committed deliverables"
         )
     for label in sorted(roots):
         for other in sorted(roots):
@@ -431,7 +431,7 @@ def test_every_root_carries_the_three_artefacts_and_they_parse(
             f"the {label} run's {_JUNIT_NAME} carries {len(testcases)} testcase element(s) "
             f"for the {len(results)} result(s) {_SUMMARY_NAME} records; the aggregate "
             f"attributes are a tally the writer computed itself and cannot stand in for one "
-            f"element per result (AAP §0.6.1 #6)"
+            f"element per result"
         )
 
         statuses = [str(result["status"]) for result in results]
@@ -452,14 +452,14 @@ def test_every_root_carries_the_three_artefacts_and_they_parse(
             f"the {label} run's {_JUNIT_NAME} carries the status child elements "
             f"{dict(sorted(observed_children.items()))} while the {len(results)} results of "
             f"{_SUMMARY_NAME} imply {dict(sorted(expected_children.items()))}; a dropped "
-            f"element and an invented one both break the JUnit shape AAP §0.3.4 documents"
+            f"element and an invented one both break the documented JUnit shape"
         )
         crowded = sorted(
             testcase.get("name") or "<unnamed>" for testcase in testcases if len(testcase) > 1
         )
         assert crowded == [], (
             f"the {label} run's {_JUNIT_NAME} gives {crowded} more than one status child "
-            f"element; a case has exactly one outcome (AAP §0.3.4)"
+            f"element; a case has exactly one outcome"
         )
 
         html_path = root / _HTML_NAME
@@ -467,23 +467,23 @@ def test_every_root_carries_the_three_artefacts_and_they_parse(
         page = html_path.read_text(encoding="utf-8")
         assert "<script" not in page.lower(), (
             f"the {label} run's {_HTML_NAME} carries a script element, so the report is not "
-            f"static (AAP §0.8.4)"
+            f"static"
         )
         foreign = _foreign_resource_values(page)
         assert foreign == [], (
             f"the {label} run's {_HTML_NAME} references {foreign}, so it would not open "
-            f"offline (AAP §0.3.4)"
+            f"offline"
         )
 
 
 def test_expected_sets_hold_across_the_sequence(run_sequence: Mapping[str, SuiteRun]) -> None:
     """``reference`` fails nothing and ``defective`` fails exactly the
-    nine declared checks, as set **equality** (AAP §0.4.2), with no ``error`` status, the
-    documented exit codes, and at least one result in every run -- since a run that reported
-    nothing would satisfy an empty expectation."""
+    nine declared checks, as set **equality**, with no ``error`` status, the documented exit
+    codes, and at least one result in every run -- since a run that reported nothing would
+    satisfy an empty expectation."""
     assert SELF_CHECK_TARGETS[_DEFECTIVE_TARGET] == _EXPECTED_DEFECTIVE_IDS, (
         f"the product's declared defective set {sorted(SELF_CHECK_TARGETS[_DEFECTIVE_TARGET])} "
-        f"differs from the nine identifiers AAP §0.4.2 fixes: {sorted(_EXPECTED_DEFECTIVE_IDS)}"
+        f"differs from the nine identifiers this module expects: {sorted(_EXPECTED_DEFECTIVE_IDS)}"
     )
     assert SELF_CHECK_TARGETS[_CONFORMING_TARGET] == frozenset(), (
         f"the conforming target is declared to fail "
@@ -517,13 +517,12 @@ def test_expected_sets_hold_across_the_sequence(run_sequence: Mapping[str, Suite
         )
         assert errored == [], (
             f"{_describe(run)} reported error results for {errored}; an error is a framework "
-            f"defect, never a verdict on the target (AAP §0.3.4)"
+            f"defect, never a verdict on the target"
         )
         expected_exit = _EXIT_FAILED if label == _DEFECTIVE_TARGET else _EXIT_OK
         assert run.exit_code == expected_exit, (
             f"{_describe(run)} exited {run.exit_code}, expected {expected_exit}: exit 0 is a "
-            f"run with no failure and no error and exit 1 is a run with at least one failure "
-            f"(AAP §0.3.4)"
+            f"run with no failure and no error and exit 1 is a run with at least one failure"
         )
 
 
@@ -532,7 +531,7 @@ def test_total_run_duration_is_under_the_six_hundred_second_ceiling(
     run_sequence: Mapping[str, SuiteRun],
 ) -> None:
     """The five runs finished inside the 600 000 ms
-    ceiling of AAP §0.6.1 #9 -- the one wall-clock assertion in this folder (AAP §0.5.5)."""
+    ceiling -- the one wall-clock assertion in this folder."""
     total_ms = 0.0
     breakdown: list[str] = []
     for label in sorted(run_sequence):
@@ -549,16 +548,16 @@ def test_total_run_duration_is_under_the_six_hundred_second_ceiling(
 
     assert total_ms <= _RUN_CEILING_MS, (
         f"the five-run sequence took {total_ms:.0f} ms, over the {_RUN_CEILING_MS:.0f} ms "
-        f"ceiling of AAP §0.6.1 #9. Per run:\n" + "\n".join(breakdown) + "\n"
-        f"That ceiling is stated on CPython 3.11, Linux x86_64, 2 vCPU with the pinned lock "
-        f"(AAP §0.6.3), so a materially slower machine is one explanation and a run fixture "
+        f"ceiling. Per run:\n" + "\n".join(breakdown) + "\n"
+        f"That ceiling is stated on CPython 3.11, Linux x86_64, 2 vCPU with the pinned lock, "
+        f"so a materially slower machine is one explanation and a run fixture "
         f"starting twice is the other."
     )
 
 
 def test_each_failing_case_is_visible_in_the_html(run_sequence: Mapping[str, SuiteRun]) -> None:
     """Every failing case of the defective run has evidence on disk and an
-    image in the page: the substance of criterion 6 on real output."""
+    image in the page, so the report is self-contained on real output."""
     run = run_sequence[_DEFECTIVE_TARGET]
     failing = sorted(
         (result for result in run.results if result["status"] == "failed"),
@@ -574,7 +573,7 @@ def test_each_failing_case_is_visible_in_the_html(run_sequence: Mapping[str, Sui
         evidence = result["evidence_dir"]
         assert evidence is not None, (
             f"the failing case {case} carries no evidence_dir, so its failure cannot be "
-            f"re-derived from the report (AAP §0.6.1 #6)"
+            f"re-derived from the report"
         )
         directory = run.report_root / str(evidence)
         assert directory.is_dir(), (
@@ -592,7 +591,7 @@ def test_each_failing_case_is_visible_in_the_html(run_sequence: Mapping[str, Sui
     assert embedded >= len(failing), (
         f"the {_HTML_NAME} of {_describe(run)} embeds {embedded} image(s) for "
         f"{len(failing)} failing case(s); every failing case's symbol must be visible in the "
-        f"report (AAP §0.8.4)"
+        f"report"
     )
 
 
@@ -605,7 +604,7 @@ def test_run_ids_identify_the_run_by_content(run_sequence: Mapping[str, SuiteRun
     for label in sorted(identifiers):
         assert _RUN_ID.fullmatch(identifiers[label]), (
             f"the {label} run's run_id {identifiers[label]!r} is not a 64-character lowercase "
-            f"hex digest, so it is not the content hash AAP §0.3.4 specifies"
+            f"hex digest, so it is not the content hash a run_id must be"
         )
     assert len(set(identifiers.values())) == len(identifiers), (
         f"two runs of the sequence share one run_id: "
@@ -658,6 +657,6 @@ def test_nothing_was_written_into_the_repository(
     removed = sorted(set(repository_baseline.reports_entries) - set(after))
     assert added == [] and removed == [], (
         f"the repository's {_REPORTS_DIR}/ tree changed during the tier: added {added}, "
-        f"removed {removed}; runtime artefacts stay under the temporary base (AAP §0.11.1)"
+        f"removed {removed}; runtime artefacts stay under the temporary base"
     )
 

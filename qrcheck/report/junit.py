@@ -7,19 +7,18 @@ path and no locale-dependent formatting ever reach the document.
 
 Shape: ``testsuites > testsuite name="qrcheck" > testcase``, one ``testcase`` per case result in the
 order :class:`~qrcheck.report.model.RunResult` stores them -- sorted by ``(check_id, case_id)``, the
-order ``summary.json`` presents the same results in (AAP §0.5.3). The five aggregate attributes
-``tests``, ``failures``, ``errors``, ``skipped`` and ``time`` appear on the suite, as AAP §0.3.4
-fixes, and on the root for the consumers that read it; both copies come from one mapping and the
+order ``summary.json`` presents the same results in. The five aggregate attributes ``tests``,
+``failures``, ``errors``, ``skipped`` and ``time`` appear on the suite, as the ``xunit2`` shape
+requires, and on the root for the consumers that read it; both copies come from one mapping and the
 tallies from :class:`~qrcheck.report.model.Counts`, so this file cannot contradict ``summary.json``.
 A passed case carries **no** child element; a skipped case exactly one ``<skipped message="..."/>``,
 a failed case one ``<failure message="...">`` with the decoded-versus-expected detail, an errored
-case one ``<error message="...">`` with the traceback -- so a skip never reads as a pass (AAP
-§0.3.4).
+case one ``<error message="...">`` with the traceback -- so a skip never reads as a pass.
 
-Deliberately absent (AAP §0.3.4, §0.5.5): ``hostname``, ``timestamp``, ``properties``,
-``system-out``/``system-err``, ``package``, ``file``, ``line``, ``assertions`` and ``id``. pytest's
-own ``--junitxml`` emits the first two, and omitting them confines the volatile content to ``time``,
-the one attribute a determinism comparison masks (AAP §0.5.4).
+Deliberately absent: ``hostname``, ``timestamp``, ``properties``, ``system-out``/``system-err``,
+``package``, ``file``, ``line``, ``assertions`` and ``id``. pytest's own ``--junitxml`` emits the
+first two, and omitting them confines the volatile content to ``time``, the one attribute a
+determinism comparison masks.
 
 XML 1.0 safety: the corpus deliberately contains NUL bytes, right-to-left text and four-byte emoji,
 arriving here inside a case identifier, a decoded payload or a traceback. ``ElementTree`` escapes
@@ -32,7 +31,7 @@ the ``classname`` suffix, owned by :mod:`qrcheck.registry.check` and read from t
 :data:`~qrcheck.registry.check.FAMILY_BY_PREFIX`, which maps the identifier's own prefix segment
 (``RT`` in ``RT-ROUNDTRIP``) to its family. That table is a constant of the registry module, so a
 process that has not imported the check families still emits ``classname="qrcheck.<family>"`` rather
-than a placeholder (AAP §0.3.4); both lookups sit inside :func:`_family_for`, so importing this
+than a placeholder; both lookups sit inside :func:`_family_for`, so importing this
 module pulls no registry into such a process. Nothing here prints, logs, reads a clock, the
 environment or the filesystem, and nothing retries.
 """
@@ -62,7 +61,7 @@ _ILLEGAL_CODEPOINTS: Final[tuple[int, ...]] = (
     0xFFFF,
 )
 
-# Built once at import and reused for every node, so sanitising a document costs one
+# Built once at import and reused for every node, so sanitizing a document costs one
 # ``str.translate`` call per string and no regular expression. U+FFFD is the replacement
 # character, which keeps the text's length readable while making the document well-formed.
 _ILLEGAL_XML_CHARS: Final[dict[int, str]] = str.maketrans(
@@ -91,7 +90,7 @@ def write_junit(run_result: RunResult, path: Path) -> Path:
     is serialised compactly with an XML declaration and exactly one trailing newline, and written
     directly rather than through a temporary file and a rename: a stray file inside the report
     directory would be an artefact outside the closed evidence layout that ``CL-ARTIFACTS`` inspects
-    for (AAP §0.3.4).
+    for.
 
     Args:
         run_result: The completed run; its results are stored already sorted and are not re-sorted.
@@ -104,7 +103,7 @@ def write_junit(run_result: RunResult, path: Path) -> Path:
         TypeError: a result field holds a value :func:`dumps_canonical` cannot serialise.
         ValueError: a result mapping holds a non-finite float (``nan``, ``inf`` or ``-inf``).
         OSError: the parent directory cannot be created or the file cannot be written, propagated
-            untouched for ``qrcheck.cli.run`` to turn into exit code 3 (AAP §0.3.4, §0.5.6).
+            untouched for ``qrcheck.cli.run`` to turn into exit code 3.
     """
     aggregate = _aggregate_attributes(run_result)
     root = ET.Element("testsuites", aggregate)
@@ -171,7 +170,7 @@ def _seconds(milliseconds: float) -> str:
 
     ``time`` attributes are the only volatile content of the document, and a fixed three-decimal
     rendering is what makes them comparable character by character once a determinism check masks
-    them (AAP §0.5.4).
+    them.
     """
     return f"{milliseconds / 1000.0:.3f}"
 
@@ -186,7 +185,7 @@ def _family_for(check_id: str) -> str:
     ``RT-ROUNDTRIP``). That table is a constant of the registry module while
     :data:`~qrcheck.registry.check.REGISTRY` is populated only as a side effect of the check family
     modules importing, so the second step gives a process that has not imported them the real family
-    instead of a placeholder (AAP §0.3.4). The import sits **inside** this function because
+    instead of a placeholder. The import sits **inside** this function because
     :mod:`qrcheck.registry.check` depends on :mod:`qrcheck.report.model`: a module-scope import
     would close the report-to-registry cycle. The family returned becomes the JUnit ``classname``
     suffix, and ``"unknown"`` covers an identifier whose prefix is in neither source, or a

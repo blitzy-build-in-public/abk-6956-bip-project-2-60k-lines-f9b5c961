@@ -4,25 +4,25 @@ Case iteration over corpus records, request construction through the port's buil
 deterministic sampling helpers, the documented-recovery budget helper, the ``CaseResult`` factories,
 and the single translation of an adapter error into a status. It also owns the four helpers a family
 would otherwise copy -- :func:`corpus_case_id`, :func:`first_divergence`, :func:`sha256_hex` and
-:func:`elapsed_ms` -- because AAP §0.8.1 makes this module the home of every cross-cutting concern
-the check families share and allows no second implementation of one. This module is **not** a check
-family: it registers nothing, owns no check ID and asserts nothing about a symbol.
+:func:`elapsed_ms` -- because the check families share them and no concern may have a second
+implementation. This module is **not** a check family: it registers nothing, owns no check ID and
+asserts nothing about a symbol.
 
 It never owns request validation (the port's :func:`~qrcheck.targets.base.build_request`), the
 result vocabulary and failure identifier (:mod:`qrcheck.report.model`), the evidence layout
 (:mod:`qrcheck.evidence.naming` and the evidence store), the case type and run context
 (:mod:`qrcheck.registry.check`), or any threshold -- each limit lives in ``qrcheck.toml``.
 
-The adapter-error translation, following AAP §0.3.4 exactly (see :func:`case_status_for_error`), is
-closed at five: ``TargetRejected``, ``TargetContractError`` and ``TargetUnsupported`` become
-results, and ``TargetUnavailable`` and ``TargetTimeout`` are propagated unchanged because
+The adapter-error translation (see :func:`case_status_for_error`) is closed at five:
+``TargetRejected``, ``TargetContractError`` and ``TargetUnsupported`` become results, and
+``TargetUnavailable`` and ``TargetTimeout`` are propagated unchanged because
 :mod:`qrcheck.runner` owns the one-error-result-per-check target-loss policy. No bare ``except``, no
-retry and no swallowed exception exists here (AAP §0.5.6).
+retry and no swallowed exception exists here.
 
 Nothing here reads a clock except :func:`elapsed_ms`, whose value is recorded and never asserted;
 nothing here reads a random source, ``hash()``, ``id()`` or the filesystem, and nothing sorts by
-anything but an identifier. Two names differ from the plan's prose and the owners win: the
-evidence store is :attr:`qrcheck.registry.check.RunContext.evidence`, and
+anything but an identifier. Two names are settled by the modules that own them: the evidence store
+is :attr:`qrcheck.registry.check.RunContext.evidence`, and
 :meth:`qrcheck.report.evidence.EvidenceStore.record` returns ``None`` for a passing case, so
 :func:`record_evidence` returns a passing result unchanged. :mod:`qrcheck.decode` and
 :mod:`qrcheck.corpus.builder` load at the point of use.
@@ -82,18 +82,18 @@ __all__ = [
 ]
 
 # The prefix that identifies the invalid-input family. The one place this module asks what
-# kind of check it is serving, and it asks only because AAP §0.3.4 makes a declared rejection
-# the *expected* outcome of an ``IV-*`` probe and a failure everywhere else.
+# kind of check it is serving, and it asks only because a declared rejection is the *expected*
+# outcome of an ``IV-*`` probe and a failure everywhere else.
 _INVALID_CHECK_PREFIX: Final[str] = "IV-"
 
-# Case-identifier prefixes. AAP §0.3.4 fixes both: a corpus-driven case is named after its
+# Case-identifier prefixes. Two forms and no others: a corpus-driven case is named after its
 # record, and a constructed one carries the name the family gave it. ``synthetic:target``
 # is the runner's own result on target loss and is deliberately not constructible here.
 _CORPUS_CASE_PREFIX: Final[str] = "corpus:"
 _SYNTHETIC_CASE_PREFIX: Final[str] = "synthetic:"
 
 # The key that marks a deliberately illegal request in ``request.json`` and in a result's
-# request projection (AAP §0.8.2). A reader who saw an out-of-contract request without the
+# request projection. A reader who saw an out-of-contract request without the
 # marker would take it for a framework bug.
 _OUT_OF_CONTRACT_KEY: Final[str] = "out_of_contract"
 
@@ -109,9 +109,9 @@ _DEFAULT_FOREGROUND: Final[tuple[int, int, int]] = (0, 0, 0)
 _DEFAULT_BACKGROUND: Final[tuple[int, int, int]] = (255, 255, 255)
 
 # The documented, approximate recovery capacity of each level, as a fraction of the symbol's
-# codewords (ISO/IEC 18004 §7.5; the figures AAP §0.2.1 and §0.6.5 record).  Properties of the
-# standard, not thresholds this product chooses, which is why they live here and not in
-# ``qrcheck.toml``; a check spends them as a budget and subtracts the configured safety margin.
+# codewords (ISO/IEC 18004 §7.5).  Properties of the standard, not thresholds this product
+# chooses, which is why they live here and not in ``qrcheck.toml``; a check spends them as a
+# budget and subtracts the configured safety margin.
 _RECOVERY_FRACTIONS: Final[Mapping[str, float]] = MappingProxyType(
     {"L": 0.07, "M": 0.15, "Q": 0.25, "H": 0.30}
 )
@@ -173,7 +173,7 @@ def construct_out_of_contract(
 ) -> GenerateRequest:
     """Build a deliberately illegal request, with no validation at all.
 
-    The documented bypass of :func:`build` (AAP §0.8.2) and the only one in the product: the
+    The documented bypass of :func:`build`, and the only one in the product: the
     ``IV-*`` probes must prove that a target *rejects* a request breaking exactly the rules the
     builder enforces, so this hands a target the same frozen request with ``ec_level="X"``,
     ``module_size_px=0``, ``quiet_zone_modules=-1``, a below-floor colour pair, or a version or mask
@@ -186,8 +186,8 @@ def construct_out_of_contract(
     # and the field annotations describe the legal contract rather than a runtime gate.
     return GenerateRequest(
         payload=payload,
-        ec_level=ec_level,  # type: ignore[arg-type]
-        output_format=output_format,  # type: ignore[arg-type]
+        ec_level=ec_level,
+        output_format=output_format,
         module_size_px=module_size_px,
         quiet_zone_modules=quiet_zone_modules,
         foreground_rgb=foreground_rgb,
@@ -201,10 +201,10 @@ def construct_out_of_contract(
 def corpus_case_id(record_id: str) -> str:
     """Return the case identifier of a corpus record: ``corpus:<record-id>``.
 
-    The single definition of the identifier form AAP §0.3.4 fixes for a corpus-driven case, and the
-    single owner of the ``corpus:`` prefix. :func:`corpus_cases` names the case it yields with it,
-    and each family's executor names the result it reports with it, so the case the runner walks,
-    the result it records and the evidence directory it writes cannot drift apart.
+    The single definition of the ``corpus:`` identifier form, and the single owner of that prefix.
+    :func:`corpus_cases` names the case it yields with it, and each family's executor names the
+    result it reports with it, so the case the runner walks, the result it records and the evidence
+    directory it writes cannot drift apart.
 
     Args:
         record_id: The stable identifier the corpus builder assigned the record, such as
@@ -225,9 +225,9 @@ def corpus_cases(
 ) -> Iterator[Case]:
     """Yield one :class:`~qrcheck.registry.check.Case` per corpus record, in ``id`` order.
 
-    The registry's own ``Case`` type, named ``corpus:<record-id>`` as AAP §0.3.4 fixes. Records are
-    sorted by ``id`` here, so the order a family received them in can never reach a report.
-    ``execute_factory`` is called once per record, which lets a family close over that record's
+    The registry's own ``Case`` type, named ``corpus:<record-id>``. Records are sorted by ``id``
+    here, so the order a family received them in can never reach a report. ``execute_factory`` is
+    called once per record, which lets a family close over that record's
     payload and expectations.
 
     Raises:
@@ -268,8 +268,8 @@ def synthetic_case(
 
     For the cases the framework builds rather than draws from the corpus: the invalid-input probes,
     the logo overlay, the pinned-matrix set, the colour pair, the performance probes, the
-    determinism pair. Their identifiers are ``synthetic:<name>`` by AAP §0.3.4, and the prefix is
-    checked rather than trusted. ``synthetic:target`` is refused: the one-error-result-per-check
+    determinism pair. Their identifiers are ``synthetic:<name>``, and the prefix is checked rather
+    than trusted. ``synthetic:target`` is refused: the one-error-result-per-check
     result on target loss belongs to :mod:`qrcheck.runner`.
 
     Raises:
@@ -300,8 +300,8 @@ def synthetic_case(
 def first_records(records: Iterable[CorpusRecord], count: int) -> tuple[CorpusRecord, ...]:
     """Return the first `count` records in ascending ``id`` order.
 
-    AAP §0.8.1 fixes several case samples as "the first N records in ``id`` order", which is
-    reproducible only if every family applies the same rule; this is that rule. Fewer records than
+    Several case samples are "the first N records in ``id`` order", which is reproducible only if
+    every family applies the same rule; this is that rule. Fewer records than
     `count` yields all of them rather than raising, because a filtered corpus is a legitimate input
     and the runner decides whether an empty filter is an error.
 
@@ -323,9 +323,9 @@ def records_by_class(
 ) -> tuple[CorpusRecord, ...]:
     """Return the records of `classes`, in ascending ``id`` order.
 
-    The class-name filter behind the fixed samples of AAP §0.8.1. Exact class names are taken, not
-    globs: the run-time ``--class`` glob is applied by the runner before a check sees the corpus, so
-    a check may rely on exact names and a typo in one is a defect worth naming.
+    The class-name filter behind a family's fixed samples. Exact class names are taken, not globs:
+    the run-time ``--class`` glob is applied by the runner before a check sees the corpus, so a
+    check may rely on exact names and a typo in one is a defect worth naming.
 
     Raises:
         TypeError: A name is not a string.
@@ -383,7 +383,7 @@ def decode(ctx: RunContext, image_bytes: bytes, request: GenerateRequest) -> Dec
     """Decode one artefact through the framework's two-decoder pipeline.
 
     A delegation to :func:`qrcheck.decode.decode_symbol`, called exactly once per symbol: the
-    primary decoder is the authority for every check (AAP §0.3.2), so nothing here reads
+    primary decoder is the authority for every check, so nothing here reads
     ``per_decoder`` to rescue a payload or reconcile the two. The run's resolved fact about the
     secondary decoder is passed through when ``RunContext.availability`` holds one, so the recorded
     degradation and the resolution that decided the run's skips cannot disagree.
@@ -426,11 +426,10 @@ def recovery_fraction(ec_level: str) -> float:
     """Return the documented error-correction recovery fraction of `ec_level`.
 
     The single definition in the product of the recovery capacity each level promises: ``L`` 7 %,
-    ``M`` 15 %, ``Q`` 25 %, ``H`` 30 % of the symbol's codewords (AAP §0.2.1, §0.3.4
-    ``[checks.damage]``, §0.6.5). ``qrcheck.checks.damage`` and ``qrcheck.checks.render`` both
-    budget against it and neither may carry a copy. The figures are approximate -- a 1-L symbol
-    corrects at most two of its twenty-six codewords -- so a caller subtracts the configured
-    absolute ``occlusion_margin``.
+    ``M`` 15 %, ``Q`` 25 %, ``H`` 30 % of the symbol's codewords. ``qrcheck.checks.damage`` and
+    ``qrcheck.checks.render`` both budget against it and neither may carry a copy. The figures are
+    approximate -- a 1-L symbol corrects at most two of its twenty-six codewords -- so a caller
+    subtracts the configured absolute ``occlusion_margin``.
 
     Raises:
         KeyError: `ec_level` is not one of the four levels, and the message names the value it was
@@ -448,9 +447,9 @@ def recovery_fraction(ec_level: str) -> float:
 def first_divergence(requested: bytes, received: bytes | None) -> int | None:
     """Return the offset at which `received` stops agreeing with `requested`, or ``None``.
 
-    The single definition of the offset the evidence records as ``first_divergence_offset`` (AAP
-    §0.4.5): the point at which the payload the decoder returned departs from the payload that was
-    asked for. The requested payload is always the first argument, so every call reads the same way.
+    The single definition of the offset the evidence records as ``first_divergence_offset``: the
+    point at which the payload the decoder returned departs from the payload that was asked for.
+    The requested payload is always the first argument, so every call reads the same way.
 
     ``None`` when `received` was never read -- there is nothing to compare -- and when the two
     payloads are equal; otherwise the index of the first differing byte; and the length of the
@@ -477,8 +476,7 @@ def sha256_hex(data: bytes) -> str:
     The single definition of a payload digest in the check layer, so two families cannot report the
     same bytes under two spellings. ``hashlib`` rather than the builtin ``hash()``: a digest
     recorded in evidence has to be stable across processes and machines, and ``hash()`` of a bytes
-    object is salted per process, which would make two evidence files differ for the same payload
-    (AAP §0.5.1).
+    object is salted per process, which would make two evidence files differ for the same payload.
     """
     return hashlib.sha256(data).hexdigest()
 
@@ -487,8 +485,8 @@ def elapsed_ms(started: float) -> float:
     """Return the milliseconds elapsed since `started`, a :func:`time.perf_counter` reading.
 
     Measurement only. The value becomes a result's ``duration_ms``, which every report masks and
-    which no comparison in the check layer reads: AAP §0.5.5 admits a duration into an assertion
-    only in the ``PF-*`` thresholds and the run ceiling, and neither is measured here.
+    which no comparison in the check layer reads: a duration reaches an assertion only in the
+    ``PF-*`` thresholds and the run ceiling, and neither is measured here.
 
     Clamped at ``0.0``. A monotonic ``perf_counter`` makes a negative delta unreachable, so the
     clamp changes no reachable value; it keeps the stored field non-negative by construction.
@@ -506,7 +504,7 @@ def case_status_for_error(
     duration_ms: float = 0.0,
     seed: int | None = None,
 ) -> CaseResult:
-    """Translate one adapter error into the result AAP §0.3.4 prescribes for it.
+    """Translate one adapter error into the result the check contract prescribes for it.
 
     The product's only translation of an adapter failure into a status, closed at five.
     ``TargetRejected`` on an ``IV-*`` check is a **pass** -- a declared rejection is what those

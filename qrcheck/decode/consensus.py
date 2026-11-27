@@ -14,38 +14,38 @@ distances and corrected-bit counts recorded so "the grid could not be recovered"
 was recovered and its format information could not be read" are two pieces of evidence rather
 than one missing mask; and the two answers are compared into one ``agreement`` value.
 
-The rules below are contract, not implementation detail (AAP §0.3.2).
+The rules below are contract, not implementation detail.
 
 * A decoder that returns no payload is ``undetected``, never a disagreement: ``disagree``
   requires two payloads that differ, so a decoder's silence can never fail a conforming target.
 * ``DecodeResult.payload_bytes`` is the primary decoder's payload whenever it produced one, so
   "primary failed, secondary succeeded" is ``secondary_only`` and *fails* downstream with
   ``payload_bytes`` left ``None``: no check can pass on the secondary's strength.
-* Inversion is handled here, not hoped for from a decoder (§0.3.2, IM-4).  ``zxing-cpp`` 2.2.0
-  exposes no inversion switch and OpenCV 4.10 cannot detect a light-on-dark symbol at all, so an
-  inverted request -- one whose ``foreground_rgb`` is lighter than its ``background_rgb`` -- is
-  decoded twice with both decoders and the grid is sampled from the normalised copy: sampling a
+* Inversion is handled here, not hoped for from a decoder.  ``zxing-cpp`` 2.2.0 exposes no
+  inversion switch and OpenCV 4.10 cannot detect a light-on-dark symbol at all, so an inverted
+  request -- one whose ``foreground_rgb`` is lighter than its ``background_rgb`` -- is decoded
+  twice with both decoders and the grid is sampled from the normalised copy: sampling a
   light-on-dark array measures the finder pattern's light ring as its dark run and reports
   ``finder_unreadable``.  ``polarity_applied`` records which polarity the authoritative payload
   came from, and a non-inverted request is decoded once, in the polarity as generated.
 * ``ec_level_decoder`` (the primary decoder's metadata) and ``ec_level_format`` (the symbol's own
   15-bit format information) are two independent readings, never reconciled: a disagreement
   between them is the ``format_info_disagreement`` finding a check reports.
-* Damage is not special-cased (§0.4): under ``DM-*`` only the primary decoder's success is
-  asserted, and the classification rules above already stop the secondary's silence from
-  manufacturing a failure.
+* Damage is not special-cased: under ``DM-*`` only the primary decoder's success is asserted,
+  and the classification rules above already stop the secondary's silence from manufacturing a
+  failure.
 
 One documented refinement, and the only deviation.  The secondary decoder returns text, not
 bytes, so for a payload that is not losslessly text-representable -- the ``random-bytes`` corpus
 class and every ``payload_b64`` record -- its re-encoded bytes legitimately differ from a binary
 primary payload even for a perfectly conforming symbol.  Comparing them byte-exactly would
-classify those records ``disagree``, and AAP §0.4.1's clean-run gate demands ``counts.failed ==
-0`` for the conforming ``reference`` target across all 240 records, so forty conforming cases
-would fail.  ``disagree`` therefore applies only when the primary payload round-trips through
-UTF-8 (``primary.text.encode("utf-8") == primary.payload``) and the secondary's payload still
-differs; anything else the secondary cannot corroborate is recorded as ``primary_only``, which
-never loosens the primary's authority: it only declines to let a corroborator that cannot speak
-about bytes contradict bytes.
+classify those records ``disagree``, and the clean-run gate demands ``counts.failed == 0`` for
+the conforming ``reference`` target across all 240 records, so forty conforming cases would
+fail.  ``disagree`` therefore applies only when the primary payload round-trips through UTF-8
+(``primary.text.encode("utf-8") == primary.payload``) and the secondary's payload still differs;
+anything else the secondary cannot corroborate is recorded as ``primary_only``, which never
+loosens the primary's authority: it only declines to let a corroborator that cannot speak about
+bytes contradict bytes.
 
 ``DecodeResult.secondary_comparable`` makes that narrowing visible, and it is the only place it
 is visible: ``True`` when both decoders answered and their payloads were comparable, ``False``
@@ -59,17 +59,16 @@ A decoder that cannot be consulted at all is not an outcome. ``per_decoder`` lis
 decoders that answered, and a decoder the run never asked -- one the run's own resolution left
 out, or a binding that ``importlib.util.find_spec`` finds but that cannot be imported -- is
 recorded in ``DecodeResult.unavailable_decoders`` with the reason it could not be. That is what
-makes single-decoder mode's evidence list one decoder (AAP §0.6.6 row 4), and it keeps ``status
-== "error"`` meaning what AAP §0.4.5 says it means: a decoder that ran and raised.
+makes single-decoder mode's evidence list one decoder, and it keeps ``status
+== "error"`` meaning what it has always meant: a decoder that ran and raised.
 
 Imports: the four decode-layer modules this pipeline joins, ``qrcheck.evidence.mux`` (the owner of
 every byte the framework turns into an image, so the pixel decode is delegated rather than
 repeated) and ``qrcheck.config.models`` (which declares the reference decode size
-``decode_image_px`` exactly once, the budget this module's artefact ceiling derives from -- AAP
-§0.6.2).  ``GenerateRequest`` is imported for its annotations only, under ``TYPE_CHECKING``, so
-importing this module does not load ``qrcheck.targets`` with its ``click``, ``httpx`` and
-``segno`` (AAP §0.7.1).  Nothing here comes from ``qrcheck.checks``, ``qrcheck.report`` or
-``qrcheck.registry``.
+``decode_image_px`` exactly once, the budget this module's artefact ceiling derives from).
+``GenerateRequest`` is imported for its annotations only, under ``TYPE_CHECKING``, so importing
+this module does not load ``qrcheck.targets`` with its ``click``, ``httpx`` and ``segno``.
+Nothing here comes from ``qrcheck.checks``, ``qrcheck.report`` or ``qrcheck.registry``.
 
 It raises nothing for target-supplied data: unreadable bytes, an SVG artefact, a symbol neither
 decoder can read and a grid that cannot be sampled all come back as a ``DecodeResult``.
@@ -149,26 +148,26 @@ _SVG_REASON: Final = (
 )
 
 #: The opaque backdrop an artefact's alpha band is composited over before its pixels are
-#: measured. ``rsvg-convert`` rasterises segno's SVG, which paints no background, into an
+#: measured. ``rsvg-convert`` rasterizes segno's SVG, which paints no background, into an
 #: ``RGBA`` image whose transparent pixels store ``(0, 0, 0)``; dropping that band instead
 #: of compositing it would turn a conforming symbol into a solid black image.
 _RASTER_BACKDROP: Final = (255, 255, 255, 255)
 
 #: The largest per-side pixel dimension this pipeline decodes from an untrusted artefact:
 #: eight times the reference decode size ``[checks.performance] decode_image_px``, whose
-#: single declaration ``qrcheck.config.models`` owns (AAP §0.6.2), so 4000 px per side.
-#: A Version-40 symbol is 177 modules plus an 8-module quiet zone, which at the 10 px per
-#: module the framework's own requests reach is 1850 px, and a rotated copy of it needs a
-#: square root of two more, so the ceiling accepts the largest symbol this framework ever
-#: asks for while refusing one that would expand the colour, grayscale and float64
-#: luminance copies into gigabytes of memory a target dictated (AAP §0.1.3, §0.3.4).
+#: single declaration ``qrcheck.config.models`` owns, so 4000 px per side. A Version-40
+#: symbol is 177 modules plus an 8-module quiet zone, which at the 10 px per module the
+#: framework's own requests reach is 1850 px, and a rotated copy of it needs a square root
+#: of two more, so the ceiling accepts the largest symbol this framework ever asks for while
+#: refusing one that would expand the colour, grayscale and float64 luminance copies into
+#: gigabytes of memory a target dictated.
 _MAX_ARTEFACT_SIDE_PX: Final = 8 * DEFAULT_DECODE_IMAGE_PX
 
 #: An object address inside a diagnostic. Pillow names the buffer it could not identify by
 #: its ``repr`` -- ``cannot identify image file <_io.BytesIO object at 0x7f...>`` -- and that
 #: address changes with every run, so it must not reach ``decoded.json``, which is required
-#: to be byte-identical for the same case and seed (AAP §0.5.4, §0.5.5). Only the address
-#: is replaced; every other character of the library's message is recorded verbatim.
+#: to be byte-identical for the same case and seed. Only the address is replaced; every
+#: other character of the library's message is recorded verbatim.
 _VOLATILE_ADDRESS: Final = re.compile(r"0x[0-9a-fA-F]+")
 
 
@@ -357,7 +356,7 @@ def invert_image(image: numpy.ndarray) -> numpy.ndarray:
 
     Raises:
         ValueError: ``image`` is not a ``uint8`` array -- a caller defect, since
-            every array in this pipeline is produced by :func:`_rasterise`.
+            every array in this pipeline is produced by :func:`_rasterize`.
     """
     array = numpy.asarray(image)
     if array.dtype != numpy.uint8:
@@ -368,7 +367,7 @@ def invert_image(image: numpy.ndarray) -> numpy.ndarray:
 class _UnreadableRaster(Exception):
     """Target-supplied bytes that are not a raster image this pipeline can decode.
 
-    A private signal between :func:`_rasterise` and :func:`decode_symbol` only:
+    A private signal between :func:`_rasterize` and :func:`decode_symbol` only:
     it never escapes the module, and it exists so the failure can be described
     once and then recorded as decoder outcomes rather than raised at a caller.
     """
@@ -406,27 +405,26 @@ def _grayscale_pixels(image: Image.Image) -> numpy.ndarray:
     return numpy.array(gray_image, dtype=numpy.uint8, copy=True)
 
 
-def _rasterise(image_bytes: bytes) -> numpy.ndarray:
+def _rasterize(image_bytes: bytes) -> numpy.ndarray:
     """Open target bytes as the one grayscale array the decoders and the grid read.
 
     The pixel decode is delegated to :func:`qrcheck.evidence.mux.decode_image`, the
-    framework's owner of the image byte path (AAP §0.8.1), so this pipeline keeps no
-    second way to turn an artefact into pixels. The image it returns is closed in a
-    ``finally`` once the array exists, so neither the decoded buffer nor a descriptor
-    outlives the call: ``CL-ARTIFACTS`` asserts that the framework leaves nothing
-    open, and an artefact this pipeline opened is the only kind it could be blamed
-    for.
+    framework's owner of the image byte path, so this pipeline keeps no second way to
+    turn an artefact into pixels. The image it returns is closed in a ``finally`` once
+    the array exists, so neither the decoded buffer nor a descriptor outlives the
+    call: ``CL-ARTIFACTS`` asserts that the framework leaves nothing open, and an
+    artefact this pipeline opened is the only kind it could be blamed for.
 
     The artefact's dimensions are read from its header first, in an open that parses
     the header and decodes no pixel, and two refusals happen before anything is
     allocated per pixel. An image with no pixels at all is refused, and so is one
     whose longer side is above :data:`_MAX_ARTEFACT_SIDE_PX`, because a
-    target-supplied artefact is untrusted (AAP §0.1.3) and the grayscale and
-    ``float64`` luminance copies this pipeline builds grow with its pixel count: an
-    unbounded dimension would let a small compressed file exhaust the runner instead
-    of producing the recorded contract failure AAP §0.3.4 requires. :func:`_grayscale_pixels`
-    then composites any alpha band over an opaque backdrop, so a symbol on a
-    transparent background is measured as drawn rather than as its band's zeroes.
+    target-supplied artefact is untrusted and the grayscale and ``float64`` luminance
+    copies this pipeline builds grow with its pixel count: an unbounded dimension
+    would let a small compressed file exhaust the runner instead of producing the
+    recorded contract failure. :func:`_grayscale_pixels` then composites any alpha band
+    over an opaque backdrop, so a symbol on a transparent background is measured as
+    drawn rather than as its band's zeroes.
 
     Args:
         image_bytes: The artefact exactly as the target returned it.
@@ -463,7 +461,7 @@ def _rasterise(image_bytes: bytes) -> numpy.ndarray:
         return _grayscale_pixels(image)
     except _UnreadableRaster:
         raise
-    except Exception as exc:  # noqa: BLE001 - target bytes must never abort a run
+    except Exception as exc:  # target bytes must never abort a run
         # Deliberately broad, and the only catch of this width in the module.
         # Every way Pillow can refuse hostile or broken bytes -- UnidentifiedImageError,
         # a truncated stream's OSError, a decompression-bomb guard -- must become one
@@ -487,12 +485,13 @@ def _authoritative(
     """Return the polarity and the reading the authoritative payload came from.
 
     The first polarity at which the primary decoder produced a payload wins,
-    original before inverted, which is the §0.3.2 authority rule. A payload of
-    ``b""`` is a payload: an empty symbol the decoder did read is a different fact
-    from a symbol it could not read, and the invalid-input checks depend on that
+    original before inverted: a symbol as generated outranks its inverted copy, and
+    no decoder's inverted reading can become the authority. A payload of ``b""`` is
+    a payload: an empty symbol the decoder did read is a different fact from a
+    symbol it could not read, and the invalid-input checks depend on that
     distinction. When neither polarity produced one, the original reading is
-    returned with ``"original"`` -- nothing was applied, and the field never
-    claims a polarity that recovered nothing.
+    returned with ``"original"`` -- nothing was applied, and the field never claims
+    a polarity that recovered nothing.
     """
     if original.outcome.payload is not None:
         return ("original", original)
@@ -640,8 +639,7 @@ def _secondary_consultation(secondary: bool | None) -> str | None:
     architecture answers ``find_spec`` and fails its import. A decoder that answers a
     reason here is never asked anything, so nothing it would have produced reaches
     ``per_decoder``: it is recorded as unavailable instead of as an outcome with
-    ``status == "error"``, which means a decoder that ran and raised (AAP §0.6.6
-    row 4, §0.4.5).
+    ``status == "error"``, which means a decoder that ran and raised.
     """
     if secondary is False:
         return opencv.RESOLUTION_ABSENT_TEXT
@@ -763,7 +761,7 @@ def decode_symbol(
         unavailable_decoders[SECONDARY_DECODER] = secondary_problem
 
     try:
-        gray = _rasterise(image_bytes)
+        gray = _rasterize(image_bytes)
     except _UnreadableRaster as exc:
         return _unreadable_result(str(exc), secondary_ran, unavailable_decoders)
 
@@ -773,10 +771,10 @@ def decode_symbol(
     )
 
     # An inverted request is decoded twice, with both decoders, on the artefact as
-    # generated and on its 255-inverted copy (§0.3.2, IM-4): the framework owns
-    # polarity normalisation rather than relying on a decoder's inversion support,
-    # and the normalised copy is also what the grid is sampled from below. One
-    # inverted copy is built and both decoders and the sampler read it.
+    # generated and on its 255-inverted copy: the framework owns polarity
+    # normalisation rather than relying on a decoder's inversion support, and the
+    # normalised copy is also what the grid is sampled from below. One inverted
+    # copy is built and both decoders and the sampler read it.
     inverted_gray: numpy.ndarray | None = None
     primary_inverted: zxing.PrimaryReading | None = None
     secondary_inverted: opencv.SecondaryReading | None = None

@@ -48,7 +48,7 @@ _LAZY_EXPORTS: dict[str, str] = {
 }
 
 # The declared surface, sorted so that `from qrcheck import *`, `dir()` and any surface assertion
-# are stable across runs and machines (AAP §0.5.3). Kept in lock-step with `_LAZY_EXPORTS` above
+# are stable across runs and machines. Kept in lock-step with `_LAZY_EXPORTS` above
 # by construction: the one list is derived from the other.
 __all__: list[str] = sorted(["__version__", *_LAZY_EXPORTS])
 

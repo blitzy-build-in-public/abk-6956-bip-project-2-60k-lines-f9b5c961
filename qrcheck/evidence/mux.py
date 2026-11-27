@@ -3,27 +3,27 @@
 Every image byte the framework reads or emits passes through this module: Pillow is imported here,
 and so are the open, encode, base64 and data-URI primitives, so no other part of ``qrcheck`` needs
 to know how an image is opened or how it reaches a report. ``qrcheck.report.html`` embeds evidence
-images with :func:`to_data_uri`, the only route an image takes into ``index.html`` (AAP §0.3.4,
-§0.8.4: every evidence image is an inline ``data:`` URI, so the report opens with no network
-access), and ``qrcheck.targets.reference`` composites the logo overlay a request carries through
+images with :func:`to_data_uri`, the only route an image takes into ``index.html``: every evidence
+image is an inline ``data:`` URI, so the report opens with no network access, and
+``qrcheck.targets.reference`` composites the logo overlay a request carries through
 :func:`composite_overlay`, because ``logo_overlay`` is a capability the built-in target declares and
-a declared capability must have behaviour behind it (AAP §0.3.4).
+a declared capability must have behaviour behind it.
 
 Scope: this module *opens* and *encodes* images and owns exactly one composite, because Pillow is
 reachable only through here. Every other transformation stays with the owner it already has --
 resize, rotate, perspective warp, blur, JPEG re-encode and noise synthesis in
 ``qrcheck.checks.damage``, module-grid sampling in ``qrcheck.decode.matrix`` -- and a second
-transform API must not be added here (AAP §0.7.1, §0.8.1).
+transform API must not be added here.
 
 Invariants: determinism, since :func:`encode_png` writes no ancillary chunk (no ``tIME``, no
 ``dpi``/``text`` metadata), so equal images encode to equal bytes and :func:`to_data_uri` is a pure
-function (AAP §0.5.4); no policy and no I/O of its own, because whether evidence is persisted
-belongs to ``qrcheck.report.evidence``; no volatility, since :class:`OpenImage` keeps the path
-exactly as given and no hostname, user name, process id or timestamp is recorded (AAP §0.5.5); and
-no adapter vocabulary, since :func:`decode_image` and :func:`decode_base64` let Pillow's
+function; no policy and no I/O of its own, because whether evidence is persisted belongs to
+``qrcheck.report.evidence``; no volatility, since :class:`OpenImage` keeps the path exactly as
+given and no hostname, user name, process id or timestamp is recorded; and no adapter vocabulary,
+since :func:`decode_image` and :func:`decode_base64` let Pillow's
 ``UnidentifiedImageError``/``OSError`` and ``binascii.Error`` propagate unchanged for the adapters
-to translate (AAP §0.3.4, §0.14.1). The only mutable module state is the registry of images open
-right now, and the framework is single-process and sequential (AAP §0.3.6), so it needs no lock.
+to translate. The only mutable module state is the registry of images open right now, and the
+framework is single-process and sequential, so it needs no lock.
 """
 
 import base64
@@ -43,7 +43,7 @@ from PIL import Image
 
 # The three byte signatures this product ever sees: PNG, JPEG and SVG.  A target's bytes are
 # sniffed, never trusted, so mime_type() answers application/octet-stream for anything else and
-# the adapter layer decides what that means (AAP §0.3.4 TargetContractError) — this module raises
+# the adapter layer decides what that means (TargetContractError) — this module raises
 # nothing for garbage.
 PNG_MAGIC: bytes = b"\x89PNG\r\n\x1a\n"
 JPEG_MAGIC: bytes = b"\xff\xd8\xff"
@@ -116,8 +116,8 @@ class OpenImage:
     Frozen, so records compare by value: two opens of the same path for the same case compare equal,
     which is what lets ``CL-ARTIFACTS`` report a leak as a plain equality against an expected
     snapshot. ``path`` is the path exactly as the caller gave it, never resolved, because an
-    absolute path must not reach a report or an artefact (AAP §0.5.5); ``case_id`` is the case that
-    opened the image, or ``None`` when not attributable.
+    absolute path must not reach a report or an artefact; ``case_id`` is the case that opened the
+    image, or ``None`` when not attributable.
     """
 
     path: str
@@ -146,8 +146,8 @@ def mime_type(data: bytes) -> str:
 
     Answers :data:`MIME_PNG`, :data:`MIME_JPEG`, :data:`MIME_SVG`, or :data:`MIME_OCTET_STREAM` when
     nothing matches. Sniffing never raises on arbitrary bytes: a target may return garbage, and
-    calling that a contract failure is the adapter's decision (AAP §0.3.4), not this module's. Only
-    a non-bytes-like ``data`` raises :exc:`ValueError`, a programming error rather than a finding.
+    calling that a contract failure is the adapter's decision, not this module's. Only a
+    non-bytes-like ``data`` raises :exc:`ValueError`, a programming error rather than a finding.
     """
     if not isinstance(data, (bytes, bytearray, memoryview)):
         raise ValueError(f"mime_type expects bytes, got {type(data).__name__}")
@@ -168,9 +168,9 @@ def encode_png(image: Image.Image) -> bytes:
 
     The encoding is reproducible: no ancillary chunk is written (no ``tIME``, no ``dpi``/``text``
     metadata), so two calls on equal images return identical bytes and, inside the pinned
-    Pillow/zlib build, so does a call in another process (AAP §0.5.4) -- which is what makes a
-    damage artefact regenerable from its seed. Nothing is written to disk, and a non-image ``image``
-    raises :exc:`ValueError`.
+    Pillow/zlib build, so does a call in another process -- which is what makes a damage artefact
+    regenerable from its seed. Nothing is written to disk, and a non-image ``image`` raises
+    :exc:`ValueError`.
     """
     if not isinstance(image, Image.Image):
         raise ValueError(f"encode_png expects a PIL.Image.Image, got {type(image).__name__}")
@@ -184,11 +184,11 @@ def decode_image(data: bytes) -> Image.Image:
 
     This is how a target's ``GeneratedSymbol.image_bytes`` become an image. The pixels are read
     eagerly, so the returned image keeps no file handle alive and the open-handle snapshot
-    ``CL-ARTIFACTS`` takes stays meaningful (AAP §0.8.1). Pillow's own exceptions propagate
-    unchanged -- the adapter maps them to ``TargetContractError`` (AAP §0.14.1), and this module
-    deliberately does not know that type exists. Raises :exc:`ValueError` when ``data`` is empty or
-    not bytes-like, :exc:`PIL.UnidentifiedImageError` when Pillow cannot recognise the content, and
-    :exc:`OSError` for truncated or otherwise broken image data.
+    ``CL-ARTIFACTS`` takes stays meaningful. Pillow's own exceptions propagate unchanged -- the
+    adapter maps them to ``TargetContractError``, and this module deliberately does not know that
+    type exists. Raises :exc:`ValueError` when ``data`` is empty or not bytes-like,
+    :exc:`PIL.UnidentifiedImageError` when Pillow cannot recognise the content, and :exc:`OSError`
+    for truncated or otherwise broken image data.
     """
     if not isinstance(data, (bytes, bytearray, memoryview)):
         raise ValueError(f"decode_image expects bytes, got {type(data).__name__}")
@@ -244,13 +244,12 @@ def composite_overlay(symbol: Image.Image, overlay: Image.Image) -> Image.Image:
     The one transform this module performs, and it exists because of a capability contract:
     ``logo_overlay`` is a member the built-in target declares, so a request that carries an overlay
     must reach a symbol carrying it -- a declared capability with no behaviour behind it is
-    indistinguishable from an ignored one (AAP §0.3.4). The overlay keeps its own pixel size, is
-    centred on both axes and is clipped when it is larger than the symbol in a dimension; its alpha
-    channel is honoured, so a semi-transparent overlay blends with the modules under it. Neither
-    argument is mutated and no file is read or written: the symbol is converted into a fresh image
-    that becomes the canvas, and the result carries no text chunk or timestamp, so equal inputs
-    composite to equal pixels (AAP §0.5.4). Raises :exc:`ValueError` when either argument is not a
-    :class:`PIL.Image.Image`.
+    indistinguishable from an ignored one. The overlay keeps its own pixel size, is centred on both
+    axes and is clipped when it is larger than the symbol in a dimension; its alpha channel is
+    honoured, so a semi-transparent overlay blends with the modules under it. Neither argument is
+    mutated and no file is read or written: the symbol is converted into a fresh image that becomes
+    the canvas, and the result carries no text chunk or timestamp, so equal inputs composite to
+    equal pixels. Raises :exc:`ValueError` when either argument is not a :class:`PIL.Image.Image`.
     """
     if not isinstance(symbol, Image.Image):
         raise ValueError(
@@ -286,9 +285,8 @@ def decode_base64(text: str) -> bytes:
     """Decode base64 ``text`` to bytes, rejecting malformed input.
 
     Decoding is strict, so a malformed body raises :exc:`binascii.Error` instead of quietly decoding
-    a prefix of it; the adapter converts that into ``TargetContractError`` (AAP §0.14.1) and this
-    module lets it propagate unchanged. ``b""`` decodes to ``b""``, and non-ASCII text raises
-    :exc:`ValueError`.
+    a prefix of it; the adapter converts that into ``TargetContractError`` and this module lets it
+    propagate unchanged. ``b""`` decodes to ``b""``, and non-ASCII text raises :exc:`ValueError`.
     """
     return base64.b64decode(text, validate=True)
 
@@ -297,10 +295,9 @@ def to_data_uri(data: bytes) -> str:
     """Return ``data`` as an inline ``data:`` URI.
 
     The only way an image reaches ``index.html``: the report embeds images inline, so it holds no
-    ``link`` or ``img`` pointing at an external origin and opens without network access (AAP
-    §0.3.4, §0.8.4). The result is a pure function of ``data`` --
-    ``data:<mime>;base64,<payload>``, with ``<mime>`` from :func:`mime_type` and no whitespace,
-    quoting or origin beyond the ``data:`` scheme.
+    ``link`` or ``img`` pointing at an external origin and opens without network access. The result
+    is a pure function of ``data`` -- ``data:<mime>;base64,<payload>``, with ``<mime>`` from
+    :func:`mime_type` and no whitespace, quoting or origin beyond the ``data:`` scheme.
     """
     return f"data:{mime_type(data)};base64,{encode_base64(data)}"
 
@@ -311,12 +308,12 @@ def open_image(path: str | Path, *, case_id: str | None = None) -> Iterator[Imag
 
     The image is registered before it is yielded, so :func:`open_images` reports it while the
     ``with`` body runs and no longer afterwards, whether the body returned or raised:
-    ``CL-ARTIFACTS`` reads that snapshot to attribute an unclosed handle to the case that leaked it
-    (AAP §0.8.1), so every image the framework touches is opened through here. ``path`` is kept
-    exactly as given, the registration is dropped in a ``finally`` block together with closing the
-    image, so a handle cannot outlive the context, and ``case_id`` names the case that opened it or
-    ``None`` when the open is not attributable. Raises :exc:`PIL.UnidentifiedImageError` when Pillow
-    cannot recognise the content, and :exc:`OSError` when the file cannot be opened or read.
+    ``CL-ARTIFACTS`` reads that snapshot to attribute an unclosed handle to the case that leaked it,
+    so every image the framework touches is opened through here. ``path`` is kept exactly as given,
+    the registration is dropped in a ``finally`` block together with closing the image, so a handle
+    cannot outlive the context, and ``case_id`` names the case that opened it or ``None`` when the
+    open is not attributable. Raises :exc:`PIL.UnidentifiedImageError` when Pillow cannot recognise
+    the content, and :exc:`OSError` when the file cannot be opened or read.
     """
     image = Image.open(path)
     token = object()
@@ -332,8 +329,8 @@ def open_images() -> tuple[OpenImage, ...]:
     """Return the images that are open right now, sorted.
 
     An empty tuple means nothing is open, which is what ``CL-ARTIFACTS`` asserts at the
-    end of a run (AAP §0.8.1).  Entries are ordered by ``(case_id or "", path)``, so a
-    report of a leak is identical on every run.
+    end of a run.  Entries are ordered by ``(case_id or "", path)``, so a report of a
+    leak is identical on every run.
 
     Returns:
         The currently open images, ordered by case identifier and then by path.

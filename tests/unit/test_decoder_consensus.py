@@ -1,15 +1,14 @@
 """The consensus contract: two decoders, one authority, and silence that is not a defect.
 
 ``qrcheck.decode.consensus`` is the only place that decides what a symbol decoded to, so its
-rules are the product's rather than its own (AAP §0.3.2, "consensus rules"). Each is pinned
-with stubbed decoders and a three-pixel PNG built here: disagreement needs two differing
-payloads and keeps both in ``per_decoder``; the primary's ``payload_bytes`` is never replaced by
-the secondary's; silence is never a disagreement (IM-3); an EC-versus-format-information
-conflict keeps its own ``format_info_disagreement``; inversion is the framework's second pass
-(IM-4), whose call counters also prove an ordinary request gets none; ``per_decoder`` order is
-lexicographic; and a payload that is not UTF-8 round-trippable is ``primary_only`` with
-``secondary_comparable`` ``false``, which keeps the forty ``random-bytes`` records from failing
-the reference gate.
+rules are the product's rather than its own. Each is pinned with stubbed decoders and a
+three-pixel PNG built here: disagreement needs two differing payloads and keeps both in
+``per_decoder``; the primary's ``payload_bytes`` is never replaced by the secondary's; silence is
+never a disagreement; an EC-versus-format-information conflict keeps its own
+``format_info_disagreement``; inversion is the framework's second pass, whose call counters also
+prove an ordinary request gets none; ``per_decoder`` order is lexicographic; and a payload that is
+not UTF-8 round-trippable is ``primary_only`` with ``secondary_comparable`` ``false``, which
+keeps the forty ``random-bytes`` records from failing the reference gate.
 
 :func:`_install_decoders` replaces ``read_primary`` and ``read_secondary`` with polarity-keyed
 stubs built through ``make_decoder_outcome``, so every field name comes from
@@ -72,7 +71,7 @@ __all__ = [
 ]
 
 # Fixed inputs: a request parameter and not a configuration threshold. No value in this module
-# is read from ``qrcheck.toml``, and none of the numeric budgets the plan declares -- the p95
+# is read from ``qrcheck.toml``, and none of the numeric budgets that file declares -- the p95
 # ceilings, the throughput floor, the line limit or the damage budgets -- is restated here.
 
 #: The error-correction level every request in this module asks for. ``M`` is the level
@@ -551,7 +550,7 @@ def test_silence_in_both_decoders_is_undetected_and_never_a_disagreement(
         f"silence in both decoders: agreement must be 'undetected', got {result.agreement!r}"
     )
     assert result.agreement != "disagree", (
-        "silence in both decoders: two decoders finding nothing is not a disagreement (IM-3)"
+        "silence in both decoders: two decoders finding nothing is not a disagreement"
     )
     assert result.payload_bytes is None, (
         f"silence in both decoders: no payload may be reported, got {result.payload_bytes!r}"
@@ -585,7 +584,7 @@ def test_secondary_silence_is_primary_only_and_leaves_the_primary_authoritative(
         f"secondary silence: agreement must be 'primary_only', got {result.agreement!r}"
     )
     assert result.agreement != "disagree", (
-        "secondary silence: one decoder's silence is never a disagreement (IM-3)"
+        "secondary silence: one decoder's silence is never a disagreement"
     )
     assert result.secondary_comparable is None, (
         "secondary silence: no comparison was attempted, so secondary_comparable must be None, "
@@ -664,8 +663,8 @@ def test_secondary_disabled_degrades_the_run_to_primary_only(
     make_decoder_outcome: Callable[..., DecoderOutcome],
 ) -> None:
     """Single-decoder mode records the primary alone and reports ``primary_only``. The degradation
-    a report shows a banner for (AAP §0.6.6 row 4): the secondary decoder is absent, so it is
-    not called at all and its silence is never evidence about the symbol.
+    a report shows a banner for: the secondary decoder is absent, so it is not called at all and
+    its silence is never evidence about the symbol.
     """
     primary, secondary = _install_decoders(
         monkeypatch, make_decoder_outcome, primary={_ORIGINAL: _PAYLOAD_A}
@@ -721,8 +720,8 @@ def test_unimportable_binding_is_recorded_as_unavailable_and_never_consulted(
     module presence is not the fact the pipeline needs. The binding is probed before anything is
     asked of it, and a probe that cannot load it keeps the decoder out of ``per_decoder`` and
     records it in ``unavailable_decoders`` with its reason. That is what makes single-decoder
-    mode's evidence list one decoder, so a consumer counting entries reads one (AAP §0.6.6 row 4),
-    and it keeps ``status == "error"`` meaning a decoder that ran (AAP §0.4.5).
+    mode's evidence list one decoder, so a consumer counting entries reads one,
+    and it keeps ``status == "error"`` meaning a decoder that ran.
     """
     monkeypatch.setattr(consensus.opencv, "_load_cv2", lambda: None)
     primary, secondary = _install_decoders(
@@ -982,7 +981,7 @@ def test_unavailable_decoders_refuses_an_impossible_record(
     is not a reference decoder, a decoder present in both -- it cannot both have answered and not
     have run -- and an unavailable decoder with no reason a reader can act on are producer defects
     rather than evidence, and each is refused at construction instead of persisted
-    (AAP §0.6.6 row 4, §0.4.5).
+.
     """
     with pytest.raises(ValueError, match=match):
         make_decode_result(unavailable_decoders=unavailable)

@@ -1,33 +1,35 @@
 """The invalid-input family: ``IV-BAD-OPTION``, ``IV-EMPTY`` and ``IV-OVERCAPACITY``.
 
-The product's contract test of a target's *refusal* behaviour (AAP §0.8.1, §0.8.2, §0.9.1): a
-generator that silently accepts an empty payload, an out-of-contract option or a payload larger than
-the symbol it was pinned to is broken in a way no round-trip assertion can see.
+The product's contract test of a target's *refusal* behaviour: a generator that silently accepts an
+empty payload, an out-of-contract option or a payload larger than the symbol it was pinned to is
+broken in a way no round-trip assertion can see.
 
 * ``IV-EMPTY`` sends ``payload=b""`` at error level M in a PNG, with nothing else pinned: the empty
   payload is the only rule the request breaks, so a target that declares only ``png`` can serve it
   and its own defaults decide the geometry. A declared rejection **is** the expected outcome; a
-  returned symbol is a *documented success* and passes too (AAP §0.3.5: "declared rejection **or**
-  documented success, never a crash, never a partially written file"). A crash, a
-  ``TargetContractError`` or an empty or wrong-format artefact fails with ``Reason.CONTRACT_ERROR``.
+  returned symbol is a *documented success* and passes too -- declared rejection **or** documented
+  success, never a crash, never a partially written file. A crash, a ``TargetContractError`` or an
+  empty or wrong-format artefact fails with ``Reason.CONTRACT_ERROR``.
 * ``IV-OVERCAPACITY`` pins Version 10 at error level M and sends one byte more than Version 10 holds
   at level **L**. A declared rejection passes; a returned symbol is decoded once and fails with
   ``Reason.CAPACITY_VIOLATION``, recording ``requested_len``, ``capacity``, ``decoded_len`` and
-  ``first_divergence_offset`` -- the evidence AAP §0.4.5 requires.
+  ``first_divergence_offset`` -- the measurements that say how far over capacity the request was and
+  what the target returned instead of a rejection.
 * ``IV-BAD-OPTION`` runs four probes, each breaking exactly one rule the port's builder enforces:
   ``ec_level="X"``, ``module_size_px=0``, ``quiet_zone_modules=-1``, and a colour pair below the
   target's **declared** ``contrast_floor``. A returned symbol fails with ``Reason.VALUE_MISMATCH``.
 
-Why the over-capacity payload is measured against level L: AAP §0.8.1 phrases the probe as
-``max_payload_bytes(10, "M", "byte") + 1``, while §0.4.2 requires the payload to exceed the L-level
-capacity so ``wrong_ec_level``'s downshift cannot rescale it into an acceptable range. Level L holds
-more than level M, so the length is ``max_payload_bytes(10, "L", "byte") + 1`` -- 272 bytes against
-level M's 213 -- read from :mod:`qrcheck.corpus.capacity` at call time.
+Why the over-capacity payload is measured against level L: the probe pins Version 10 at level M and
+must send a payload no target can fit by quietly encoding one level lower, which is what
+``wrong_ec_level`` does. Level L holds more than level M, so the length is
+``max_payload_bytes(10, "L", "byte") + 1`` -- 272 bytes against level M's 213 -- read from
+:mod:`qrcheck.corpus.capacity` at call time.
 
-Every request is built by :func:`qrcheck.checks.support.construct_out_of_contract`, AAP §0.8.2's
-one documented bypass, and every result is recorded with ``out_of_contract=True``. The workload is
-six cases and six ``generate`` calls -- 1/1/0 for ``IV-EMPTY``, 1/1/1 for ``IV-OVERCAPACITY``, 4/4/0
-for ``IV-BAD-OPTION`` -- which is :data:`EXPECTED_ENCODES`, with no retry.
+Every request is built by :func:`qrcheck.checks.support.construct_out_of_contract`, the one
+documented bypass of the validating builder, and every result is recorded with
+``out_of_contract=True``. The workload is six cases and six ``generate`` calls -- 1/1/0 for
+``IV-EMPTY``, 1/1/1 for ``IV-OVERCAPACITY``, 4/4/0 for ``IV-BAD-OPTION`` -- which is
+:data:`EXPECTED_ENCODES`, with no retry.
 """
 
 from __future__ import annotations
@@ -63,8 +65,8 @@ __all__ = [
     "overcapacity_cases",
 ]
 
-# The adapter-invocation counts AAP §0.4.3 declares for this family: one ``generate`` per case,
-# and no second call anywhere; ``tests/unit/test_checks_negative.py`` asserts the observed count.
+# The per-check adapter-invocation counts: one ``generate`` per case, and no second call anywhere;
+# ``tests/unit/test_checks_negative.py`` asserts the observed count.
 EXPECTED_ENCODES: Final[Mapping[str, int]] = MappingProxyType(
     {
         "IV-BAD-OPTION": 4,
@@ -73,8 +75,8 @@ EXPECTED_ENCODES: Final[Mapping[str, int]] = MappingProxyType(
     }
 )
 
-# The stable case identifiers AAP §0.3.4 fixes: ``synthetic:<name>`` for a case the
-# framework constructs rather than draws from the corpus.
+# The stable case identifiers: ``synthetic:<name>`` for a case the framework constructs rather than
+# draws from the corpus.
 _EMPTY_CASE_ID: Final[str] = "synthetic:iv-empty"
 _OVERCAPACITY_CASE_ID: Final[str] = "synthetic:iv-overcapacity"
 
@@ -89,7 +91,7 @@ _PROBE_EC_LEVEL: Final[str] = "M"
 
 # ``IV-OVERCAPACITY``'s pin and levels: the version is pinned so the capacity bound is a fact about
 # one symbol rather than a scan; the requested level is M and the payload is sized against level L,
-# so AAP §0.4.2's cascade containment holds.  The capacity unit follows the mode: byte mode counts
+# so no lower encoding level can rescue it.  The capacity unit follows the mode: byte mode counts
 # bytes.
 _OVERCAPACITY_VERSION: Final[int] = 10
 _OVERCAPACITY_REQUESTED_EC: Final[str] = "M"
@@ -103,9 +105,8 @@ _OVERCAPACITY_FILLER: Final[bytes] = b"qrcheck-overcapacity-probe:"
 # The background the below-floor contrast probe measures against, and the grey ladder it walks from
 # darkest to lightest.  Ladder order is lightness order, so the ratio against white strictly
 # decreases and the first entry below the declared ``contrast_floor`` is the darkest admissible
-# probe.  ``0x88`` is first because it is the ≈3.5:1 pair AAP §0.8.1 tabulates, chosen whenever
-# the target declares the configured default floor; white on white, ratio 1.0, is below any floor
-# the schema accepts.
+# probe.  ``0x88`` is first because it measures ≈3.5:1, the ratio that sits below the configured
+# default floor; white on white, ratio 1.0, is below any floor the schema accepts.
 _CONTRAST_BACKGROUND_RGB: Final[tuple[int, int, int]] = (0xFF, 0xFF, 0xFF)
 _CONTRAST_GREY_LADDER: Final[tuple[int, ...]] = (
     0x88,
@@ -127,8 +128,8 @@ _CONTRAST_GREY_LADDER: Final[tuple[int, ...]] = (
 _OUT_OF_CONTRACT_EC_LEVEL: Final[str] = "X"
 
 # The key that marks a deliberately illegal request, written into the result's own projection so
-# ``summary.json`` and ``request.json`` both say it.  The evidence store sets the same AAP §0.8.2
-# name; a pass writes no evidence, and would otherwise carry an unmarked probe request.
+# ``summary.json`` and ``request.json`` both say it.  The evidence store sets the same name; a pass
+# writes no evidence, and would otherwise carry an unmarked probe request.
 _OUT_OF_CONTRACT_KEY: Final[str] = "out_of_contract"
 
 
@@ -137,7 +138,7 @@ class _OnAcceptedSymbol(enum.StrEnum):
 
     The target's refusal is the expected outcome of every probe in this family, so the interesting
     case is the one where a symbol comes back anyway, and this is the only place the three checks
-    differ. ``DOCUMENTED_SUCCESS`` is ``IV-EMPTY``'s, by AAP §0.3.5; ``CAPACITY_VIOLATION`` is
+    differ. ``DOCUMENTED_SUCCESS`` is ``IV-EMPTY``'s; ``CAPACITY_VIOLATION`` is
     ``IV-OVERCAPACITY``'s, where an accepted over-capacity request is the defect; ``VALUE_MISMATCH``
     is ``IV-BAD-OPTION``'s, where the target has not done what it declared.
     """
@@ -232,7 +233,7 @@ def bad_option_cases(ctx: RunContext) -> Iterator[Case]:
     """Yield ``IV-BAD-OPTION``'s four cases, ascending by case identifier.
 
     The order is the identifiers' own rather than the order the probes were thought of, so the
-    sequence is the one every report and every evidence directory lists (AAP §0.5.3).
+    sequence is the one every report and every evidence directory lists.
 
     Yields:
         ``synthetic:iv-bad-option-contrast``, ``-ec``, ``-module-size`` and ``-quiet-zone``.
@@ -252,8 +253,7 @@ def _empty_request(ctx: RunContext) -> _Requested:
     Nothing but the payload is pinned, so the empty payload is the only rule the request breaks and
     a target that declares only ``png`` can serve it. Both outcomes are acceptable, which is why the
     premise records it: a declared rejection passes, and a documented success passes with
-    ``decoded["outcome"] = "documented_success"``. Only a crash or an incomplete artefact fails
-    (AAP §0.3.5).
+    ``decoded["outcome"] = "documented_success"``. Only a crash or an incomplete artefact fails.
     """
     request = support.construct_out_of_contract(b"", _PROBE_EC_LEVEL)
     expected: dict[str, Any] = {
@@ -269,9 +269,8 @@ def _overcapacity_request(ctx: RunContext) -> _Requested:
 
     The payload is one byte longer than the pinned version holds at level **L**, so it exceeds the
     capacity at the requested level M by a wide margin and cannot be rescued by a target that
-    quietly encodes one level lower (AAP §0.4.2). Both lengths are read from
-    :mod:`qrcheck.corpus.capacity` at call time; the requested level is the capacity the assertion
-    is measured against.
+    quietly encodes one level lower. Both lengths are read from :mod:`qrcheck.corpus.capacity` at
+    call time; the requested level is the capacity the assertion is measured against.
     """
     capacity = max_payload_bytes(
         _OVERCAPACITY_VERSION, _OVERCAPACITY_REQUESTED_EC, _OVERCAPACITY_MODE
@@ -351,8 +350,8 @@ def _contrast_request(ctx: RunContext) -> _Requested:
     """Return the below-floor-contrast probe's request and premise.
 
     The floor is the target's **declared** ``contrast_floor``, read from the resolved configuration
-    for the target under test -- never a literal here, because a threshold has one home (AAP
-    §0.6.2). AAP §0.8.1's request is a grey on white measuring ≈3.5:1 against the configured
+    for the target under test -- never a literal here, because a threshold has one home in
+    ``qrcheck.toml``. The request is a grey on white measuring ≈3.5:1 against the configured
     floor; a target that declares a tighter floor gets a lighter grey that is still genuinely
     below it, and the measured ratio is recorded so the premise is auditable from the report alone.
     """
@@ -492,9 +491,9 @@ def _documented_success(
 ) -> CaseResult:
     """Report an empty payload the target chose to encode anyway.
 
-    AAP §0.3.5 makes "declared rejection **or** documented success" the correct assertion for ``IV-
-    EMPTY``, so a returned symbol passes, and the case deliberately does not decode it. What is
-    still asserted is that the answer is an artefact at all: an empty body or one of the wrong
+    Declared rejection **or** documented success is the correct assertion for ``IV-EMPTY``, so a
+    returned symbol passes, and the case deliberately does not decode it. What is still asserted is
+    that the answer is an artefact at all: an empty body or one of the wrong
     format is a partially written file, reported as ``Reason.CONTRACT_ERROR``.
     """
     complete = bool(symbol.image_bytes) and (
@@ -548,9 +547,9 @@ def _over_capacity_accepted(
     This is the ``over_capacity_acceptance`` defect: the case fails with
     ``Reason.CAPACITY_VIOLATION`` whatever the symbol contains, because a version and level were
     pinned, the payload exceeds what that symbol holds, and the target answered with an artefact
-    instead of a rejection. The symbol is decoded once so the evidence can say what it did -- AAP
-    §0.4.5 asks for ``decoded_len`` and ``first_divergence_offset`` beside ``capacity``. A symbol
-    neither decoder can read is still a violation; ``decoded_len`` is then ``None``.
+    instead of a rejection. The symbol is decoded once so the evidence can say what it did:
+    ``decoded_len`` and ``first_divergence_offset`` beside ``capacity``. A symbol neither decoder
+    can read is still a violation; ``decoded_len`` is then ``None``.
     """
     decoded = support.decode(ctx, symbol.image_bytes, requested.request)
     measurements: dict[str, Any] = {
@@ -689,7 +688,7 @@ def _declared_contrast_floor(ctx: RunContext) -> float:
 
     Read from the resolved configuration for the running adapter's own ``[targets.<name>]`` record.
     A target with no record -- a stub in a test, say -- falls back to the declared default, the same
-    floor ``RN-CONTRAST`` asserts (AAP §0.3.4); the number lives in :mod:`qrcheck.config.models`.
+    floor ``RN-CONTRAST`` asserts; the number lives in :mod:`qrcheck.config.models`.
     """
     declared: TargetConfig | None = ctx.config.targets.get(ctx.adapter.name)
     if declared is None:
@@ -700,7 +699,7 @@ def _declared_contrast_floor(ctx: RunContext) -> float:
 def _below_floor_foreground(floor: float) -> tuple[int, int, int]:
     """Return the darkest grey from the fixed ladder whose ratio sits below `floor`.
 
-    The ladder runs from ``0x88`` -- AAP §0.8.1's ≈3.5:1 pair, chosen whenever the target's
+    The ladder runs from ``0x88`` -- the ≈3.5:1 pair, chosen whenever the target's
     ``contrast_floor`` is the configured default -- towards white, so a target declaring a tighter
     floor still receives a request genuinely below it.
 

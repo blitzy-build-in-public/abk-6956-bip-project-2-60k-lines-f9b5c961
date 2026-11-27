@@ -13,7 +13,7 @@ What each dependency is *used for* downstream is owned elsewhere: `architecture.
 | `requirements.in` | Compile input: the seven direct runtime pins | Nobody directly — input to `pip-compile` | The direct runtime pins |
 | `requirements.lock` | The runtime closure, hash-locked | CI, and every user | Every runtime version and hash, transitive ones included |
 | `requirements-dev.in` | Compile input: `-r requirements.in` plus the five development pins | Nobody directly — input to `pip-compile` | The development pins |
-| `requirements-dev.lock` | The runtime closure plus the development closure and the unsafe block, hash-locked | The `unit` and `e2e` CI jobs, and a contributor running the gates | Every development and transitive version and hash |
+| `requirements-dev.lock` | The runtime closure plus the development closure and the unsafe block, hash-locked | The `unit` and `e2e` CI jobs, which install a copy with the `pip` and `setuptools` stanzas removed (§2 says why), and a contributor running the gates | Every development and transitive version and hash |
 
 **A user installs the runtime lock; a contributor adds the dev lock.** The dev lock is a superset that installs on its own, because it starts from `-r requirements.in` — so it cannot disagree with `requirements.lock` about a shared transitive pin.
 
@@ -40,9 +40,9 @@ python3.11 -m venv .lockgen
     --output-file=requirements-dev.lock requirements-dev.in
 ```
 
-Each `--output-file` names a committed file verbatim; a regeneration that writes to any other name is a mistake, not a variant. Resolution contacts the package index — this is the one step in the product's lifecycle that does. Running `qrcheck` never contacts anything but a loopback HTTP target.
+Each `--output-file` names a committed file verbatim; a regeneration that writes to any other name is a mistake, not a variant. Resolution contacts the package index — this regeneration is one of the two steps in the product's lifecycle that do, the other being an editable install run without `--no-build-isolation`, where pip builds the project in an isolated environment and fetches the backend `pyproject.toml` declares from that index before building anything. Running `qrcheck` never contacts anything but a loopback HTTP target, and the verification recipe below installs only from the locks.
 
-The two `pip install` lines that bootstrap that venv are the only installs in the product's documents without `--require-hashes`, and they are exempt by necessity: they install the exact pins of the tools that generate the hashes, so no hash set for them can exist beforehand. Neither is ever installed into a project environment — an environment installed from a lock never contains the lock generator.
+The two `pip install` lines that bootstrap that venv are the only *requirements* installs in the product's documents without `--require-hashes`, and they are exempt by necessity: they install the exact pins of the tools that generate the hashes, so no hash set for them can exist beforehand. Neither is ever installed into a project environment — an environment installed from a lock never contains the lock generator. The editable install of the verification recipe below is the one other kind of install in these documents that no lock covers, and it is not a requirements install: it installs no requirement, and with `--no-build-isolation` it fetches none either.
 
 **Why `pip` is pinned at all.** `pip-tools` 7.5.3 imports `pip._internal.utils.compat.stdlib_pkgs`, which pip 25 removed, and fails on any newer pip with
 
@@ -64,10 +64,10 @@ Verification, once the locks are in place:
 python3.11 -m venv .venv
 .venv/bin/pip install --require-hashes -r requirements.lock
 .venv/bin/pip install --require-hashes -r requirements-dev.lock
-.venv/bin/pip install --no-deps -e .
+.venv/bin/pip install --no-build-isolation --no-deps -e .
 ```
 
-`--no-deps` on the editable install is what keeps the manifest from resolving a version the lock does not name. CI runs the same three installs, as `python -m pip install --require-hashes -r requirements.lock`, then the dev lock, then `python -m pip install --no-build-isolation --no-deps -e .` (`.github/workflows/ci.yml`).
+`--no-deps` on the editable install is what keeps the manifest from resolving a version the lock does not name. The build is a requirement pip would otherwise fetch for it: the manifest installs none, but `pyproject.toml`'s `[build-system]` names `setuptools==84.2.1` as the backend, and under PEP 517 build isolation pip installs that requirement into a throwaway environment from the package index with no hash to verify it — which is why the recipe above and CI both pass `--no-build-isolation` and build against a setuptools that is already installed instead, the one the dev lock installed and verified locally and the runner's own copy in CI. Both CI jobs run the same three installs, with the dev lock filtered on the way: `python -m pip install --require-hashes -r requirements.lock` installs the runtime lock exactly as committed, an `awk` pass then drops the `pip==` and `setuptools==` stanzas of `requirements-dev.lock` into `$RUNNER_TEMP/requirements-dev.ci.lock` and `python -m pip install --require-hashes -r "$RUNNER_TEMP/requirements-dev.ci.lock"` installs every other pin and hash exactly as the lock declares it, and `python -m pip install --no-build-isolation --no-deps -e .` installs the project itself (`.github/workflows/ci.yml`). Those two stanzas belong to the regeneration environment of this section, not to a project environment: installing them on a runner would replace the runner's own `pip` and `setuptools` before the editable install runs, so the copy carries every other pin and hash and the runner's own copies stay in place.
 
 Three review rules, because a lock can be wrong while still installing:
 
@@ -85,7 +85,7 @@ Seven packages, registered on PyPI, pinned exactly once each:
 | `httpx` | 0.27.2 | The `http` target adapter: an explicit `httpx.Timeout` for `timeout_s`, connection reuse, and a client confined to a loopback base URL |
 | `numpy` | 1.26.4 | The seeded `PCG64` generator behind every damage variant, and the array operations that measure a rendered symbol |
 | `opencv-python-headless` | 4.10.0.84 | The secondary reference decoder (`cv2.QRCodeDetector`) — the second opinion of the consensus layer |
-| `Pillow` | 10.4.0 | Image IO, module-grid sampling, and the resize, rotate, perspective, blur, JPEG and noise operations behind the damage cases |
+| `Pillow` | 13.0.0 | Image IO, module-grid sampling, and the resize, rotate, perspective, blur, JPEG and noise operations behind the damage cases |
 | `segno` | 1.6.6 | The golden encoder, used strictly as the expectation oracle |
 | `zxing-cpp` | 2.2.0 | The primary reference decoder: payload bytes, EC level, content type, and the corner position the grid sampler starts from |
 
@@ -97,6 +97,14 @@ Where a pin had an obvious alternative, the decision and its reason:
 - **`numpy` 1.26.4.** numpy 2.x was rejected: OpenCV 4.10 predates the numpy 2 ABI, and 1.26.4 satisfies OpenCV's `numpy>=1.23.5` on CPython 3.11.
 - **`httpx` over `requests`.** The adapter needs one explicit `httpx.Timeout` object mapped onto `timeout_s`, and a client that reuses a connection; `requests` offers neither as directly.
 - **`click` over `argparse` and `typer`.** A subcommand group, option validation and a test harness the CLI tests already use; `typer` would add a dependency for the same result.
+
+**Advisories this pin set accepts, and why.** The reachability verdict, not the advisory's severity, decides which pin moves, and only one of the seven pins moved: `Pillow` went to 13.0.0 — the newest release the package index publishes, and the one no advisory names — because that is the release that clears the decoder path a target's artefact can reach, while `opencv-python-headless` and `click` stay at the versions the request fixes, with what each still carries named in the two paragraphs below rather than left implicit.
+
+`Pillow` is pinned at 13.0.0 because it is the first release that clears `CVE-2026-112399`: an APNG whose first frame carries `OP_BACKGROUND` disposal makes `PngImageFile._open()` allocate and fill the full IHDR canvas before `Image._decompression_bomb_check()` runs — present in every release since 8.1.0, fixed only in 13.0.0 — and the PNG decode path is the one a target's bytes reach, because `qrcheck/targets/base.py`'s `ensure_image_bytes` admits a body only when it carries the signature of the format the request declared, so a `png` request hands `qrcheck/evidence/mux.py` a PNG and nothing else, and an `svg` request reaches Pillow only as the PNG `qrcheck/checks/render.py` rasterizes it to. The PSD (`CVE-2026-25990`, `CVE-2026-42311`), FITS (`CVE-2026-40192`), PDF (`CVE-2026-42310`), font (`CVE-2026-42308`), EPS/Ghostscript (`CVE-2026-112900`) and raw `P;2L`/`P;4L` (`CVE-2026-112394`) decoders were never reachable through that gate, and the JPEG decoder reads only bytes `qrcheck/checks/damage.py` encoded itself, so the PNG advisory alone is what decides this pin.
+
+`opencv-python-headless` 4.10.0.84 stays at the version the request pins, and neither of its advisories is reachable. `CVE-2025-53644` is an uninitialised pointer in the bundled OpenJPEG `jp2.c`, fixed in 4.12.0, and `CVE-2026-137083` is an out-of-bounds read in the MJPEG encoder with no fixed release listed; the package's only entry point in the whole tree is `qrcheck/decode/opencv.py`, where `_load_cv2()` imports the module and `module.QRCodeDetector().detectAndDecode(decodable)` receives an already-decoded `numpy.uint8` pixel array. No `imread`, `imdecode`, `imencode`, `VideoCapture`, `VideoWriter` or `dnn` call exists in `qrcheck/`, `examples/` or `tests/`, so OpenCV never parses a file, a stream or a JPEG 2000 bitstream here, and no advisory names `QRCodeDetector`. 4.12.0 would clear `CVE-2025-53644`, and the 4.10.x pin excludes it.
+
+`click` 8.1.8 stays at the version the request pins, and its advisory is contested as well as unreachable. `CVE-2026-7246` / `GHSA-47fr-3ffg-hgmw` is a command injection in `click.edit()` listed against releases below 8.3.3 by NVD, Snyk and Debian, but withdrawn by PyPA and OSV on 2026-10-07, with Ubuntu reporting the flaw introduced in 8.2.0 — so this release falls outside the range the remaining records describe. No code path reaches the function in any case: `click.edit()`, `click.launch()` and `click.open_file()` appear nowhere in `qrcheck/`, `examples/` or `tests/`, and no code passes `shell=True`, the one flag that would hand a subprocess's arguments to a shell. 8.3.3 would end the ambiguity, and the 8.1.x pin excludes it.
 
 ## 4. Development pins
 
@@ -142,7 +150,7 @@ The product is supported on CPython 3.11 on Linux and macOS; Windows is out of s
 | `httpx` 0.27.2 | ✔ | ✔ | ✔ | ✔ | Pure-Python wheel |
 | `numpy` 1.26.4 | ✔ | ✔ | ✔ | ✔ | A CPython 3.11 wheel per platform |
 | `opencv-python-headless` 4.10.0.84 | ✔ | ✔ | ✔ | ✔ | `cp37-abi3` wheels: `manylinux_2_17_x86_64`, `manylinux_2_17_aarch64`, `macosx_11_0_arm64`, `macosx_12_0_x86_64` — the x86_64 macOS wheel needs macOS 12 or newer |
-| `Pillow` 10.4.0 | ✔ | ✔ | ✔ | ✔ | A CPython 3.11 wheel per platform, `manylinux_2_28` among them |
+| `Pillow` 13.0.0 | ✔ | ✔ | ✔ | ✔ | A CPython 3.11 wheel per platform: `manylinux_2_27_x86_64.manylinux_2_28_x86_64`, `manylinux_2_27_aarch64.manylinux_2_28_aarch64`, `macosx_10_10_x86_64`, `macosx_11_0_arm64`. The `manylinux_2_17` tags 10.4.0 also published are gone, so the Linux floor rises from glibc 2.17 to the 2.27 tag that pair carries |
 | `segno` 1.6.6 | ✔ | ✔ | ✔ | ✔ | Pure-Python wheel, and no runtime dependency on 3.11 |
 | `zxing-cpp` 2.2.0 | ✔ | **✘** | ✔ | ✔ | `manylinux_2_17_x86_64` and a `macosx_10_9_universal2` wheel covering both macOS columns; **no CPython 3.11 wheel is published for linux aarch64**, the single gap in this matrix |
 | `pytest` 8.2.2 | dev | dev | dev | dev | Development only |

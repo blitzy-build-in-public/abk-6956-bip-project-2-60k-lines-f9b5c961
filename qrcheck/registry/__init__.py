@@ -28,7 +28,7 @@ close the registration cycle, and registration belongs to the entry points -- ``
 imports ``qrcheck.checks`` through :mod:`qrcheck.runner`, and ``qrcheck list`` imports it itself.
 And **importing it leaves the registry empty**, because a package that populated the registry on
 import would make the executed set depend on whether some unrelated module happened to import this
-one (AAP §0.5).
+one.
 """
 
 from __future__ import annotations

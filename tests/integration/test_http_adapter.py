@@ -1,18 +1,17 @@
 """The ``http`` adapter over its real transport: a loopback generator, driven by configuration.
 
-AAP §0.3.3 gives the ``http`` target one contract: the vendor shape lives entirely in
-configuration -- ``url``, ``method``, ``request_template``, ``image_field``,
-``image_encoding`` and ``metadata_map`` -- and the adapter knows none of it,
-``tests/unit/test_targets_transport.py`` holding the mechanical half as an AST scan. This
-module holds the positive half over a real socket, driving ``examples/http_target_server.py``
-as a real process and measuring every assertion from the artefact it answered with.
+The ``http`` target has one contract: the vendor shape lives entirely in configuration --
+``url``, ``method``, ``request_template``, ``image_field``, ``image_encoding`` and
+``metadata_map`` -- and the adapter knows none of it, ``tests/unit/test_targets_transport.py``
+holding the mechanical half as an AST scan. This module holds the positive half over a real
+socket, driving ``examples/http_target_server.py`` as a real process and measuring every
+assertion from the artefact it answered with.
 
 A non-2xx status is :class:`TargetContractError`, not ``TargetRejected``, because an HTTP
-target has no declared-rejection channel (AAP §0.14.1), and so is a configured
-``metadata_map`` path the response does not carry -- while a field that is not configured
-yields ``None``. Every URL is the fixture's own loopback base, every measurement is a pixel
-value or a decoded field, and nothing is skipped, marked, retried or mocked (AAP §0.4.3,
-§0.5.6)."""
+target has no declared-rejection channel, and so is a configured ``metadata_map`` path the
+response does not carry -- while a field that is not configured yields ``None``. Every URL is
+the fixture's own loopback base, every measurement is a pixel value or a decoded field, and
+nothing is skipped, marked, retried or mocked."""
 
 from __future__ import annotations
 
@@ -118,7 +117,7 @@ _METADATA_MAP: Final[Mapping[str, str]] = {
     "mode": "metadata.mode",
 }
 
-#: The corpus class whose records the bounded run drives, with the count AAP §0.8.2 declares.
+#: The corpus class whose records the bounded run drives, with the count the committed corpus holds.
 _BOUNDED_CLASS: Final[str] = "otp"
 _BOUNDED_CLASS_RECORDS: Final[int] = 12
 
@@ -212,6 +211,22 @@ def _write_config(
     )
 
 
+def _envelope_config(write: Callable[..., Path], tmp_path: Path, server: _ServerCarrier) -> Path:
+    """Write the one-target document the envelope route's cases decode through.
+
+    The envelope route carries every placeholder and the whole metadata map, so the three cases
+    that drive it state only what they differ in: the request they send and what they assert.
+    """
+    target = _http_target(
+        server,
+        route=_GENERATE_ROUTE,
+        template=_REQUEST_TEMPLATE,
+        capabilities=_TEMPLATE_CAPABILITIES,
+        metadata_map=_METADATA_MAP,
+    )
+    return _write_config(write, tmp_path, {"envelope": target})
+
+
 @contextmanager
 def _open_adapter(config_path: Path, name: str) -> Iterator[Adapter]:
     """Load ``config_path``, build the target called ``name``, and close it afterwards."""
@@ -282,19 +297,7 @@ def test_base64_image_field_decodes_to_the_requested_payload(
     tmp_path: Path,
 ) -> None:
     """A base64 value at a configured dotted path decodes to exactly the requested payload."""
-    config = _write_config(
-        write_config,
-        tmp_path,
-        {
-            "envelope": _http_target(
-                http_target_server,
-                route=_GENERATE_ROUTE,
-                template=_REQUEST_TEMPLATE,
-                capabilities=_TEMPLATE_CAPABILITIES,
-                metadata_map=_METADATA_MAP,
-            )
-        },
-    )
+    config = _envelope_config(write_config, tmp_path, http_target_server)
     request = build_request(_PAYLOAD, _EC_LEVEL)
 
     with _open_adapter(config, "envelope") as adapter:
@@ -536,19 +539,7 @@ def test_an_error_response_becomes_a_contract_error_with_the_text_preserved(
     tmp_path: Path,
 ) -> None:
     """A rejected request's error text reaches both the diagnostic and the evidence."""
-    config = _write_config(
-        write_config,
-        tmp_path,
-        {
-            "envelope": _http_target(
-                http_target_server,
-                route=_GENERATE_ROUTE,
-                template=_REQUEST_TEMPLATE,
-                capabilities=_TEMPLATE_CAPABILITIES,
-                metadata_map=_METADATA_MAP,
-            )
-        },
-    )
+    config = _envelope_config(write_config, tmp_path, http_target_server)
     request = _out_of_contract(**overrides)
     wire_body: dict[str, Any] = {
         "payload_b64": request.as_dict()["payload_b64"],
@@ -595,19 +586,7 @@ def test_a_stopped_server_is_unavailable(
     tmp_path: Path,
 ) -> None:
     """A refused connection is ``TargetUnavailable``, and the stop is what makes it so."""
-    config = _write_config(
-        write_config,
-        tmp_path,
-        {
-            "envelope": _http_target(
-                http_target_server,
-                route=_GENERATE_ROUTE,
-                template=_REQUEST_TEMPLATE,
-                capabilities=_TEMPLATE_CAPABILITIES,
-                metadata_map=_METADATA_MAP,
-            )
-        },
-    )
+    config = _envelope_config(write_config, tmp_path, http_target_server)
     request = build_request(_PAYLOAD, _EC_LEVEL)
 
     with _open_adapter(config, "envelope") as adapter:

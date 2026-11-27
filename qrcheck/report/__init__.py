@@ -4,12 +4,11 @@ A run produces three artefacts from one :class:`~qrcheck.report.model.RunResult`
 JSON, the JUnit XML document and the self-contained HTML page, in that order -- and
 :func:`write_all_reports` is the only code in the product that writes them. All three are serialised
 from the same accumulated model within one call, so they cannot disagree about a status, a reason or
-an evidence directory; a second serialisation path would be a second answer to the same question
-(AAP §0.8.1, §0.6.1 criterion 6). ``qrcheck.cli.run`` calls it immediately after
-``qrcheck.runner.run_suite`` returns and reads the returned :class:`ReportPaths` for its one-line
-summary. Nothing else is decided here -- no exit code, no duration, no printing, no evidence -- and
-a writer's exception propagates untouched, because ``qrcheck.cli.exit`` owns the exit-code contract
-(AAP §0.3.4).
+an evidence directory; a second serialisation path would be a second answer to the same question.
+``qrcheck.cli.run`` calls it immediately after ``qrcheck.runner.run_suite`` returns, and reads
+the returned :class:`ReportPaths` for its one-line summary. Nothing else is decided here -- no
+exit code, no duration, no printing, no evidence -- and a writer's exception propagates
+untouched, because ``qrcheck.cli.exit`` owns the exit-code contract.
 
 Result types are deliberately not re-exported: ``CaseResult``, ``RunResult``, ``Status``, ``Reason``
 and ``failure_id`` have exactly one import path, :mod:`qrcheck.report.model`. The three writers are
@@ -40,7 +39,7 @@ __all__ = [
 # The three artefact names, spelled out here and nowhere else. A writer carrying its own copy, or
 # a caller re-deriving one, would be a second source of truth for a filename that machine
 # consumers and the three writer tests locate by name, so the names are a public surface of this
-# module and their values are fixed by AAP §0.3.4.
+# module.
 SUMMARY_FILENAME: str = "summary.json"
 JUNIT_FILENAME: str = "junit.xml"
 HTML_FILENAME: str = "index.html"
@@ -55,7 +54,7 @@ class ReportPaths:
     :data:`SUMMARY_FILENAME`, :data:`JUNIT_FILENAME` and :data:`HTML_FILENAME` the only place a name
     is spelled out. Frozen because a caller recording what a run wrote must not be able to alter the
     record, and because two runs of the same configuration differ only in the directory the caller
-    chose (AAP §0.5.4).
+    chose.
 
     Attributes:
         summary: The summary file, as the JSON writer returned it.
@@ -77,11 +76,11 @@ def write_all_reports(
 
     The order is fixed -- summary, JUnit document, HTML page -- and the page comes last because it
     embeds the image artefacts the evidence store wrote during the run, so it must not be assembled
-    before the tree it reads is final (AAP §0.8.4). ``report_dir`` is created here, once, before
-    any artefact is attempted, so a destination that cannot be created fails at one point instead of
-    leaving a partial report behind. Nothing is retried, cleaned up or logged (AAP §0.5.6): the
-    ``OSError`` of a read-only or non-directory destination propagates untouched for
-    ``qrcheck.cli.run`` to map to exit 3 with the path in its message (AAP §0.3.4).
+    before the tree it reads is final. ``report_dir`` is created here, once, before any artefact is
+    attempted, so a destination that cannot be created fails at one point instead of leaving a
+    partial report behind. Nothing is retried, cleaned up or logged: the ``OSError`` of a read-only
+    or non-directory destination propagates untouched for ``qrcheck.cli.run`` to map to exit 3 with
+    the path in its message.
 
     Args:
         run_result: The completed run; all three artefacts come from this one model.
@@ -116,8 +115,7 @@ def write_all_reports(
     # (``qrcheck.evidence.naming.relative_case_evidence_dir``), so joining it against
     # ``report_dir/evidence`` would resolve one level too deep and leave a failing case's
     # block without its symbol. ``evidence_root`` therefore names the directory the relative
-    # evidence path is relative to, and its default is ``report_dir`` (AAP §0.3.4 evidence
-    # layout, §0.6.1 criterion 6).
+    # evidence path is relative to, and its default is ``report_dir``.
     root = Path(evidence_root) if evidence_root is not None else directory
     summary = write_summary(run_result, directory / SUMMARY_FILENAME)
     junit = write_junit(run_result, directory / JUNIT_FILENAME)

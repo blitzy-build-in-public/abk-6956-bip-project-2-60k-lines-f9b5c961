@@ -12,14 +12,14 @@ the operating system; or a family selector (``family:render``), matching every c
 :data:`~qrcheck.registry.check.FAMILY_NAMES`. Tokens are a union and duplicates collapse, so
 ``RT-ROUNDTRIP,family:roundtrip`` is one check, and the returned tuple is always sorted by
 identifier ascending, so neither the typed order nor the registry's insertion order reaches a run's
-execution order or a report (AAP §0.5.3). Every token must select something: a mistyped token
+execution order or a report. Every token must select something: a mistyped token
 raises :class:`SelectionError` rather than being silently dropped, because a dropped token would
-stop a check executing while the run still reported a clean pass -- the vacuous suite AAP §0.4.1
-forbids. One predicate, :func:`matches`, decides what a token means.
+stop a check executing while the run still reported a clean pass, which would leave the suite
+vacuous. One predicate, :func:`matches`, decides what a token means.
 
 ``--class`` globs are only *normalised* here -- stripped, de-duplicated and sorted -- and carried on
 :attr:`Selection.class_globs` for the runner to hand to :func:`qrcheck.corpus.io.filter_by_class`;
-matching records and raising on a zero-record filter belongs to ``qrcheck.runner`` (AAP §0.3.4).
+matching records and raising on a zero-record filter belongs to ``qrcheck.runner``.
 This module decides no exit code, prints nothing, writes nothing, reads no file and mutates no
 registry: ``qrcheck.cli.run`` maps a raised :class:`SelectionError` to exit code 2 with no report
 written, the diagnostic carrying the selector **as the caller typed it**. Importing it pulls in
@@ -62,8 +62,8 @@ class SelectionError(ValueError):
 
     Raised for a selection that matches no registered check and for an individual token that matches
     none, an unknown family name included. :attr:`selector` holds the selector **verbatim**, exactly
-    as the caller typed it, so ``qrcheck run`` can echo it back unchanged (AAP §0.3.4, §0.6.6 row
-    1); a token-level error quotes the whole selection whenever the caller's is known --
+    as the caller typed it, so ``qrcheck run`` can echo it back unchanged; a token-level error
+    quotes the whole selection whenever the caller's is known --
     :func:`select` passes it down to :func:`matches` -- and ``detail`` names the offending token
     either way, the message starting with the echo and then the detail. It subclasses
     :class:`ValueError` so a caller that already handles the builtin needs no special case, and
@@ -95,7 +95,7 @@ def _normalise_class_globs(value: object) -> tuple[str, ...]:
 
     Normalising in one place is what makes a :class:`Selection` order-stable and hashable, so two
     command lines differing only in the order or spacing of their ``--class`` options produce the
-    same selection, the same diagnostics and the same ``summary.json`` (AAP §0.5.3). A bare string
+    same selection, the same diagnostics and the same ``summary.json``. A bare string
     is one pattern rather than one pattern per character, the same reading
     :func:`qrcheck.corpus.io.filter_by_class` applies. Raises :exc:`TypeError` when `value` is
     neither a string nor an iterable, or an entry is not a string.
@@ -127,7 +127,7 @@ class Selection:
 
     Two fields, each a stable diagnostic surface: ``checks``, the raw ``--checks`` selector stored
     **verbatim** -- untrimmed, unsplit and unmatched, because keeping it exactly as typed is what
-    lets a failure echo it back (AAP §0.3.4), with ``None`` meaning "every registered check" and
+    lets a failure echo it back, with ``None`` meaning "every registered check" and
     resolution happening in :func:`select` -- and ``class_globs``, normalised on construction to a
     sorted, duplicate-free tuple by :func:`_normalise_class_globs`, which the runner hands to
     :func:`qrcheck.corpus.io.filter_by_class` unchanged. The instance is frozen and, both fields
@@ -199,7 +199,7 @@ def parse_selection(
     typed. The ``--class`` globs are stripped, de-duplicated and sorted by :class:`Selection`, so
     their order on the command line cannot reach a report. Corpus semantics are not decided here:
     :func:`qrcheck.corpus.io.filter_by_class` applies the globs to records and ``qrcheck.runner``
-    raises the zero-record condition naming the filter (AAP §0.3.4), and a malformed selector is
+    raises the zero-record condition naming the filter, and a malformed selector is
     :func:`select`'s to reject. Raises :exc:`TypeError` when ``checks`` is neither ``None`` nor a
     string, or a class glob is not a string.
     """
@@ -253,13 +253,12 @@ def select(
     The selector is a comma-separated list of tokens in the grammar :func:`matches` defines, and
     ``None`` or a blank selector selects every registered check. Each token's matches are unioned,
     duplicates collapse, and the result is sorted by identifier ascending, so neither the order of
-    the tokens nor the registry's insertion order can reach a run's execution order or a report (AAP
-    §0.5.3).
+    the tokens nor the registry's insertion order can reach a run's execution order or a report.
 
     Three conditions raise :class:`SelectionError`, each with the selector echoed verbatim so
-    ``qrcheck run`` can exit 2 quoting it (AAP §0.3.4, §0.6.6 row 1): a token selects nothing,
+    ``qrcheck run`` can exit 2 quoting it: a token selects nothing,
     reported as ``unknown token <token>``, because dropping it silently would let a check stop
-    executing while the run still reported a clean pass -- the vacuous suite AAP §0.4.1 forbids; a
+    executing while the run still reported a clean pass, which would leave the suite vacuous; a
     family selector names an unknown family, raised by :func:`matches`; and nothing at all is
     selected -- an empty selector made only of commas, or a registry with no checks -- reported as
     ``matched no registered check``, since a run that would execute nothing is a failure to report.

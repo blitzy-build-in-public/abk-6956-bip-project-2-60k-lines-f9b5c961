@@ -10,10 +10,10 @@ fourth -- 728 cases, 728 adapter invocations and 728 primary decodes, which is w
 :data:`EXPECTED_ENCODES` declares.
 
 Reasons this family emits: ``decoder_disagreement`` when the two decoders returned differing
-payloads, which every judge reports ahead of its own comparisons (AAP §0.3.2);
-``sampling_failed`` when no grid, level or mask could be read; ``value_mismatch`` when a version,
-level, mask or module differs from the expectation; ``format_info_disagreement`` when the
-decoder's level and the format information disagree.
+payloads, which every judge reports ahead of its own comparisons; ``sampling_failed`` when no grid,
+level or mask could be read; ``value_mismatch`` when a version, level, mask or module differs from
+the expectation; ``format_info_disagreement`` when the decoder's level and the format information
+disagree.
 Rejection, unusable response and unsupported request are translated by
 :func:`qrcheck.checks.support.case_status_for_error`; ``TargetUnavailable`` and
 ``TargetTimeout`` propagate so the runner owns the one-error-result-per-check policy.
@@ -74,14 +74,14 @@ _MATRIX_EQUIV_ID: Final[str] = "SY-MATRIX-EQUIV"
 # the JUnit ``classname`` suffix, so it is a stable output surface.
 _FAMILY: Final[str] = "symbol"
 
-# The ``synthetic:`` case-identifier prefix AAP §0.3.4 fixes for a constructed case, which carries
-# the name its family gave it.  The ``corpus:`` form of a corpus-driven case belongs to
+# The ``synthetic:`` case-identifier prefix for a constructed case, which carries the name its
+# family gave it.  The ``corpus:`` form of a corpus-driven case belongs to
 # :func:`qrcheck.checks.support.corpus_case_id`, so no second spelling of it lives here.
 _SYNTHETIC_PREFIX: Final[str] = "synthetic:"
 
-# The one consensus classification that is a finding in its own right (AAP §0.3.2): two decoder
-# payloads that differ.  The decoders' disagreement is decided before any field of the symbol is
-# compared, so every judge reports it first rather than folding it into a field verdict.
+# The one consensus classification that is a finding in its own right: two decoder payloads that
+# differ.  The decoders' disagreement is decided before any field of the symbol is compared, so
+# every judge reports it first rather than folding it into a field verdict.
 _DISAGREE: Final[str] = "disagree"
 
 # ISO/IEC 18004 §7.8 defines exactly eight mask patterns, numbered 0-7.  The range is a
@@ -92,7 +92,7 @@ _MASK_MAXIMUM: Final[int] = 7
 
 # The eight synthetic matrix cases: four versions x two payloads, each paired with one of two
 # distinct legal masks.  Pinning the version, the error level and the mask is what makes
-# module-by-module equality legitimate (AAP §0.3.5); nothing else in the product compares matrices.
+# module-by-module equality legitimate; nothing else in the product compares matrices.
 # The payloads are two to five bytes so they fit Version 1 at every error level -- at EC H,
 # Version 1 holds seven bytes in byte mode and ten characters in alphanumeric mode -- and stay
 # clear of the 64-byte window of the defective target's truncation injection.
@@ -115,7 +115,7 @@ class _MatrixCase(NamedTuple):
 
     @property
     def case_id(self) -> str:
-        """Return the ``synthetic:`` identifier AAP §0.3.4 fixes for this case."""
+        """Return the stable ``synthetic:`` identifier of this case."""
         return f"{_SYNTHETIC_PREFIX}matrix-v{self.version}-{self.label}"
 
 
@@ -125,18 +125,17 @@ _MATRIX_CASES: Final[tuple[_MatrixCase, ...]] = tuple(
     for (label, payload), mask in zip(_MATRIX_PAYLOADS, _MATRIX_MASKS, strict=True)
 )
 
-# The corpus's record total: the fixed workload AAP §0.8.1 defines for every corpus-driven
-# check, and one of the two numbers EXPECTED_ENCODES is made of.
-# :data:`qrcheck.corpus.builder.TOTAL_RECORDS` owns this count, and this is the same 240 rather
-# than a second definition: importing
-# the builder would pull its numpy-bearing payload generators into ``qrcheck list``.  The
-# integration gate compares the executed case count against EXPECTED_ENCODES.
+# The corpus's record total: the fixed workload every corpus-driven check walks, and one of the two
+# numbers EXPECTED_ENCODES is made of.  :data:`qrcheck.corpus.builder.TOTAL_RECORDS` owns this
+# count, and this is the same 240 rather than a second definition: importing the builder would pull
+# its numpy-bearing payload generators into ``qrcheck list``.  The integration gate compares the
+# executed case count against EXPECTED_ENCODES.
 _CORPUS_RECORDS: Final[int] = 240
 
 # The adapter-invocation count each check is expected to make in one full run, read by the
-# invocation-count gate through a counting stub: a retry registers as one more and fails it (AAP
-# §0.4.3, §0.5.6).  The corpus counts are that record total, the matrix count the case table's
-# size, so neither number is typed twice.
+# invocation-count gate through a counting stub: a retry registers as one more and fails it.  The
+# corpus counts are that record total, the matrix count the case table's size, so neither number is
+# typed twice.
 EXPECTED_ENCODES: Final[Mapping[str, int]] = MappingProxyType(
     {
         _EC_MATCH_ID: _CORPUS_RECORDS,
@@ -253,8 +252,8 @@ def _evidence(decoded: DecodeResult, **measurements: Any) -> dict[str, Any]:
 
     ``decoded.json`` receives it verbatim, so every entry is JSON-safe: the projection carries
     ``per_decoder``, ``polarity_applied``, ``agreement``, ``ec_level_decoder``, ``ec_level_format``,
-    ``version``, ``mask`` and ``matrix_sha256`` -- the evidence table AAP §0.4.5 requires -- and
-    the measurements on top are scalars, lists or ``None``.
+    ``version``, ``mask`` and ``matrix_sha256`` -- the decoded evidence table every judge here
+    records -- and the measurements on top are scalars, lists or ``None``.
     """
     evidence = decoded.as_dict()
     evidence.update(measurements)
@@ -359,7 +358,7 @@ def SY_VERSION_MIN(ctx: RunContext) -> Iterator[Case]:
     ``ec_level`` is required because the smallest fitting version depends on the level: a payload
     that fits Version 5 at EC L needs Version 6 at EC M. The version is never taken from the
     target or a decoder -- none reports one -- but from the sampled grid's dimension, the
-    product's only version source (AAP IM-1). Cases are ascending by record ``id``.
+    product's only version source. Cases are ascending by record ``id``.
     """
     return support.corpus_cases(
         ctx,
@@ -373,8 +372,8 @@ def _version_min_case(ctx: RunContext, record: CorpusRecord) -> CaseResult:
     """Assert that one corpus record's symbol is the smallest version that fits it.
 
     Returns ``decoder_disagreement`` when the two decoders returned differing payloads, ahead of
-    every field comparison (AAP §0.3.2), ``value_mismatch`` when the sampled version differs from
-    the expectation, ``sampling_failed`` when no grid could be recovered, and a pass otherwise.
+    every field comparison, ``value_mismatch`` when the sampled version differs from the
+    expectation, ``sampling_failed`` when no grid could be recovered, and a pass otherwise.
 
     Raises:
         TargetUnavailable, TargetTimeout: Exactly as :func:`_run_case`.
@@ -413,7 +412,7 @@ def _version_min_case(ctx: RunContext, record: CorpusRecord) -> CaseResult:
             return Reason.DECODER_DISAGREEMENT, measurements
         if decoded.version is None:
             # No grid could be recovered, so the symbol has no measured version: a reason
-            # rather than a verdict, which is what AAP §0.8.1 requires of this path.
+            # rather than a verdict, because no field of the symbol was compared.
             return Reason.SAMPLING_FAILED, measurements
         if decoded.version != expected_version:
             return Reason.VALUE_MISMATCH, measurements
@@ -454,11 +453,10 @@ def _ec_match_case(ctx: RunContext, record: CorpusRecord) -> CaseResult:
 
     A disagreement between the two decoders' payloads is reported first, as
     ``decoder_disagreement``, because the consensus classification describes what the decoders did
-    before any field of the symbol is compared (AAP §0.3.2). The two level sources are then
-    compared **with each other**, so a disagreement is ``format_info_disagreement`` rather than a
-    mismatch against the request (AAP §0.4.5's reason order), and only then is the agreed level
-    compared with the request. A missing reading is a failure of its own: an absent source can
-    never be read as agreement.
+    before any field of the symbol is compared. The two level sources are then compared **with each
+    other**, so a disagreement is ``format_info_disagreement`` rather than a mismatch against the
+    request, and only then is the agreed level compared with the request. A missing reading is a
+    failure of its own: an absent source can never be read as agreement.
 
     Raises:
         TargetUnavailable, TargetTimeout: Exactly as :func:`_run_case`.
@@ -485,8 +483,8 @@ def _ec_match_case(ctx: RunContext, record: CorpusRecord) -> CaseResult:
         if decoded.agreement == _DISAGREE:
             # Ahead of both ``sampling_failed`` and ``format_info_disagreement``: the consensus
             # classification describes what the decoders did, which is settled before any field of
-            # the symbol is compared (AAP §0.3.2).  A symbol whose payloads differ is reported as
-            # the disagreement it is rather than as a reason read off one of its fields.
+            # the symbol is compared.  A symbol whose payloads differ is reported as the
+            # disagreement it is rather than as a reason read off one of its fields.
             return Reason.DECODER_DISAGREEMENT, measurements
         if decoded.ec_level_decoder is None or decoded.ec_level_format is None:
             return Reason.SAMPLING_FAILED, measurements
@@ -511,9 +509,9 @@ def SY_MASK(ctx: RunContext) -> Iterator[Case]:
     """Yield one case per corpus record: the mask in the symbol is a legal mask.
 
     No decoder in the pinned set reports a mask, so it is read from the format information alone.
-    Mask *selection* is encoder-defined (AAP §0.3.5), so an unpinned request is held only to the
-    legal range ``0..7``; a request that pins a mask is held to the pin. The 240 corpus cases pin
-    nothing, so the pin branch is a guard, and ``SY-MATRIX-EQUIV`` is where a pin is observed.
+    Mask *selection* is encoder-defined, so an unpinned request is held only to the legal range
+    ``0..7``; a request that pins a mask is held to the pin. The 240 corpus cases pin nothing, so
+    the pin branch is a guard, and ``SY-MATRIX-EQUIV`` is where a pin is observed.
     """
     return support.corpus_cases(
         ctx,
@@ -528,9 +526,9 @@ def _mask_case(ctx: RunContext, record: CorpusRecord) -> CaseResult:
 
     The mask is only ever the format information's reading: the framework's own sampling, never a
     decoder and never the target's metadata. Reasons: ``decoder_disagreement`` when the two
-    decoders' payloads differ, which outranks the mask reading (AAP §0.3.2), ``sampling_failed``
-    when it could not be read, ``value_mismatch`` when the mask is outside ``0..7`` or contradicts a
-    pin, a pass otherwise.
+    decoders' payloads differ, which outranks the mask reading, ``sampling_failed`` when it could
+    not be read, ``value_mismatch`` when the mask is outside ``0..7`` or contradicts a pin, a pass
+    otherwise.
 
     Raises:
         TargetUnavailable, TargetTimeout: Exactly as :func:`_run_case`.
@@ -585,7 +583,7 @@ def SY_MATRIX_EQUIV(ctx: RunContext) -> Iterator[Case]:
     The product's **only** matrix comparison, legitimate only because every request pins the
     version, the error level and the mask: at pinned parameters the standard fixes the symbol
     completely, whereas an unpinned mask is the encoder's choice and two conforming encoders may
-    legitimately differ (AAP §0.3.5). Ascending by ``case_id``.
+    legitimately differ. Ascending by ``case_id``.
     """
     cases = [
         support.synthetic_case(_MATRIX_EQUIV_ID, spec.case_id, _bound(_matrix_case, spec))
@@ -601,8 +599,8 @@ def _matrix_case(ctx: RunContext, spec: _MatrixCase) -> CaseResult:
     ``version_from_dimension`` reads the pinned version back off it; and every one of the ``N x N``
     modules equals the oracle's. The first differing ``(row, column)`` and the differing module
     count are recorded. Reasons: ``decoder_disagreement`` when the two decoders' payloads differ,
-    which outranks the matrix comparison (AAP §0.3.2), ``sampling_failed`` when no grid could be
-    recovered, ``value_mismatch`` otherwise.
+    which outranks the matrix comparison, ``sampling_failed`` when no grid could be recovered,
+    ``value_mismatch`` otherwise.
 
     Raises:
         TargetUnavailable, TargetTimeout: Exactly as :func:`_run_case`.

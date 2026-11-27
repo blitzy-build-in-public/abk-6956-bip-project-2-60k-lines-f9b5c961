@@ -10,8 +10,8 @@ match on both sides of the configuration seam.
 
 The capability half is load-bearing beyond this module: the three configurable adapters declare
 exactly what their record carries and the two built-in self-check targets declare all thirteen
-themselves, which is what lets the clean-run gate demand zero skips (AAP §0.4.1) and keeps an
-expected failure of the ``defective`` target from being answered with a skip (AAP §0.4.2).
+themselves, which is what lets the clean-run gate demand zero skips and keeps an expected failure
+of the ``defective`` target from being answered with a skip.
 """
 
 from __future__ import annotations
@@ -297,7 +297,7 @@ def test_an_undeclared_type_raises_key_error() -> None:
 def test_the_factory_table_cannot_be_mutated() -> None:
     """The table is configuration vocabulary, so no caller can redirect a run by editing it."""
     with pytest.raises(TypeError):
-        ADAPTER_TYPES["grpc"] = object()  # type: ignore[index]
+        ADAPTER_TYPES["grpc"] = object()
     assert sorted(ADAPTER_TYPES) == sorted(models.ADAPTER_TYPE_NAMES), (
         "a refused mutation still changed the table: it now declares "
         f"{sorted(ADAPTER_TYPES)} instead of {sorted(models.ADAPTER_TYPE_NAMES)}"

@@ -188,8 +188,8 @@ class DecoderOutcome:
     than a gap; a future binding that exposes a version populates the field
     without a change to any consumer.
 
-    Two fields extend the documented seven, each because evidence the plan
-    requires cannot otherwise be carried:
+    Two fields extend the documented seven, each because the consensus rules and
+    the grid sampler need evidence no other field carries:
 
     * ``payload`` -- the verbatim bytes this decoder returned. The consensus
       rules record both payloads verbatim when the decoders disagree, and the
@@ -418,10 +418,10 @@ class DecodeResult:
     not an answer at all: a decoder the run did not consult, mapped to the reason
     it could not be. It is empty whenever every decoder was consulted, which is
     the ordinary case, and it is why single-decoder mode's evidence lists one
-    decoder in ``per_decoder`` (AAP §0.6.6 row 4): a binding that cannot be
+    decoder in ``per_decoder``: a binding that cannot be
     imported raised nothing about the artefact, so it is recorded here instead of
     as an outcome with ``status == "error"``, which means a decoder that ran and
-    raised (AAP §0.4.5). A decoder appears in ``per_decoder`` or in
+    raised. A decoder appears in ``per_decoder`` or in
     ``unavailable_decoders``, never in both, and the degradation therefore stays
     recorded in the evidence a reader has even though the noise of a decoder that
     never ran is gone.
@@ -662,8 +662,9 @@ def decoder_availability() -> DecoderAvailability:
     """Probe both reference decoders and their installed versions.
 
     Never raises: an absent distribution reports ``False`` with a ``None``
-    version, which the caller turns into the blocking failure or the recorded
-    degradation the plan requires.
+    version, which ``qrcheck run`` turns into an exit-2 prerequisite failure for
+    the primary decoder or a single-decoder degradation for the secondary, and
+    which ``qrcheck doctor`` reports as missing or degraded.
     """
     return DecoderAvailability(
         primary=primary_available(),

@@ -1,23 +1,22 @@
 """The ``cli`` adapter against its shipped example target, over a real process boundary.
 
-This module is the integration gate for AAP §0.3.3's ``cli`` target contract and for AAP
-§0.9.2's rule that ``examples/cli_target.py`` is load-bearing: the example's documented
-configuration is executed here, so it either keeps working or CI fails. Nothing is mocked --
-every case spawns a real process and the decoders that judge the artefact are the pinned real
-ones.
+This module is the integration gate for the ``cli`` target contract and for the rule that
+``examples/cli_target.py`` is load-bearing: the example's documented configuration is executed
+here, so it either keeps working or CI fails. Nothing is mocked -- every case spawns a real
+process and the decoders that judge the artefact are the pinned real ones.
 
 The cases: a legal request produces a PNG decoding back to the requested bytes; shell
-metacharacters reach the target byte for byte (AAP §0.3.2's argv-only control); a declared
-rejection is ``TargetRejected`` with the target's own text while a non-zero exit that
-declares nothing is ``TargetContractError``; a target outliving ``timeout_s`` is
-``TargetTimeout``; an unspawnable command is ``TargetUnavailable``; a bounded run drives
-every ``otp`` record through the pipeline; an stdout-based ``returns`` is a contract
-error on this example; and a child that streams to stdout or to stderr without end is cut
-off at the adapter's documented byte bound and refused as ``TargetContractError``. No
-duration is compared with a product threshold (AAP §0.5.5) -- the two capture-bound cases
-only measure that the call returned far inside their own configured ``timeout_s``, which is
-what proves the child was cut off at the bound and not killed at the ceiling -- the module
-carries no ``e2e`` marker, and a missing example script fails rather than skips (AAP §0.4.3)."""
+metacharacters reach the target byte for byte (``qrcheck/targets/cli.py`` hands the child one
+argv list with ``shell=False``); a declared rejection is ``TargetRejected`` with the target's
+own text while a non-zero exit that declares nothing is ``TargetContractError``; a target
+outliving ``timeout_s`` is ``TargetTimeout``; an unspawnable command is ``TargetUnavailable``;
+a bounded run drives every ``otp`` record through the pipeline; an stdout-based ``returns`` is
+a contract error on this example; and a child that streams to stdout or to stderr without end
+is cut off at the adapter's documented byte bound and refused as ``TargetContractError``. No
+duration is compared with a product threshold -- the two capture-bound cases only measure that
+the call returned far inside their own configured ``timeout_s``, which is what proves the child
+was cut off at the bound and not killed at the ceiling -- the module carries no ``e2e`` marker,
+and a missing example script fails rather than skips."""
 
 from __future__ import annotations
 
@@ -81,12 +80,12 @@ _REJECTED_EXIT_CODE: Final[int] = 2
 _METACHARACTER_PAYLOAD: Final[bytes] = b'"; rm -rf / #' + b"$(echo pwned)" + b"`id`" + b"'"
 
 # Case 7's selection: ``otp`` is one of the corpus's fourteen classes and holds exactly twelve
-# records (AAP §0.8.2), which is the pass count the assertion expects.
+# records in ``corpus/default.jsonl``, which is the pass count the assertion expects.
 _OTP_CLASS: Final[str] = "otp"
 _OTP_CLASS_RECORDS: Final[int] = 12
 
 # The single check case 7 selects, so the run is bounded to twelve encodes and twelve decodes
-# instead of the 1,287 cases of a full run (AAP §0.8.1).
+# instead of the 1,287 cases of a full run.
 _ROUNDTRIP_CHECK_ID: Final[str] = "RT-ROUNDTRIP"
 
 # The one payload each of cases 1, 2, 4-8 sends: lowercase letters keep it in byte mode, so its

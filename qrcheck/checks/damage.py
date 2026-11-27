@@ -9,18 +9,17 @@ id>@<kind>``. The sample is the first eight corpus records in ``id`` order whose
 :data:`_MIN_PAYLOAD_BYTES` and :data:`_MAX_PAYLOAD_BYTES`, which keeps the defective target's
 ``truncated_payload`` injection away from them.
 
-Invocations are declared (AAP §0.4.3): ``DM-RESILIENCE`` makes the 8 encodes of
-:data:`EXPECTED_ENCODES`, shared across each record's seven kinds, and ``DM-SEEDED`` makes 0; each
-damaged case is decoded once (56 each) plus one memoised pristine reading per record (8), because
-the occlusion budget is the recovery capacity of the EC level decoded from the symbol.
+Invocations are declared: ``DM-RESILIENCE`` makes the 8 encodes of :data:`EXPECTED_ENCODES`,
+shared across each record's seven kinds, and ``DM-SEEDED`` makes 0; each damaged case is decoded
+once (56 each) plus one memoised pristine reading per record (8), because the occlusion budget is
+the recovery capacity of the EC level decoded from the symbol.
 
 ``DM-RESILIENCE`` asserts the **primary decoder** still returns the requested payload and only
-records the secondary one (AAP §0.3.2) -- opencv is fragile on damaged symbols, so failing on it
-would report that decoder's weakness as the target's defect. ``DM-SEEDED`` re-applies the same
+records the secondary one -- opencv is fragile on damaged symbols, so failing on it would report
+that decoder's weakness as the target's defect. ``DM-SEEDED`` re-applies the same
 damage with the same derived seed and thresholds and asserts the bytes are **byte-identical**,
 without calling the adapter. The occluder budget is ``recovery_fraction(decoded EC level) -
-occlusion_margin`` from the level the symbol itself reports (AAP §0.4.2), spent whole codewords at
-a time.
+occlusion_margin`` from the level the symbol itself reports, spent whole codewords at a time.
 
 The memo those two checks share belongs to the run whose evidence store the context carries, not to
 the process: :func:`_bind_run` empties it whenever the store, the seed or the EC level differs from
@@ -36,7 +35,7 @@ per side, which is refused before a pixel is allocated), ``missing_dependency``,
 ``target_rejected``, ``unsupported_capability`` and ``contract_error``
 from :func:`~qrcheck.checks.support.case_status_for_error` -- ``contract_error`` when the artefact
 the target returned is an image no installed library can open, which fails that one case with the
-artefact's first 256 bytes in ``decoded["hex_prefix"]`` (AAP §0.3.4) rather than aborting the run;
+artefact's first 256 bytes in ``decoded["hex_prefix"]`` rather than aborting the run;
 ``TargetUnavailable`` and ``TargetTimeout`` propagate to :mod:`qrcheck.runner`. Randomness is
 ``numpy``'s ``PCG64`` fed only by ``derive_seed(run_seed, "DM-RESILIENCE", case_id, kind)``, which
 is also the result's ``seed`` and the ``<seed>`` of ``damage-<kind>-<seed>.png``.
@@ -111,15 +110,15 @@ __all__ = [
 DM_RESILIENCE: Final[str] = "DM-RESILIENCE"
 DM_SEEDED: Final[str] = "DM-SEEDED"
 
-# The declared adapter-invocation counts of AAP §0.4.3 / §0.8.1's case matrix: eight encodes for
+# The declared adapter-invocation counts of the case matrix above: eight encodes for
 # DM-RESILIENCE, one per sampled record and shared across its seven kinds, and none for DM-SEEDED.
 EXPECTED_ENCODES: Final[Mapping[str, int]] = MappingProxyType(
     {DM_RESILIENCE: 8, DM_SEEDED: 0}
 )
 
-# The fixed sample of AAP §0.8.1: the first eight corpus records in id order whose payload length
-# is inside this window.  The upper bound is the truncation injection's trigger length; the lower
-# keeps every record large enough to carry a meaningful damage budget at EC L.
+# The fixed sample: the first eight corpus records in id order whose payload length is inside this
+# window.  The upper bound is the truncation injection's trigger length; the lower keeps every
+# record large enough to carry a meaningful damage budget at EC L.
 _SAMPLE_SIZE: Final[int] = 8
 _MIN_PAYLOAD_BYTES: Final[int] = 8
 _MAX_PAYLOAD_BYTES: Final[int] = 64
@@ -159,7 +158,7 @@ _FILL_VALUE: Final[float] = 255.0
 
 # The largest canvas this module decodes from an untrusted artefact, per side, in pixels: eight
 # times the reference decode size ``[checks.performance] decode_image_px``, whose single
-# declaration ``qrcheck.config.models`` owns (AAP §0.6.2), so 4000 px per side -- the same ceiling
+# declaration ``qrcheck.config.models`` owns, so 4000 px per side -- the same ceiling
 # ``qrcheck.decode.consensus`` and ``qrcheck.checks.render`` hold for the same bytes.  It leaves
 # room for the symbols this framework asks a target for, since a Version-40 symbol is 177 modules
 # plus an 8-module quiet zone and a rotated copy of it needs a square root of two more across,
@@ -755,7 +754,7 @@ def _noise_pixels(pixels: numpy.ndarray, sigma: float, seed: int) -> numpy.ndarr
 
     The pattern comes from :class:`numpy.random.PCG64` with the case's derived seed, whose bit
     stream is stable across numpy releases, so the damaged image is reproducible byte for byte
-    inside the pinned lock (AAP §0.5.4).
+    inside the pinned lock.
     """
     # Deferred: importing this module starts no image stack in a process that only lists checks.
     import numpy
@@ -789,9 +788,8 @@ def _raster(pixels: numpy.ndarray, reference: Any) -> Any:
     """Return the reference image's own raster class carrying `pixels`.
 
     Pillow is reachable only through :mod:`qrcheck.evidence.mux`, which offers opening and PNG
-    encoding rather than construction from an array, so the image mux handed us is the canvas:
-    resizing allocates a raster of exactly the array's size and ``putdata`` replaces every
-    pixel.
+    encoding rather than construction from an array, so the image the mux returned is the canvas:
+    resizing allocates a raster of exactly the array's size and ``putdata`` replaces every pixel.
     """
     height, width = int(pixels.shape[0]), int(pixels.shape[1])
     canvas = reference.convert("RGB").resize((width, height))
@@ -847,7 +845,7 @@ def _unopenable(symbol: GeneratedSymbol, error: BaseException) -> TargetContract
     The library's own text is deliberately not interpolated: Pillow names the buffer it refused by
     its ``repr`` (``<_io.BytesIO object at 0x...>``), and that address changes with every run, so
     the diagnostic names the exception class instead and keeps ``decoded.json`` byte-identical for
-    one case and seed (AAP §0.5.4). One factory rather than one message per arm, because the header
+    one case and seed. One factory rather than one message per arm, because the header
     probe and the decode refuse the same bytes for the same reason.
     """
     return TargetContractError(
@@ -866,7 +864,7 @@ def _reference_raster(symbol: GeneratedSymbol) -> tuple[Any, numpy.ndarray]:
     how much memory this case spends.
 
     The bytes came from the target, so an artefact no installed image library can open is that
-    target's contract failure rather than this module's (AAP §0.3.4): it becomes a
+    target's contract failure rather than this module's: it becomes a
     :class:`~qrcheck.targets.base.TargetContractError` carrying the artefact, which
     :func:`~qrcheck.checks.support.case_status_for_error` reports as one ``contract_error`` case
     with the first 256 bytes in ``decoded["hex_prefix"]``.
@@ -1034,7 +1032,7 @@ def _case_seed(run_seed: int, case_id: str, kind: str) -> int:
 
 
 def _sample_records(ctx: RunContext) -> tuple[_Record, ...]:
-    """Return the fixed eight-record sample of AAP §0.8.1, in ``id`` order.
+    """Return the fixed eight-record sample, in ``id`` order.
 
     "The first eight records in ``id`` order whose payload length is between 8 and 64 bytes at
     the run's EC level", applied through :func:`qrcheck.checks.support.first_records`.
@@ -1300,9 +1298,8 @@ def _assert_payload(
 ) -> CaseResult:
     """Return the pass or the payload mismatch of one damaged symbol.
 
-    The assertion is the primary decoder's payload exactly (AAP §0.3.2's one-authority rule), so
-    a symbol it could not read -- or read to different bytes -- fails, and the secondary decoder
-    never decides.
+    The assertion is the primary decoder's payload exactly (the one-authority rule), so a symbol it
+    could not read -- or read to different bytes -- fails, and the secondary decoder never decides.
     """
     if outcome.payload_bytes == record.payload_bytes:
         return support.pass_(
@@ -1388,8 +1385,8 @@ def _run_resilience_case(ctx: RunContext, record: _Record, kind: str) -> CaseRes
         TargetUnsupported,
     ) as error:
         # The single translation of an adapter error into a status: it re-raises the two
-        # target-loss errors to the runner and reports the other three as the AAP
-        # prescribes.
+        # target-loss errors to the runner and reports the other three as
+        # :func:`~qrcheck.checks.support.case_status_for_error` prescribes.
         return support.record_evidence(
             ctx,
             support.case_status_for_error(

@@ -1,10 +1,10 @@
 """``qrcheck list``: enumerate every registered check, and nothing else.
 
-The registry is the single source of check identity (AAP §0.3.4), so this command adds, filters,
-renames and reorders nothing: it imports the check families so they register themselves, then prints
-exactly what :func:`qrcheck.registry.check.iter_checks` returns, in ascending identifier order.
+The registry is the single source of check identity, so this command adds, filters, renames and
+reorders nothing: it imports the check families so they register themselves, then prints exactly
+what :func:`qrcheck.registry.check.iter_checks` returns, in ascending identifier order.
 
-``--json`` prints the object array AAP §0.8.3 fixes as a public surface: one object per check
+``--json`` prints the object array :class:`_Row` fixes as a public surface: one object per check
 carrying exactly the five keys ``id``, ``title``, ``family``, ``requires`` and ``dependencies``,
 keys sorted, because tooling and ``tests/integration/test_registry_reachability.py`` compare it
 against the ``check_id`` values a run's ``summary.json`` records. The table form prints the same
@@ -31,7 +31,7 @@ from qrcheck.report.json_report import dumps_canonical
 
 __all__ = ("list_checks", "list_command")
 
-# The table's columns, in order: the first four are AAP §0.3.4's listing contract, and
+# The table's columns, in order: the first four are the ``--json`` listing contract, and
 # the title -- the one-line description the registry declares as "what ``qrcheck list``
 # prints" -- comes last so the short columns align. The header row prints these names
 # verbatim, so they double as the row keys of the --json form.
@@ -53,7 +53,7 @@ _COLUMN_GAP: Final[str] = "  "
 class _Row(TypedDict):
     """One listing row: the five keys of the ``--json`` contract, already JSON-ready.
 
-    The field names are the contract (AAP §0.8.3), so they are spelled here once and nowhere else.
+    The field names are the contract, so they are spelled here once and nowhere else.
     """
 
     id: str
@@ -95,8 +95,7 @@ def _row(contract: CheckContract) -> _Row:
     """Return the listing row for ``contract``.
 
     Both list-valued fields are sorted here rather than at emission, so both output forms agree
-    member for member (AAP §0.5.3); capability members are a ``StrEnum``, so ``str()`` yields the
-    value.
+    member for member; capability members are a ``StrEnum``, so ``str()`` yields the value.
     """
     return _Row(
         id=contract.id,

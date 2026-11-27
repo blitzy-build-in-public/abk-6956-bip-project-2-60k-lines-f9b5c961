@@ -20,11 +20,11 @@ this check (an unknown capability *name* is the exit-code-2 configuration error 
 far earlier by the schema); and :attr:`~qrcheck.report.model.Reason.MISSING_DEPENDENCY`, where the
 check needs an optional runtime dependency the host does not provide, such as the SVG rasterizer.
 The platform file-descriptor directory is not one of these: that check reports the handle half per
-case as ``unsupported_platform`` while its temporary-file half still asserts (AAP §0.8.1), which a
+case as ``unsupported_platform`` while its temporary-file half still asserts, which a
 whole-check skip would drop. A capability shortfall outranks a missing dependency, so a check short
 of both is skipped once with the capability reason. The discovery order a
 missing dependency was probed in travels with the skip as :attr:`SkipOutcome.attempted`, so a
-report states what was tried, not only what is absent (AAP §0.3.5, §0.7.2).
+report states what was tried, not only what is absent.
 
 A skip is a real outcome, never a flavoured pass: it is counted in its own integer of
 :class:`~qrcheck.report.model.Counts` and can never produce a passing exit code, and since the
@@ -64,7 +64,6 @@ __all__ = [
 ]
 
 # The case identifier a pre-execution skip result is filed under.
-#
 # One string, defined once, because three artefacts key on it: ``summary.json`` carries it as
 # ``case_id``, ``junit.xml`` renders it inside ``name="<CHECK-ID>[<case_id>]"`` and the runner
 # accumulates one such result per unrunnable check.  It is deliberately distinct from the runner's
@@ -169,7 +168,7 @@ class SkipOutcome:
     message="..."/>`` carry, ``missing`` lists the absent requirements -- capability names for an
     ``unsupported_capability`` skip, dependency tokens for a ``missing_dependency`` one -- and
     ``attempted`` is the discovery order walked for a dependency the host offers through an ordered
-    candidate list (AAP §0.3.5, §0.7.2), so a reader learns what to add and what was tried.
+    candidate list, so a reader learns what to add and what was tried.
     Construction normalises and validates: ``missing`` is sorted and de-duplicated, ``reason`` is
     narrowed to a :class:`~qrcheck.report.model.Reason` member, ``attempted`` is kept as walked, and
     a skip that names no cause raises :exc:`ValueError`, because an unexplained skip is exactly the
@@ -441,7 +440,7 @@ def resolve(
     :class:`qrcheck.decode.base.DecoderAvailability` exposes neither method, so the runner
     translates its probes into a mapping before calling here, while ``attempted`` is a mapping
     from a dependency token to the ordered candidate list walked for it, copied into a
-    ``missing_dependency`` skip (AAP §0.3.5, §0.7.2). Nothing is mutated, no adapter is touched,
+    ``missing_dependency`` skip. Nothing is mutated, no adapter is touched,
     no probe is run and no result is built, so the executed set is knowable before the first case
     runs; the resolution returned has both tuples sorted by check identifier. Raises
     :exc:`TypeError` when an element of `selected` is not a
@@ -487,7 +486,7 @@ def resolve(
                     check_id=contract.id,
                     reason=Reason.MISSING_DEPENDENCY,
                     missing=missing,
-                    # The search walked for each absent dependency (AAP §0.3.5, §0.7.2).
+                    # The search walked for each absent dependency.
                     attempted=tuple(
                         candidate
                         for token in missing
@@ -510,12 +509,12 @@ def skip_case_results(resolution: Resolution, seed: int) -> tuple[CaseResult, ..
     ``duration_ms`` of ``0.0`` and the run's seed, recorded verbatim so the report says which run
     the skip belongs to; the runner hands each result to
     :class:`qrcheck.report.evidence.EvidenceStore`, which persists a skipped-with-reason case and
-    attaches its directory (AAP §0.3.4). ``decoded`` carries the discovery order walked for a
-    missing dependency found through an ordered candidate list, as ``{"attempted": [...]}``
-    (AAP §0.3.5, §0.7.2), and is empty for every other skip, where ``expected["missing"]`` states
-    the whole cause; ``request`` is an empty mapping rather than null so every consumer reads a
-    skip uniformly. A skipped result is never a pass: the four separate tallies of
-    :class:`qrcheck.report.model.Counts` keep it out of ``passed``.
+    attaches its directory. ``decoded`` carries the discovery order walked for a missing dependency
+    found through an ordered candidate list, as ``{"attempted": [...]}``, and is empty for every
+    other skip, where ``expected["missing"]`` states the whole cause; ``request`` is an empty
+    mapping rather than null so every consumer reads a skip uniformly. A skipped result is never a
+    pass: the four separate tallies of :class:`qrcheck.report.model.Counts` keep it out of
+    ``passed``.
     """
     return tuple(
         CaseResult(

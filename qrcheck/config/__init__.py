@@ -4,9 +4,8 @@ Four things are reachable from the package root and nothing else: :func:`load_co
 :class:`ConfigError` carrying the dotted key that has to change, the resolved records (``Config``,
 ``TargetConfig``, ``LibraryTarget``, ``CLITarget``, ``HTTPTarget``, ``PerformanceLimits``,
 ``DamageLimits``, ``RenderConfig``) and :func:`derive_seed`, the product's only seed-derivation
-point (AAP §0.5.2). Importing it reads no file, creates no directory and performs no I/O: the names
-below are bindings to objects defined elsewhere, and no threshold has a second value here (AAP
-§0.12).
+point. Importing it reads no file, creates no directory and performs no I/O: the names below are
+bindings to objects defined elsewhere, and no threshold has a second value here.
 
 The submodules stay importable for the interfaces that need what this façade does not publish:
 ``schema.validate``, ``schema.apply_defaults`` and ``schema.SCHEMA``, plus the ``models``
@@ -30,7 +29,7 @@ from qrcheck.config.seeding import derive_seed
 
 # The package's public surface, written out sorted (uppercase names before lowercase, as
 # ``sorted()`` orders them) so ``import *``, ``dir()`` and any surface assertion are stable
-# across runs and across machines (AAP §0.5.3).
+# across runs and across machines.
 __all__: tuple[str, ...] = (
     "CLITarget",
     "Config",

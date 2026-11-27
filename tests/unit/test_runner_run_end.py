@@ -1,11 +1,11 @@
 """The run-end observation: ``CL-ARTIFACTS`` runs after the walk, so its window is the run.
 
-AAP §0.8.1 defines the check's temporary-file observation as a snapshot of
-:func:`tempfile.gettempdir` "before and after the run", the two snapshots asserted equal, and
-AAP §0.4.4 treats a check that cannot fail as a defect. Before its contract declared
-``observes_run_end`` the baseline was taken when the check enumerated its cases and compared when
-it executed -- and because checks ran in ascending identifier order, ``CL-ARTIFACTS`` executed
-first, so the window held no other case at all and no entry a later case left behind could fail it.
+``CL-ARTIFACTS``'s temporary-file observation is a snapshot of :func:`tempfile.gettempdir`
+"before and after the run", the two snapshots asserted equal, because a check that cannot fail is
+a defect. Before its contract declared ``observes_run_end`` the baseline was taken when the check
+enumerated its cases and compared when it executed -- and because checks ran in ascending
+identifier order, ``CL-ARTIFACTS`` executed first, so the window held no other case at all and no
+entry a later case left behind could fail it.
 
 Three properties are pinned here, through the real command line:
 
@@ -15,8 +15,7 @@ Three properties are pinned here, through the real command line:
 * a clean run of the same selection passes it, so the failure above is attributable to the entry
   and not to the check;
 * ``decoded`` reports both windows (``temp_entries_before``, ``temp_entries_after``) and records
-  which descriptor interface was enumerated as a platform token, never as an absolute path
-  (AAP §0.5.5).
+  which descriptor interface was enumerated as a platform token, never as an absolute path.
 
 The entry is left by a case of another selected check, which is the only seam that puts it inside
 the run's own window, and every run here is given a temporary directory of its own: a sibling clone
@@ -29,7 +28,7 @@ as its refusal modes -- a value it will not serialise, and a write that fails. T
 proven end to end through ``run`` in ``tests/unit/test_exit_codes.py``; the refusals a
 target-influenced value reaches are pinned here against the function itself, because each has to
 become one ``error`` result in the case's own place instead of an exception that aborts the walk
-(AAP §0.6.6 row 11, §0.14.1).
+.
 """
 
 from __future__ import annotations
@@ -58,8 +57,8 @@ from qrcheck.report.model import TRACEBACK_KEY, CaseResult, Reason, Status
 #: form names a function rather than this module.
 _REGISTRY_MODULE: Final[Any] = importlib.import_module("qrcheck.registry.check")
 
-#: The check under test: the one whose contract declares ``observes_run_end`` (AAP §0.8.1), so the
-#: runner executes it after every ordinary check.
+#: The check under test: the one whose contract declares ``observes_run_end``, so the runner
+#: executes it after every ordinary check.
 WITNESS_CHECK: Final[str] = "CL-ARTIFACTS"
 
 #: The ordinary check whose case generator the leaking seam replaces. It requires only ``png``,
@@ -84,8 +83,8 @@ LEAK_NAME: Final[str] = f"{cleanup_module.TEMP_PREFIX}run-end-seam"
 LEAK_BYTES: Final[bytes] = b"qrcheck run-end seam"
 
 #: The tokens ``decoded.fd_directory`` may carry for the descriptor directory the handle half
-#: enumerated; ``None`` is the third case, for a host that exposes neither (AAP §0.5.5 forbids the
-#: absolute path itself).
+#: enumerated; ``None`` is the third case, for a host that exposes neither, since no artefact
+#: carries the absolute path itself.
 FD_TOKENS: Final[frozenset[str]] = frozenset({"proc-self-fd", "dev-fd"})
 
 #: The two fields ``decoded`` uses to report the temporary-file windows of the run.
@@ -169,8 +168,8 @@ def read_summary(report_root: Path) -> Mapping[str, Any]:
 def witness_result(report_root: Path) -> Mapping[str, Any]:
     """Return the run's single ``CL-ARTIFACTS`` result.
 
-    One result per case and one case for this check, so a second one would be the accumulation
-    defect AAP §0.3.4 forbids; the diagnostic prints every identifier the run reported.
+    One result per case and one case for this check, so a second one would be an accumulation
+    defect; the diagnostic prints every identifier the run reported.
     """
     summary = read_summary(report_root)
     entries = [entry for entry in summary["results"] if entry["check_id"] == WITNESS_CHECK]
@@ -196,7 +195,7 @@ def assert_windows_and_token(entry: Mapping[str, Any]) -> None:
         f"not {token!r}"
     )
     assert not (isinstance(token, str) and token.startswith("/")), (
-        f"no absolute path may reach an artefact (AAP §0.5.5); decoded.fd_directory is {token!r}"
+        f"no absolute path may reach an artefact; decoded.fd_directory is {token!r}"
     )
 
 
@@ -215,7 +214,7 @@ def test_an_entry_created_during_the_walk_fails_the_run_end_check(
 
     The witness executes after the walk, so the entry the seam leaves part-way through it is inside
     the observation window: the snapshot taken at the check's own enumeration could never contain
-    it, which is exactly the vacuity AAP §0.4.4 calls a defect.
+    it, so a check built on that window could not fail.
     """
     install_leaking_seam(monkeypatch, leak_entry)
 
@@ -276,7 +275,7 @@ def test_the_artefact_states_both_windows_and_the_platform_token(
     """What was observed is in the artefact: both windows, and the descriptor interface by token.
 
     A reader has to be able to tell which two states were compared and which platform interface the
-    handle half enumerated, without the artefact naming a single host location (AAP §0.5.5).
+    handle half enumerated, without the artefact naming a single host location.
     """
     assert tuple(private_temp.iterdir()) == (), "the run's temporary directory starts empty"
 
@@ -332,7 +331,7 @@ def test_a_store_refusal_that_is_not_a_write_fault_is_contained(
     modes, and a value a target influenced is enough to reach the first two. Containing only
     ``OSError`` let one of them escape from inside the handler that builds
     the ``error`` result, which aborted the walk: no report, no evidence, exit 3, and every result
-    already accumulated discarded -- the opposite of what AAP §0.6.6 row 11 requires. The
+    already accumulated discarded -- the opposite of what containment requires. The
     ``UnicodeEncodeError`` case pins the subclass: a refusal of that shape is contained as the
     ``ValueError`` it is and needs no arm of its own.
     """
@@ -350,7 +349,7 @@ def test_a_store_refusal_that_is_not_a_write_fault_is_contained(
 
     result = runner_module._persist(store, case)
 
-    # Once, not twice: containing a refusal is not a retry (AAP §0.5.6).
+    # Once, not twice: containing a refusal is not a retry.
     assert store.calls == 1
     # The case keeps the one result it is entitled to, under its own identity.
     assert (result.check_id, result.case_id) == (case.check_id, case.case_id)

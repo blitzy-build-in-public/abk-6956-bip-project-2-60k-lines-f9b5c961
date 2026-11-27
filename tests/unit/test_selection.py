@@ -1,20 +1,20 @@
 """The ``--checks`` grammar, the ``--class`` filter and the two empty-result diagnostics.
 
-AAP §0.3.4 ("Identity and selection") fixes three ``--checks`` token forms -- an exact
-identifier, an identifier glob and a family selector -- makes a selection matching nothing an
-exit-2 condition that echoes the selector **verbatim** with no report written, and makes
-``--class`` a repeatable glob whose zero-record outcome is a second, differently worded exit-2
-condition; §0.6.6 rows 1 and 2 name this module as the gate for both states. Also pinned here:
-the corpus file is a prerequisite only of a run that reads it — a ``--class`` filter, or a check
-whose cases are drawn from the corpus — because §0.3.4 conditions it on a corpus-driven check
-being selected, so a synthetic-only selection completes with no corpus file at all.
+:mod:`qrcheck.registry.selection` fixes three ``--checks`` token forms -- an exact identifier,
+an identifier glob and a family selector -- and ``qrcheck run`` makes a selection matching nothing
+an exit-2 condition that echoes the selector **verbatim** with no report written, while a
+``--class`` glob whose records all filter out is a second, differently worded exit-2 condition;
+this module is the gate that holds both empty-result states. Also pinned here: the corpus file is
+a prerequisite only of a run that reads it -- a ``--class`` filter, or a check whose cases are
+drawn from the corpus -- because the prerequisite is conditioned on a corpus-driven check being
+selected, so a synthetic-only selection completes with no corpus file at all.
 
 Pinned: the forms are unioned, de-duplicated and returned sorted by identifier, asserted against
-a selector written in reverse order, because an order following the user's typing would break
-§0.5.3's determinism promise; and a mistyped token raises :class:`SelectionError` carrying the
-selector as typed rather than being dropped, since a dropped token would stop a check running
-while the run still reported a clean pass. Registration is forced here -- ``qrcheck.registry``
-leaves the registry empty on import (AAP §0.5) -- so no grammar case can pass against a
+a selector written in reverse order, because an order following the user's typing would break the
+determinism the sorted tuple promises; and a mistyped token raises :class:`SelectionError`
+carrying the selector as typed rather than being dropped, since a dropped token would stop a check
+running while the run still reported a clean pass. Registration is forced here --
+``qrcheck.registry`` leaves the registry empty on import -- so no grammar case can pass against a
 half-populated one.
 """
 
@@ -56,10 +56,11 @@ from qrcheck.registry.selection import (
 if TYPE_CHECKING:  # Annotation-only: the CLI framework is not imported by this module.
     from click.testing import CliRunner, Result
 
-# The nine families and the checks each owns, from AAP §0.8.1's component-to-check-family mapping.
-# This is the only place check identifiers are written as literals here; every other expectation is
-# computed from the registry through ``matches`` or ``iter_checks``. Each tuple is in ascending
-# identifier order, which is the order ``select`` promises.
+# The nine families and the checks each owns, from ``FAMILY_NAMES`` and ``CHECK_IDS`` in
+# :mod:`qrcheck.registry.check`. This is the only place check identifiers are written as literals
+# here; every other expectation is computed from the registry through ``matches`` or
+# ``iter_checks``. Each tuple is in ascending identifier order, which is the order ``select``
+# promises.
 FAMILY_CHECKS: Final[Mapping[str, tuple[str, ...]]] = {
     "cleanup": ("CL-ARTIFACTS",),
     "damage": ("DM-RESILIENCE", "DM-SEEDED"),
@@ -78,8 +79,9 @@ FAMILY_CHECKS: Final[Mapping[str, tuple[str, ...]]] = {
     "symbol": ("SY-EC-MATCH", "SY-MASK", "SY-MATRIX-EQUIV", "SY-VERSION-MIN"),
 }
 
-# The exit code AAP §0.3.4 assigns to a configuration, selection or corpus-filter fault. A literal
-# on purpose: a test that imported the constant it is checking would follow a renumbering.
+# The exit code :mod:`qrcheck.cli.exit` assigns to a configuration, selection or corpus-filter
+# fault. A literal on purpose: a test that imported the constant it is checking would follow a
+# renumbering.
 EXIT_CONFIG: Final[int] = 2
 
 # A corpus path that does not exist, relative to the temporary configuration that names it. Every
@@ -88,8 +90,8 @@ EXIT_CONFIG: Final[int] = 2
 MISSING_CORPUS: Final[str] = "corpus/absent.jsonl"
 
 # The checks whose cases are constructed rather than drawn from the corpus. Selecting one of them
-# reads no corpus record, so AAP §0.3.4's "``corpus_path`` must exist when a corpus-driven check is
-# selected" -- a condition that is then false -- cannot make such a run an exit-2 fault.
+# reads no corpus record, so the rule that ``corpus_path`` must exist when a corpus-driven check
+# is selected -- a condition that is then false -- cannot make such a run an exit-2 fault.
 CORPUS_INDEPENDENT_CHECKS: Final[tuple[str, ...]] = ("CL-ARTIFACTS", "IV-EMPTY", "PF-DECODE")
 
 
@@ -225,7 +227,7 @@ def test_an_empty_registry_cannot_satisfy_a_whole_run_selection() -> None:
     ids=lambda value: value,
 )
 def test_a_glob_token_selects_every_matching_identifier(token: str, family: str) -> None:
-    """A glob selects exactly §0.8.1's literal set, so a wildcard that over-matched fails."""
+    """A glob selects exactly the family's literal set, so a wildcard that over-matched fails."""
     selected = select(REGISTRY, token)
     assert _ids(selected) == FAMILY_CHECKS[family]
     assert {contract.family for contract in selected} == {family}
@@ -251,7 +253,7 @@ def test_a_glob_that_matches_no_identifier_raises_naming_the_selector() -> None:
 
 @pytest.mark.parametrize("family", sorted(FAMILY_CHECKS), ids=lambda value: value)
 def test_a_family_selector_selects_that_family_in_identifier_order(family: str) -> None:
-    """``family:<name>`` selects exactly §0.8.1's checks, driven over all nine families."""
+    """``family:<name>`` selects exactly the family's checks, driven over all nine families."""
     selected = select(REGISTRY, f"family:{family}")
     assert _ids(selected) == FAMILY_CHECKS[family]
     assert {contract.family for contract in selected} == {family}
@@ -259,7 +261,7 @@ def test_a_family_selector_selects_that_family_in_identifier_order(family: str) 
 
 
 def test_every_named_family_matches_at_least_one_check() -> None:
-    """The plan's family table and the product's family table describe the same nine families."""
+    """``FAMILY_CHECKS`` and ``FAMILY_NAMES`` describe the same nine families."""
     assert sorted(FAMILY_CHECKS) == list(FAMILY_NAMES)
     for family in FAMILY_NAMES:
         assert select(REGISTRY, f"family:{family}"), f"family {family!r} selected nothing"
@@ -381,7 +383,7 @@ def test_the_cli_reports_an_empty_class_filter_as_exit_two_naming_the_filter(
     assert _report_entries(report_root) == ()
 
 
-# --- The corpus prerequisite is conditioned on the selection (AAP §0.3.4) ---
+# --- The corpus prerequisite is conditioned on the selection ---
 
 
 @pytest.mark.parametrize("check_id", CORPUS_INDEPENDENT_CHECKS, ids=lambda value: value)
@@ -393,9 +395,9 @@ def test_a_selection_that_reads_no_corpus_record_needs_no_corpus_file(
 ) -> None:
     """A synthetic-only selection completes with an unreadable ``corpus_path``.
 
-    AAP §0.3.4 conditions the corpus file's existence on a corpus-driven check being selected, so
-    a run whose checks build their own cases must not be refused for a file it never reads: the
-    command exits 0, writes its report and records that check's results alone.
+    The corpus file's existence is conditioned on a corpus-driven check being selected, so a run
+    whose checks build their own cases must not be refused for a file it never reads: the command
+    exits 0, writes its report and records that check's results alone.
     """
     config_path = toml_config_file(corpus_path=MISSING_CORPUS)
     report_root = tmp_path / "reports-without-corpus"
@@ -434,7 +436,8 @@ def test_a_corpus_driven_selection_still_requires_the_corpus_file(
 def test_the_boundary_class_glob_selects_the_forty_record_subset(
     built_corpus: tuple[CorpusRecord, ...],
 ) -> None:
-    """``--class 'boundary-*'`` is the 40-record subset criterion 2 runs at L, Q and H."""
+    """``--class 'boundary-*'`` is the 40-record subset ``BOUNDARY_RECORDS`` counts, the one the
+    L, Q and H runs are driven over."""
     selection = parse_selection(None, ("boundary-*",))
     selected = filter_by_class(built_corpus, selection.class_globs)
 
@@ -534,23 +537,23 @@ def test_selection_is_frozen_and_hashable() -> None:
 def test_a_non_string_selector_is_rejected(value: object) -> None:
     """A selector that is not a string is a caller defect, refused by both entry points."""
     with pytest.raises(TypeError):
-        Selection(checks=value)  # type: ignore[arg-type]
+        Selection(checks=value)
     with pytest.raises(TypeError):
-        parse_selection(checks=value)  # type: ignore[arg-type]
+        parse_selection(checks=value)
 
 
 @pytest.mark.parametrize("value", [3, 3.5, object()], ids=["int", "float", "object"])
 def test_a_non_iterable_class_glob_container_is_rejected(value: object) -> None:
     """Class globs are a string or an iterable of strings; anything else cannot be a filter."""
     with pytest.raises(TypeError):
-        Selection(class_globs=value)  # type: ignore[arg-type]
+        Selection(class_globs=value)
 
 
 @pytest.mark.parametrize("value", [1, b"url", None], ids=repr)
 def test_a_non_string_class_glob_is_rejected(value: object) -> None:
     """One entry of the glob container must be a string, and the diagnostic quotes it."""
     with pytest.raises(TypeError):
-        Selection(class_globs=(value,))  # type: ignore[arg-type]
+        Selection(class_globs=(value,))
 
 
 def test_a_bare_string_class_glob_is_one_pattern() -> None:

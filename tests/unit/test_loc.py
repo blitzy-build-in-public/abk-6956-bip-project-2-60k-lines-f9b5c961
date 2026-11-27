@@ -13,13 +13,12 @@ overrides it); and the property that makes the rest worth anything -- no other m
 line-counting function and the command imports the metric instead of repeating the walk.
 
 The boundary is "``0`` under the limit, ``1`` at or above", which is what makes ``qrcheck loc
---limit $((count - 1))`` fail -- the negative case success criterion 11 turns into a CI gate
-(AAP §0.6.1 #11) -- so all three neighbouring limits are asserted, because an off-by-one moves
-exactly one of them. Every limit is computed from the tree just measured or read from
-:data:`qrcheck.config.schema.SCHEMA`, never typed, and the repository's own total is never
-asserted, so the module stays green as the product grows and retuning ``loc_limit`` cannot leave
-a stale expectation behind it. Each tree is built under ``tmp_path`` and the one real-repository
-walk is a file listing rather than an import.
+--limit $((count - 1))`` fail -- the negative case the CI gate runs -- so all three neighbouring
+limits are asserted, because an off-by-one moves exactly one of them. Every limit is computed from
+the tree just measured or read from :data:`qrcheck.config.schema.SCHEMA`, never typed, and the
+repository's own total is never asserted, so the module stays green as the product grows and
+retuning ``loc_limit`` cannot leave a stale expectation behind it. Each tree is built under
+``tmp_path`` and the one real-repository walk is a file listing rather than an import.
 """
 
 from __future__ import annotations
@@ -63,19 +62,19 @@ _SCANNED_MODULES: Final[tuple[str, ...]] = (
     "qrcheck/runner.py",
 )
 
-# A floor on the number of modules parsed, so the scan cannot pass vacuously.  It is the plan's
-# tree inventory (AAP §0.9.1), not a product threshold and not a retunable limit.
+# A floor on the number of modules parsed, so the scan cannot pass vacuously.  It is a floor on
+# the tree the sweep walks, not a product threshold and not a retunable limit.
 _MINIMUM_SCANNED_MODULES: Final[int] = 20
 
-# The exit codes of AAP §0.3.4, whose single owner is qrcheck/cli/exit.py: `loc` returns 0 under
-# the limit, 1 at or above it, 2 for a configuration fault or an unusable path.
+# The exit codes of qrcheck/cli/exit.py, their single owner: `loc` returns 0 under the limit,
+# 1 at or above it, 2 for a configuration fault or an unusable path.
 _EXIT_OK: Final[int] = 0
 _EXIT_FAILED: Final[int] = 1
 _EXIT_CONFIG: Final[int] = 2
 
-# The directory names every sweep must prune (AAP §0.9.1, §0.5 "build/ and dist/ hold generated
-# copies of the package"); ".tmp" is the local scratch directory a suite run uses as its TMPDIR and
-# "env" a per-checkout virtualenv, so neither holds tracked source.  Neither list is restated by
+# The directory names every sweep must prune ("build/ and dist/ hold generated copies of the
+# package"); ".tmp" is the local scratch directory a suite run uses as its TMPDIR and "env" a
+# per-checkout virtualenv, so neither holds tracked source.  Neither list is restated by
 # the metric: the assertions below check that these names are the ones it declares, then that the
 # walk demonstrably skips them.
 _ALWAYS_PRUNED_DIRS: Final[tuple[str, ...]] = (
@@ -284,8 +283,8 @@ def test_the_count_is_taken_on_the_lf_byte_in_the_raw_bytes(tmp_path: Path) -> N
 def test_the_exclusion_constants_name_the_untracked_directories() -> None:
     """The metric declares the generated and metadata directories the sweep must prune. ``build/``
     and ``dist/`` hold generated copies of the package, so counting them would inflate the
-    metric after a wheel build, and ``.git/`` would make the figure depend on the clone (AAP
-    §0.5.3, §0.12).
+    metric after a wheel build, and ``.git/`` would make the figure depend on the clone rather
+    than on the tracked sources.
     """
     for name in _ALWAYS_PRUNED_DIRS:
         assert name in EXCLUDED_DIR_NAMES
@@ -455,8 +454,7 @@ def test_a_file_root_is_not_a_directory(tmp_path: Path) -> None:
 def test_the_repository_tree_is_countable() -> None:
     """The product's own tree measures positive and includes the metric and this module. The total
     itself is deliberately not asserted: it changes with every feature, and the ceiling it is
-    gated against is ``loc_limit`` in ``qrcheck.toml`` (AAP §0.6.2), not a number a test may
-    carry.
+    gated against is ``loc_limit`` in ``qrcheck.toml``, not a number a test may carry.
     """
     report = count_lines(_REPOSITORY)
     paths = {entry.path for entry in report.files}
@@ -466,7 +464,7 @@ def test_the_repository_tree_is_countable() -> None:
     assert "tests/unit/test_loc.py" in paths
     assert INCLUDED_FILE_SUFFIX == ".py"
     # The repository root is a checkout, so ``.git`` is pruned from it; counting it would make
-    # the metric depend on the clone rather than on the tracked sources (AAP §0.5.3).
+    # the metric depend on the clone rather than on the tracked sources.
     assert ".git" in report.excluded
     assert all(not path.startswith("/") and ".." not in Path(path).parts for path in paths)
 
@@ -493,7 +491,7 @@ def test_the_gate_fails_at_or_above_the_limit(tmp_path: Path, invoke_cli) -> Non
     """The boundary is "at or above", so a limit equal to the total already fails. All three
     neighbouring limits are asserted, because an off-by-one in the comparison moves exactly one
     of them: ``total + 1`` passes, ``total`` and ``total - 1`` fail, which is what makes
-    ``qrcheck loc --limit $((count - 1))`` the negative case of AAP §0.6.1 #11.
+    ``qrcheck loc --limit $((count - 1))`` the negative case the CI gate runs.
     """
     tree = _tree(tmp_path, {"a.py": b"x = 1\ny = 2\n", "pkg/b.py": b"z = 3\n"})
     total = count_lines(tree).total
@@ -515,7 +513,7 @@ def test_a_configured_limit_decides_the_gate_when_no_option_is_given(
     """Without ``--limit`` the gate reads ``loc_limit`` from the configuration file. The generous
     limit comes from :data:`qrcheck.config.schema.SCHEMA` -- the ceiling is never typed here --
     and the tight one is derived from the measured total, so retuning the budget in
-    ``qrcheck.toml`` cannot leave a stale number behind in this test (AAP §0.6.2, §0.12).
+    ``qrcheck.toml`` cannot leave a stale number behind in this test.
     """
     tree = _tree(tmp_path, {"a.py": b"x = 1\ny = 2\n", "pkg/b.py": b"z = 3\n"})
     total = count_lines(tree).total

@@ -21,26 +21,16 @@ The counted root is the directory holding the configuration file; ``--path`` nam
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from pathlib import Path
-from typing import Final
 
 import click
 
 from qrcheck.cli.exit import EXIT_CONFIG, EXIT_FAILED, EXIT_INTERNAL, EXIT_OK
+from qrcheck.cli.support import DEFAULT_CONFIG_PATH, resolve_config_path
 from qrcheck.config import ConfigError, load_config
 from qrcheck.loc import count_lines
 
 __all__ = ("loc", "loc_command")
-
-# Read only when nothing in the group context supplies the option, which happens
-# when this module's function is called directly rather than through the CLI. The
-# group's own --config option keeps the value a real command line uses.
-DEFAULT_CONFIG_PATH: Final[str] = "qrcheck.toml"
-
-# The names a group's context object, or the group's own click parameters, may
-# carry the --config value under; tried in this order.
-_CONFIG_KEYS: Final[tuple[str, ...]] = ("config", "config_path", "config_file")
 
 
 def loc(
@@ -142,36 +132,4 @@ def loc(
 @click.pass_context
 def loc_command(ctx: click.Context, limit: int | None, path: str | None) -> int:
     """Report per-file physical line counts and gate on the configured ceiling."""
-    return loc(limit, path, config_path=_config_path(ctx))
-
-
-def _config_path(ctx: click.Context | None) -> str:
-    """Return the configuration file the group's ``--config`` option selected.
-
-    The click context object, a mapping and a namespace there are read in that order; a call with no
-    click context at all falls back to the default configuration file name.
-    """
-    if ctx is not None:
-        found = _config_value(ctx.obj)
-        if found is not None:
-            return found
-        root_params = ctx.find_root().params
-        for key in _CONFIG_KEYS:
-            found = _config_value(root_params.get(key))
-            if found is not None:
-                return found
-    return DEFAULT_CONFIG_PATH
-
-
-def _config_value(value: object) -> str | None:
-    """Return the configuration path ``value`` holds, or ``None`` when it holds none."""
-    if isinstance(value, str | Path):
-        text = str(value)
-        return text or None
-    if value is None:
-        return None
-    for key in _CONFIG_KEYS:
-        entry = value.get(key) if isinstance(value, Mapping) else getattr(value, key, None)
-        if isinstance(entry, str | Path) and str(entry):
-            return str(entry)
-    return None
+    return loc(limit, path, config_path=resolve_config_path(ctx))

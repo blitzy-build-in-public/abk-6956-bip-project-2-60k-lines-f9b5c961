@@ -50,7 +50,6 @@ from qrcheck.evidence.mux import decode_image, encode_png
 from qrcheck.report.model import Reason, Status
 
 # --- Fixture constants: the known geometry every case is rendered at ---
-#
 # Deterministic by construction -- integer pixels per module and a fixed quiet zone -- so the pitch
 # the sampler measures is known in advance and asserted exactly rather than compared against a
 # second measurement. The payload fits Version 1 at every error level, so one payload serves all.
@@ -66,8 +65,9 @@ _QUIET_ZONE_MODULES: Final = 4
 #: The payload every rendered symbol carries: three alphanumeric characters fit Version 1 at EC H.
 _PAYLOAD: Final = b"QR1"
 
-#: The (version, error level) pairs sampled end to end. AAP §0.8.1 names Versions 1, 2, 7 and 10;
-#: Version 40 is added because its 177-module dimension punishes an off-by-one in the ``4V + 17``.
+#: The (version, error level) pairs sampled end to end: Versions 1 and 2 for the smallest symbols,
+#: 7 and 10 for the mid-range ones, and Version 40, whose 177-module dimension punishes an
+#: off-by-one in the ``4V + 17``.
 _SAMPLE_VERSIONS: Final[tuple[tuple[int, str], ...]] = (
     (1, "L"),
     (1, "M"),
@@ -85,8 +85,7 @@ _SAMPLE_VERSIONS: Final[tuple[tuple[int, str], ...]] = (
 _ILLEGAL_DIMENSIONS: Final[tuple[int, ...]] = (0, -1, -21, 20, 22, 23, 178, 181)
 
 #: The module-import graph the sampler is allowed: the standard library, numpy and the decode types
-#: it
-#: returns. ``cv2``, ``PIL``, ``zxingcpp`` and ``segno`` must not appear (AAP §0.3.2).
+#: it returns. ``cv2``, ``PIL``, ``zxingcpp`` and ``segno`` must not appear.
 _ALLOWED_SAMPLER_IMPORTS: Final[tuple[str, ...]] = (
     "__future__",
     "collections.abc",

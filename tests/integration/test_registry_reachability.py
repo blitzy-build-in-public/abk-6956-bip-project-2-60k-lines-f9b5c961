@@ -1,19 +1,17 @@
 """Registry reachability: the checks that exist are the checks a real run executes.
 
 The product's MUST is that every check implements the same contract and is discoverable from
-the registry, and that no check is importable-only or callable solely from a test (AAP
-§0.1.2, §0.3.4). ``qrcheck/registry/check.py`` owns check identity, ``qrcheck list``
-publishes it and a run's ``summary.json`` records what executed; this module holds all three
-against each other (AAP §0.4.1, §0.6.1 #8), so a check registered but never run, run but
-never registered, omitted from the listing, renamed, dropped or doubled fails here by name --
-including the registry's exact twenty-one identifiers, the family partition, each entry's
-``CheckContract`` fields, registration on package import alone, and the built-in targets'
-expected failing sets.
+the registry, and that no check is importable-only or callable solely from a test.
+``qrcheck/registry/check.py`` owns check identity, ``qrcheck list`` publishes it and a run's
+``summary.json`` records what executed; this module holds all three against each other, so a
+check registered but never run, run but never registered, omitted from the listing, renamed,
+dropped or doubled fails here by name -- including the registry's exact twenty-one identifiers,
+the family partition, each entry's ``CheckContract`` fields, registration on package import
+alone, and the built-in targets' expected failing sets.
 
 The executed-set half reads the session-scoped ``reference_report`` fixture, so the suite is
-paid for once per session (AAP §0.6.1 #9). The marker is ``e2e`` because of that suite,
-nothing here skips, retries or mocks, and the only file written is a configuration under
-``tmp_path`` (AAP §0.11.1)."""
+paid for once per session. The marker is ``e2e`` because of that suite, nothing here skips,
+retries or mocks, and the only file written is a configuration under ``tmp_path``."""
 
 from __future__ import annotations
 
@@ -32,11 +30,12 @@ from qrcheck.registry.expectations import SELF_CHECK_TARGETS, validate_against_r
 from qrcheck.targets.base import Capability
 
 # The end-to-end half reads a full reference run's report, so ``-m "not e2e"`` deselects it in
-# the fast job (AAP §0.6.4); the ``list --json`` call it also makes runs no suite.
+# the fast job; the ``list --json`` call it also makes runs no suite.
 pytestmark = pytest.mark.e2e
 
-# The twenty-one identifiers of AAP §0.3.4, literal on purpose: comparing the registry against
-# ``CHECK_IDS`` would be the registry agreeing with itself, and this gate must catch a rename.
+# The twenty-one identifiers ``qrcheck/registry/check.py`` declares, literal on purpose: comparing
+# the registry against ``CHECK_IDS`` would be the registry agreeing with itself, and this gate must
+# catch a rename.
 _EXPECTED_CHECK_IDS: Final[frozenset[str]] = frozenset(
     {
         "CL-ARTIFACTS",
@@ -67,8 +66,9 @@ _EXPECTED_CHECK_IDS: Final[frozenset[str]] = frozenset(
 # the count constant, and the count is the acceptance criterion.
 _EXPECTED_CHECK_COUNT: Final[int] = 21
 
-# The nine families of AAP §0.8.1's table as a partition of the twenty-one identifiers, compared
-# set of sets: a different naming vocabulary is cosmetic, a split or merged family is structural.
+# The nine families of ``qrcheck.registry.check.FAMILY_BY_PREFIX`` as a partition of the twenty-one
+# identifiers, compared set of sets: a different naming vocabulary is cosmetic, a split or merged
+# family is structural.
 _EXPECTED_FAMILY_PARTITION: Final[frozenset[frozenset[str]]] = frozenset(
     {
         frozenset({"RT-ROUNDTRIP"}),
@@ -83,7 +83,7 @@ _EXPECTED_FAMILY_PARTITION: Final[frozenset[frozenset[str]]] = frozenset(
     }
 )
 
-# The five keys AAP §0.8.3 fixes for one ``--json`` row, and no others.
+# The five keys ``qrcheck list --json`` publishes for one row, and no others.
 _LIST_JSON_KEYS: Final[frozenset[str]] = frozenset(
     {"id", "title", "family", "requires", "dependencies"}
 )
@@ -110,7 +110,7 @@ _CONFIG_REPORT_DIR: Final[str] = "reports-list"
 @pytest.fixture(name="registry")
 def _registry() -> Mapping[str, CheckContract]:
     """Return the populated registry, imported the way the product's entry points import it."""
-    import qrcheck.checks  # noqa: F401 -- registration is this import's side effect
+    import qrcheck.checks  # registration is this import's side effect
     return REGISTRY
 
 
@@ -133,14 +133,14 @@ def _list_rows(
     )
     rows = json.loads(result.stdout)
     assert isinstance(rows, list), (
-        f"the --json form must be an object array (AAP §0.8.3), got {type(rows).__name__}"
+        f"the --json form must be an object array, got {type(rows).__name__}"
     )
     return rows
 
 
 def test_registry_is_populated_and_exactly_twenty_one() -> None:
     """Importing the checks registers the twenty-one declared ones, and nothing else."""
-    import qrcheck.checks  # noqa: F401 -- registration is this import's side effect
+    import qrcheck.checks  # registration is this import's side effect
 
     registered = sorted(REGISTRY)
     assert registered, (
@@ -184,7 +184,7 @@ def test_every_registered_check_executed_in_the_reference_run(
     assert passed == registered, (
         f"registered checks with no passed result in the reference run: "
         f"{sorted(registered - passed)}; a check that only skipped or errored proved nothing "
-        f"about the target (AAP §0.4.1)"
+        f"about the target"
     )
 
 
@@ -221,7 +221,7 @@ def test_every_registry_entry_appears_in_list_json(
         f"{sorted(set(listed) - set(registry))}"
     )
     assert listed == sorted(listed), (
-        f"the listing must be ascending by identifier (AAP §0.5.3), got {listed}"
+        f"the listing must be ascending by identifier, got {listed}"
     )
     assert len(listed) == _EXPECTED_CHECK_COUNT, (
         f"the listing published {len(listed)} rows for {len(set(listed))} identifiers; the "
@@ -250,7 +250,7 @@ def test_every_registry_entry_appears_in_list_json(
                 f"{check_id}: {field} must be a JSON array, got {type(value).__name__}"
             )
             assert value == sorted(value), (
-                f"{check_id}: {field} must be emitted sorted (AAP §0.5.3), got {value}"
+                f"{check_id}: {field} must be emitted sorted, got {value}"
             )
         for member in row["requires"]:
             assert member in _CAPABILITY_VALUES, (
@@ -268,12 +268,12 @@ def test_every_registry_entry_appears_in_list_json(
         )
 
 
-def test_family_partition_matches_the_plan(
+def test_family_partition_matches_the_registry(
     run_cli: Callable[..., Any],
     write_config: Callable[..., Path],
     tmp_path: Path,
 ) -> None:
-    """The nine families partition the twenty-one checks exactly as the plan's table does."""
+    """The nine families partition the twenty-one checks exactly as the expected partition does."""
     rows = _list_rows(run_cli, write_config, tmp_path)
     grouped: dict[str, set[str]] = {}
     for row in rows:
@@ -282,7 +282,7 @@ def test_family_partition_matches_the_plan(
     partition = frozenset(frozenset(ids) for ids in grouped.values())
     assert partition == _EXPECTED_FAMILY_PARTITION, (
         f"the listing's families partition the checks as "
-        f"{sorted(sorted(ids) for ids in partition)}; the plan's mapping partitions them as "
+        f"{sorted(sorted(ids) for ids in partition)}; the expected partition holds them as "
         f"{sorted(sorted(ids) for ids in _EXPECTED_FAMILY_PARTITION)}"
     )
     covered = frozenset().union(*grouped.values())
