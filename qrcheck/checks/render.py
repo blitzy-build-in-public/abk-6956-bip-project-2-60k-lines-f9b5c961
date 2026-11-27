@@ -36,12 +36,20 @@ its overlay from the smallest legal symbol. The one temporary file written is th
 with the ``qrcheck-`` prefix ``CL-ARTIFACTS`` scans for and removed in a ``finally`` block.
 
 A vector artefact is a target's bytes and is bounded before the framework spends anything on it: a
-document longer than :data:`_MAX_SVG_BYTES`, or one that declares a document type definition or an
-entity, is refused rather than parsed, because the parser expands an internal entity as it reads
-(CWE-776). A declared canvas above :data:`_MAX_RASTER_SIDE_PX` per side is then priced from the one
-parse of the document and reported as ``value_mismatch``, because what an artefact says about itself
-is a verdict about the target; only a rasterizer or host fault stays an ``error`` result (AAP
-§0.3.4's exit codes).
+document longer than :data:`_MAX_SVG_BYTES`, or one that declares a document type definition, an
+entity or an ``<?xml-stylesheet`` instruction, is refused rather than parsed, because the parser
+expands an internal entity as it reads (CWE-776) and drops a processing instruction instead of
+resolving it, and one whose ``href``, CSS ``url(...)`` or ``@import`` names anything but a
+same-document ``#fragment`` -- or that spells such a reference with a CSS escape, the one spelling
+a lexical scan cannot see -- is refused before any rasterizer runs, because the tool would
+otherwise fetch a host this framework never chose or read a local file (AAP NFR-2). All of those
+refusals belong to :func:`_parse_svg`, the one parse path, so no caller can hand a document to a
+rasterizer without them. A declared canvas above :data:`_MAX_RASTER_SIDE_PX` per side is then
+priced from that parse and reported as ``value_mismatch``, because what an artefact says about
+itself is a verdict about the target; only a rasterizer or host fault stays an ``error`` result
+(AAP §0.3.4's exit codes), and each of the rasterizer's streams is captured under
+:data:`_MAX_CAPTURED_RASTER_BYTES` with only a short tail of it carried into a diagnostic, so
+neither a flood nor one long message escapes it.
 
 A raster artefact is bounded the same way before it is read: its header is probed first, and one
 declaring more than :data:`_MAX_ARTEFACT_SIDE_PX` per side is reported as ``sampling_failed``
@@ -57,12 +65,14 @@ from __future__ import annotations
 import contextlib
 import importlib
 import importlib.util
+import inspect
 import math
 import os
 import re
 import shutil
 import subprocess
 import tempfile
+import threading
 import time
 import xml.etree.ElementTree as ElementTree
 from collections.abc import Callable, Iterator, Mapping
@@ -155,6 +165,28 @@ SVG_RASTERIZER_AUTO_ORDER: Final[tuple[str, ...]] = (
 # against a hung rasterizer rather than a performance budget (that is ``[checks.performance]``).
 RASTERIZER_TIMEOUT_S: Final[float] = 60.0
 
+# The most this module keeps from either stream of the rasterizer it runs: the cli adapter's bound
+# on one stream of a target (``qrcheck.targets.cli._MAX_CAPTURED_STREAM_BYTES``) and the http
+# adapter's bound on one response body (``qrcheck.targets.http._MAX_RESPONSE_BODY_BYTES``) -- the
+# same 16 MiB, because no legitimate PNG or SVG of a Model 2 symbol approaches any of them. A
+# rasterizer reading a target's document is as untrusted as the target is, and a crafted canvas can
+# make it emit far more than it declares, so a stream that passes this bound is refused rather than
+# buffered.
+_MAX_CAPTURED_RASTER_BYTES: Final[int] = 16 * 1024 * 1024
+
+# How many characters of a failed rasterizer's stderr one diagnostic keeps: the cli adapter's
+# ``DIAGNOSTIC_TAIL_CHARS``, since a message may not carry a whole captured stream, and the end of
+# it is the part that says what went wrong.
+_RASTERIZER_DIAGNOSTIC_CHARS: Final[int] = 2000
+
+# How many bytes one read from a captured rasterizer stream asks for: one pipe buffer, so a flood
+# costs a bounded number of reads rather than one call per byte.
+_RASTERIZER_READ_CHUNK_BYTES: Final[int] = 64 * 1024
+
+# How long a capture waits for its drain thread once the rasterizer has exited: the wait is for the
+# bytes already in the pipe, never for the tool, which has already exited.
+_RASTERIZER_DRAIN_JOIN_TIMEOUT_S: Final[float] = 5.0
+
 # The largest canvas a rasterizer is asked to render, per side, in pixels: the ceiling the
 # decode pipeline applies, from ``[checks.performance] decode_image_px`` (AAP §0.6.2).  A
 # target's SVG is untrusted and ``rsvg-convert`` allocates the canvas it is told to draw.
@@ -176,13 +208,16 @@ _MAX_ARTEFACT_SIDE_PX: Final[int] = 8 * DEFAULT_DECODE_IMAGE_PX
 # data whatever its scale, because the path is drawn with a transform, so this ceiling is generous.
 _MAX_SVG_BYTES: Final[int] = 4 * 1024 * 1024
 
-# The two XML declarations a target's SVG may not carry: an internal entity is expanded while the
-# document is read, and a document type definition is what gives it something to expand.  Each is
-# matched before the parse, in every spelling a document the XML parser accepts can carry it in --
-# the single-byte form ASCII, Latin-1 and UTF-8 share, and UTF-16 in both byte orders -- because a
-# scan of the raw bytes that knew only the single-byte spelling would let a UTF-16 document through
-# to the parser with its declaration intact.
-_REFUSED_XML_DECLARATIONS: Final[tuple[str, ...]] = ("<!DOCTYPE", "<!ENTITY")
+# The XML declarations a target's SVG may not carry.  An internal entity is expanded while the
+# document is read, and a document type definition is what gives it something to expand; a
+# ``<?xml-stylesheet`` instruction names a resource a renderer would fetch, and the parser drops a
+# processing instruction rather than resolving it, so no scan of the parsed tree can see the
+# reference in it and it has to be refused from the raw bytes like the other two.  Each is matched
+# before the parse, in every spelling a document the XML parser accepts can carry it in -- the
+# single-byte form ASCII, Latin-1 and UTF-8 share, and UTF-16 in both byte orders -- because a scan
+# of the raw bytes that knew only the single-byte spelling would let a UTF-16 document through to
+# the parser with its declaration intact.
+_REFUSED_XML_DECLARATIONS: Final[tuple[str, ...]] = ("<!DOCTYPE", "<!ENTITY", "<?xml-stylesheet")
 
 
 def _declaration_spellings(name: str) -> tuple[bytes, ...]:
@@ -475,6 +510,186 @@ def _rasterizer_command(name: str) -> tuple[str, ...]:
     )
 
 
+class _BoundedRasterCapture:
+    """Capture at most :data:`_MAX_CAPTURED_RASTER_BYTES` of one rasterizer output stream.
+
+    The rule the cli adapter applies to a target's streams, written again here because this layer
+    may reach only the adapter port and ``tests/unit/test_layering.py`` holds it that way: one
+    instance owns one ``os.pipe()`` and one daemon thread. ``subprocess.run`` is handed
+    :attr:`write_fd` as its ``stdout=`` or ``stderr=``, so the tool writes straight into the pipe
+    and the thread reads the other end until the tool closes it, keeping at most the documented
+    bound. A stream that passes the bound sets :attr:`overflowed` and closes its read end, so the
+    tool's next write fails instead of this process buffering output it will never use.
+
+    :meth:`finish` releases this process's ends of the pipe once the tool has exited, and is safe to
+    call more than once, so the success, timeout and spawn-failure paths all call it without knowing
+    which one they are on.
+    """
+
+    def __init__(self, name: str) -> None:
+        """Create the pipe for the `name` stream -- ``"stdout"`` or ``"stderr"`` -- and drain it.
+
+        Raises:
+            OSError: The pipe itself could not be created.
+            RuntimeError: The drain thread could not be started; both descriptors are released
+                first, so a caller sees one failure rather than a leaked pipe.
+        """
+        self._name: str = name
+        self._buffer: bytearray = bytearray()
+        self._received: int = 0
+        self._overflowed: bool = False
+        self._read_fd: int = -1
+        self._write_fd: int = -1
+        self._read_fd, self._write_fd = os.pipe()
+        self._thread: threading.Thread = threading.Thread(
+            target=self._drain,
+            name=f"qrcheck-raster-{name}",
+            daemon=True,
+        )
+        try:
+            self._thread.start()
+        except RuntimeError:
+            self._close_read_fd()
+            self._close_write_fd()
+            raise
+
+    @property
+    def write_fd(self) -> int:
+        """Return the descriptor to hand ``subprocess.run`` as this stream's destination."""
+        return self._write_fd
+
+    @property
+    def name(self) -> str:
+        """Return the stream's name, ``"stdout"`` or ``"stderr"``."""
+        return self._name
+
+    @property
+    def bytes(self) -> bytes:
+        """Return the bytes captured from this stream, at most the documented bound of them."""
+        return bytes(self._buffer)
+
+    @property
+    def received(self) -> int:
+        """Return how many bytes arrived on this stream, the over-bound ones included."""
+        return self._received
+
+    @property
+    def overflowed(self) -> bool:
+        """Return whether this stream delivered more than the documented bound."""
+        return self._overflowed
+
+    def finish(self) -> None:
+        """Release this process's ends of the pipe once the rasterizer has exited.
+
+        The write end is closed first, so a drain thread still reading sees end-of-file and returns,
+        and the thread is then joined for :data:`_RASTERIZER_DRAIN_JOIN_TIMEOUT_S`. The read end is
+        closed only once the thread has ended, because closing a descriptor another thread may still
+        be reading is not safe, and a thread still blocked there keeps its descriptor and its daemon
+        status. Idempotent: a second call finds the descriptors already closed.
+        """
+        self._close_write_fd()
+        self._thread.join(_RASTERIZER_DRAIN_JOIN_TIMEOUT_S)
+        if not self._thread.is_alive():
+            self._close_read_fd()
+
+    def _drain(self) -> None:
+        """Read this stream until the rasterizer closes it or the bound is passed."""
+        while True:
+            try:
+                chunk = os.read(self._read_fd, _RASTERIZER_READ_CHUNK_BYTES)
+            except OSError:
+                # A read end closed on the over-bound path, or a descriptor the kernel refused:
+                # either way nothing more can be read from this stream.
+                return
+            if not chunk:
+                return
+            self._received += len(chunk)
+            room = _MAX_CAPTURED_RASTER_BYTES - len(self._buffer)
+            if room > 0:
+                self._buffer += chunk[:room]
+            if self._received > _MAX_CAPTURED_RASTER_BYTES:
+                self._overflowed = True
+                self._close_read_fd()
+                return
+
+    def _close_read_fd(self) -> None:
+        """Close the read end once, if it is still open."""
+        read_fd, self._read_fd = self._read_fd, -1
+        if read_fd < 0:
+            return
+        with contextlib.suppress(OSError):
+            os.close(read_fd)
+
+    def _close_write_fd(self) -> None:
+        """Close this process's copy of the write end once, if it is still open."""
+        write_fd, self._write_fd = self._write_fd, -1
+        if write_fd < 0:
+            return
+        with contextlib.suppress(OSError):
+            os.close(write_fd)
+
+
+def _open_rasterizer_captures(
+    name: str, argv: tuple[str, ...]
+) -> tuple[_BoundedRasterCapture, _BoundedRasterCapture]:
+    """Return one bounded capture per output stream of the rasterizer about to be spawned.
+
+    Opening them is part of spawning: with nowhere to write, the tool is not run at all, and the
+    capture this call already created is released rather than left behind. The pair is returned in
+    stream order, stdout first.
+
+    Raises:
+        RuntimeError: A pipe or a drain thread could not be created, so no rasterizer ran and this
+            is a framework fault rather than a verdict about the target.
+    """
+    captures: list[_BoundedRasterCapture] = []
+    try:
+        captures.append(_BoundedRasterCapture("stdout"))
+        captures.append(_BoundedRasterCapture("stderr"))
+    except (OSError, RuntimeError) as exc:
+        for capture in captures:
+            capture.finish()
+        raise RuntimeError(
+            f"SVG rasterizer {name!r} was not run: its output could not be captured "
+            f"({type(exc).__name__}: {exc}); command {list(argv)}"
+        ) from None
+    return captures[0], captures[1]
+
+
+def _raise_for_overbound_stream(
+    name: str,
+    argv: tuple[str, ...],
+    *captures: _BoundedRasterCapture,
+) -> None:
+    """Refuse a rasterizer stream that passed the documented byte bound.
+
+    The decision is taken before the exit status and the empty-output checks, so a tool that flooded
+    one stream is refused for that alone: its output is unusable whatever it exited with, which is
+    the rule the cli adapter applies to a target's stream.
+
+    Raises:
+        RuntimeError: One stream delivered more than :data:`_MAX_CAPTURED_RASTER_BYTES`. The message
+            names the stream, the ceiling it passed and how much arrived.
+    """
+    for capture in captures:
+        if not capture.overflowed:
+            continue
+        raise RuntimeError(
+            f"SVG rasterizer {name!r} wrote more than the {_MAX_CAPTURED_RASTER_BYTES}-byte "
+            f"ceiling to its {capture.name} ({capture.received} bytes arrived), so its output is "
+            f"unusable: command {list(argv)}"
+        )
+
+
+def _diagnostic_tail(capture: _BoundedRasterCapture) -> str:
+    """Return at most the last :data:`_RASTERIZER_DIAGNOSTIC_CHARS` of a captured stream, decoded.
+
+    A failure message quotes what the tool said, and a tool writing close to the capture ceiling
+    would otherwise put megabytes of stderr into one diagnostic.
+    """
+    return capture.bytes[-_RASTERIZER_DIAGNOSTIC_CHARS:].decode("utf-8", "replace")
+
+
 def rasterize_svg(
     svg_bytes: bytes,
     status: RasterizerStatus,
@@ -485,23 +700,30 @@ def rasterize_svg(
     The product's only rasterization: ``cairosvg`` is driven through its module when discovery found
     one, and every other rasterizer is an argv-only subprocess reading the SVG on stdin and writing
     the PNG to stdout, with :data:`RASTERIZER_TIMEOUT_S` as the backstop. Nothing is written to
-    disk.
+    disk. Both of the child's streams are captured through :class:`_BoundedRasterCapture`, so no
+    document can make the tool grow this process past :data:`_MAX_CAPTURED_RASTER_BYTES` per stream,
+    and a failure quotes only the tail of what the tool said.
 
-    ``canvas`` is the ``(width, height, unit)`` the caller already parsed from `svg_bytes` with
-    :func:`_svg_canvas`; passing it keeps this function's declared-canvas guard from parsing the
-    document a second time, and ``None`` parses it here for the guard alone, so a caller that hands
-    an artefact straight in is still protected.
+    The document is read through :func:`_parse_svg` on every call, whichever rasterizer answers, so
+    no caller can hand a document to third-party code without the byte bound, the declaration
+    refusal and the same-document reference allow-list running first. ``canvas`` is the
+    ``(width, height, unit)`` the caller already parsed from `svg_bytes` with :func:`_svg_canvas`,
+    so this call need not read it out of the tree again; ``None`` takes it from this call's own
+    parse, and a canvas that cannot be read is left to the rasterizer, since that is a geometry
+    question the tool answers.
 
     Raises:
-        RuntimeError: No rasterizer is available, the configured one emitted nothing, exited non-
-            zero, timed out or could not be executed; the message names the command, its exit status
-            and its stderr, and the runner records an ``error`` result rather than a verdict about
-            the target. A declared canvas above :data:`_MAX_RASTER_SIDE_PX` is the one RuntimeError
-            a target's own artefact can provoke, and it is defence in depth: a check prices the
-            canvas it parsed before calling here and reports that case as ``value_mismatch``, so
-            this raise reaches only a caller that skipped the pricing and it is then a framework
-            fault. ValueError: ``svg_bytes`` is not bytes-like, or `status` names a rasterizer this
-            module cannot drive.
+        RuntimeError: No rasterizer is available, one of its streams passed the capture ceiling, the
+            configured one emitted nothing, exited non-zero, timed out or could not be executed; the
+            message names the command, its exit status and the tail of its stderr, and the runner
+            records an ``error`` result rather than a verdict about the target. A declared canvas
+            above :data:`_MAX_RASTER_SIDE_PX` and a refused external reference are the two
+            RuntimeErrors a target's own artefact can provoke, and both are defence in depth: a
+            check prices the canvas and scans the references it parsed before calling here and
+            reports that case as ``value_mismatch``, so either raise reaches only a caller that
+            skipped the case-level pricing and it is then a framework fault.
+            ValueError: ``svg_bytes`` is not bytes-like, or `status` names a rasterizer this module
+            cannot drive.
     """
     if not isinstance(svg_bytes, (bytes, bytearray, memoryview)):
         raise ValueError(f"svg_bytes must be bytes; got {type(svg_bytes).__name__}")
@@ -511,9 +733,18 @@ def rasterize_svg(
             f"{status.configured!r}; discovery attempted {list(status.attempted)}"
         )
     payload = bytes(svg_bytes)
-    declared_side_px = (
-        _declared_canvas_side_px(payload) if canvas is None else _canvas_side_px(*canvas)
-    )
+    try:
+        root = _parse_svg(payload)
+    except (ElementTree.ParseError, ValueError) as error:
+        raise RuntimeError(
+            f"the SVG artefact cannot be rasterized: {type(error).__name__}: {error}"
+        ) from None
+    declared_side_px: float | None = None
+    if canvas is not None:
+        declared_side_px = _canvas_side_px(*canvas)
+    else:
+        with contextlib.suppress(ValueError):
+            declared_side_px = _canvas_side_px(*_canvas_of(root))
     if declared_side_px is not None and declared_side_px > _MAX_RASTER_SIDE_PX:
         raise RuntimeError(
             f"the SVG declares a canvas of {declared_side_px:g} px per side, above the "
@@ -524,53 +755,112 @@ def rasterize_svg(
     if name == "cairosvg":
         return _rasterize_with_cairosvg(payload)
     argv = _rasterizer_command(name)
+    stdout_capture, stderr_capture = _open_rasterizer_captures(name, argv)
     try:
-        completed = subprocess.run(
-            list(argv),
-            input=payload,
-            shell=False,
-            capture_output=True,
-            timeout=RASTERIZER_TIMEOUT_S,
-            check=False,
-        )
+        try:
+            completed = subprocess.run(
+                list(argv),
+                input=payload,
+                shell=False,
+                stdout=stdout_capture.write_fd,
+                stderr=stderr_capture.write_fd,
+                timeout=RASTERIZER_TIMEOUT_S,
+                check=False,
+            )
+        finally:
+            # Both pipes are released on every path -- success, timeout, spawn failure -- before any
+            # error is converted, so neither a descriptor nor a drain thread outlives this call.
+            stdout_capture.finish()
+            stderr_capture.finish()
     except subprocess.TimeoutExpired:
+        _raise_for_overbound_stream(name, argv, stdout_capture, stderr_capture)
         raise RuntimeError(
             f"SVG rasterizer {name!r} did not finish within {RASTERIZER_TIMEOUT_S} s: "
             f"command {list(argv)}"
         ) from None
     except OSError as exc:
+        # Only a spawn failure reaches here: subprocess.run raises OSError from execvp alone, before
+        # any of the child's output is read.
+        _raise_for_overbound_stream(name, argv, stdout_capture, stderr_capture)
         raise RuntimeError(
             f"SVG rasterizer {name!r} could not be executed: command {list(argv)} failed "
             f"with {type(exc).__name__}: {exc}"
         ) from None
+    _raise_for_overbound_stream(name, argv, stdout_capture, stderr_capture)
     if completed.returncode != 0:
         raise RuntimeError(
             f"SVG rasterizer {name!r} failed: command {list(argv)} exited "
-            f"{completed.returncode} and reported "
-            f"{completed.stderr.decode('utf-8', 'replace')!r}"
+            f"{completed.returncode} and reported {_diagnostic_tail(stderr_capture)!r}"
         )
-    if not completed.stdout:
+    if not stdout_capture.bytes:
         raise RuntimeError(
             f"SVG rasterizer {name!r} produced no output: command {list(argv)} exited 0 "
-            f"and wrote nothing to stdout, stderr was "
-            f"{completed.stderr.decode('utf-8', 'replace')!r}"
+            f"and wrote nothing to stdout, stderr was {_diagnostic_tail(stderr_capture)!r}"
         )
-    return completed.stdout
+    return stdout_capture.bytes
+
+
+def _accepts_url_fetcher(svg2png: object) -> bool:
+    """Report whether a ``cairosvg`` module's ``svg2png`` takes a ``url_fetcher`` keyword.
+
+    ``cairosvg`` is never a dependency, so the installed version is whatever the host provides and
+    the keyword is offered only where the callable accepts it: a ``**kwargs`` catch-all counts, a
+    parameter of that name counts unless it is positional-only, and a callable whose signature
+    cannot be read counts as not accepting it. An older or a wrapped ``cairosvg`` therefore still
+    runs, and is still protected by the document's own reference scan.
+    """
+    try:
+        parameters = inspect.signature(svg2png).parameters
+    except (TypeError, ValueError):
+        # A C callable or an object without ``__signature__`` has none to read; passing the keyword
+        # anyway could turn a working rasterizer into a refused argument, so it is not passed.
+        return False
+    named = parameters.get("url_fetcher")
+    if named is not None:
+        return named.kind is not inspect.Parameter.POSITIONAL_ONLY
+    return any(
+        parameter.kind is inspect.Parameter.VAR_KEYWORD for parameter in parameters.values()
+    )
+
+
+def _refuse_url(url: str, *args: object, **kwargs: object) -> bytes:
+    """Refuse every URL a ``cairosvg`` call asks for: the restricted fetcher itself.
+
+    :func:`_parse_svg` has already refused every reference outside the document, so reaching here
+    means the module tried to resolve something that scan did not see, and refusing keeps the
+    rasterizer inside the document either way (AAP NFR-2). The trailing parameters absorb whatever
+    the caller passes after the URL.
+
+    Raises:
+        _ExternalReferenceRefused: For every URL, unconditionally.
+    """
+    del args, kwargs
+    raise _ExternalReferenceRefused(
+        f"the SVG artefact made the cairosvg rasterizer fetch {url!r}: a rasterizer may not reach "
+        f"a host this framework never chose or read a local file (AAP NFR-2)"
+    )
 
 
 def _rasterize_with_cairosvg(svg_bytes: bytes) -> bytes:
     """Rasterize `svg_bytes` through an importable ``cairosvg`` module.
 
     ``cairosvg`` is never a dependency: it is discovered at run time from the host's environment,
-    so the import happens on the one path that needs it.
+    so the import happens on the one path that needs it. Where the module's ``svg2png`` takes a
+    ``url_fetcher``, a fetcher that refuses every URL is passed, because the module's own default
+    resolves whatever the document names; a version whose ``svg2png`` does not take the keyword is
+    called as it always was.
 
     Raises:
-        RuntimeError: The module cannot be imported, refused the artefact, or produced nothing --
-            the same vocabulary a failing binary is reported in.
+        RuntimeError: The module cannot be imported, refused the artefact, tried to fetch a URL or
+            produced nothing -- the same vocabulary a failing binary is reported in.
     """
     try:
         module = importlib.import_module("cairosvg")
-        rasterized = module.svg2png(bytestring=svg_bytes)
+        svg2png = module.svg2png
+        arguments: dict[str, object] = {"bytestring": svg_bytes}
+        if _accepts_url_fetcher(svg2png):
+            arguments["url_fetcher"] = _refuse_url
+        rasterized = svg2png(**arguments)
     except (ImportError, OSError, RuntimeError, TypeError, ValueError) as exc:
         # The five shapes a rasterizer module can report: a failed import, a native library
         # that cannot open the input, its own error type, a refused argument, its own refusal.
@@ -1026,6 +1316,39 @@ _SVG_LENGTH: Final[re.Pattern[str]] = re.compile(
 # The separators an SVG ``viewBox`` may use between its four numbers.
 _SVG_SEPARATORS: Final[re.Pattern[str]] = re.compile(r"[,\s]+")
 
+# The only reference form a vector canvas may carry: a same-document fragment, which names an
+# element of the artefact itself -- ``href="#gradient"``, ``fill="url(#gradient)"``.  A conforming
+# encoder emits nothing else, so this allow-list costs no legitimate artefact while closing the sink
+# a rasterizer would otherwise be: handed ``<image xlink:href="http://host/x.png">`` or
+# ``fill="url(file:///etc/passwd)"``, the tool fetches a host this framework never chose or reads a
+# local file, and the raster it produces is persisted as evidence and inlined into ``index.html``.
+# That breaks AAP NFR-2's loopback-only guarantee with this product's own binary as the client.
+_FRAGMENT_PREFIX: Final[str] = "#"
+
+# The character a CSS escape sequence is written with, and the reason one anywhere in a document is
+# refused rather than scanned. CSS spells any character as a backslash and its code point, so both
+# ``fill:u\72 l(http://host/x)`` and ``fill:\75 rl(http://host/x)`` are ``url(http://host/x)``
+# to a renderer while neither carries the text ``url(`` a lexical scan of the value looks for; a
+# presentation attribute such as ``fill="\75 rl(...)"`` is a CSS property value in SVG, so the same
+# hole exists with no ``style`` attribute at all. A conforming encoder emits no backslash
+# anywhere -- segno's own SVG output carries none -- so refusing a document that carries one costs
+# no legitimate artefact, and judging the escape instead would mean re-implementing the renderer's
+# own value parser inside this scan (AAP NFR-2).
+_CSS_ESCAPE_MARKER: Final[str] = "\\"
+
+# Every CSS ``url(...)`` in an attribute value or in a style element's text, quoted or not, so the
+# scan sees the same reference however the document spells it.  Matched case-insensitively, because
+# a CSS function name is case-insensitive and ``URL(x)`` names the same resource as ``url(x)``.
+_CSS_URL_REFERENCE: Final[re.Pattern[str]] = re.compile(r"url\(\s*([^)]*)\)", re.IGNORECASE)
+
+# An ``@import`` directive, which fetches a whole stylesheet rather than naming an element: refused
+# wherever it appears, because there is no same-document form of it to allow.
+_CSS_IMPORT_DIRECTIVE: Final[re.Pattern[str]] = re.compile(r"@import\b", re.IGNORECASE)
+
+# The quote characters a CSS ``url(...)`` may wrap its target in, stripped before the target is
+# judged, so ``url("http://host/x")`` and ``url(http://host/x)`` are one reference.
+_REFERENCE_QUOTES: Final[str] = "\"'"
+
 
 def _svg_length(value: str | None, field_name: str) -> tuple[float, str]:
     """Return one SVG length attribute as ``(number, unit)``, the unit empty when absent.
@@ -1047,12 +1370,14 @@ def _refused_declaration(svg_bytes: bytes) -> str | None:
 
     The scan is case-insensitive, encoding-aware and runs before the parse, because an internal
     entity is expanded while the document is read: the point of the refusal is to spend neither the
-    memory nor the time on the expansion, so a check after the parse would be too late. Every
-    encoding the parser can decode is covered by :data:`_REFUSED_XML_DECLARATION_SPELLINGS`, so a
-    document cannot carry its declaration past this scan by choosing UTF-16 over the single-byte
-    form. A declaration spelled inside a comment or a CDATA section is refused as well -- a
-    conforming encoder emits neither declaration at all, so the conservative reading costs no
-    legitimate artefact.
+    memory nor the time on the expansion, so a check after the parse would be too late. A
+    ``<?xml-stylesheet`` instruction is refused here for the opposite reason -- the parser drops a
+    processing instruction rather than resolving it, so the tree the reference scan walks never
+    carries the resource it names. Every encoding the parser can decode is covered by
+    :data:`_REFUSED_XML_DECLARATION_SPELLINGS`, so a document cannot carry its declaration past this
+    scan by choosing UTF-16 over the single-byte form. A declaration spelled inside a comment or a
+    CDATA section is refused as well -- a conforming encoder emits none of them, so the conservative
+    reading costs no legitimate artefact.
     """
     lowered = svg_bytes.lower()
     found = sorted(
@@ -1063,23 +1388,103 @@ def _refused_declaration(svg_bytes: bytes) -> str | None:
     return found[0] if found else None
 
 
-def _svg_canvas(svg_bytes: bytes) -> tuple[float, float, str]:
-    """Return the vector canvas as ``(width, height, unit)``.
+class _ExternalReferenceRefused(ValueError):
+    """A vector artefact that references a resource outside the document itself.
 
-    ``viewBox`` is preferred when the document has one, because its third and fourth numbers are the
-    canvas in the user units the geometry is drawn in; ``width`` and ``height`` are the fallback.
-    Nothing else about the document is inspected: element names, attribute sets and byte layout are
-    encoder-defined and AAP §0.3.5 forbids asserting them.
+    A named member of the :exc:`ValueError` family, beside :class:`_ArtefactTooLarge`, so the
+    ``RN-SVG`` case can tell this refusal -- a verdict about the target's own artefact -- from a
+    canvas it simply could not read, while every other fault still escapes. The document it refuses
+    is never rasterized: a rasterizer handed an external reference fetches a host this framework
+    never chose or reads a local file, and the raster it produces would be persisted as evidence and
+    inlined into ``index.html`` (AAP NFR-2).
+    """
 
-    The artefact is untrusted, so it is bounded before it is parsed: a document longer than
-    :data:`_MAX_SVG_BYTES`, or one that declares a ``<!DOCTYPE`` or an ``<!ENTITY``, is refused
-    rather than read -- an internal entity is expanded as the document is read, before any geometry
-    a caller could check (CWE-776).
+
+def _is_same_document_fragment(reference: str) -> bool:
+    """Report whether `reference` names an element of the document that carries it.
+
+    The one form allowed: a leading ``#``, optionally after whitespace, exactly as
+    ``href="#gradient"`` and ``url(#gradient)`` write it. Everything else -- an ``http`` or
+    ``https`` URL, a ``file:`` URI, a ``data:`` URI, a bare relative or absolute name, a
+    protocol-relative ``//host/x`` -- names a resource outside the artefact.
+    """
+    return reference.lstrip().startswith(_FRAGMENT_PREFIX)
+
+
+def _refused_css_url(reference_text: str) -> str | None:
+    """Return the target of the first CSS ``url(...)`` in `reference_text` that leaves the document.
+
+    `reference_text` is an attribute value or a style element's text, so one rule covers
+    ``style="fill:url(...)"`` and ``<style>path{fill:url(...)}</style>`` alike. Each target is
+    stripped of its surrounding whitespace and quotes before it is judged, so the quoted and bare
+    spellings of one reference are refused the same way, and an empty one is not a reference.
+    """
+    for match in _CSS_URL_REFERENCE.finditer(reference_text):
+        target = match.group(1).strip().strip(_REFERENCE_QUOTES).strip()
+        if target and not _is_same_document_fragment(target):
+            return target
+    return None
+
+
+def _refused_reference(root: ElementTree.Element) -> tuple[str, str] | None:
+    """Return the first reference `root` carries that leaves the document, or ``None`` for none.
+
+    The pair is the reference's form and the value the case reports, so the refusal names what the
+    artefact tried to reach. Three forms make a rasterizer leave the document, and all three are
+    judged over the parsed tree rather than over the raw bytes, so a reference a namespace prefix or
+    a character reference spells differently is seen as the parser reads it: an ``href`` attribute
+    -- the expanded ``xlink:href`` included -- a CSS ``url(...)`` in any attribute value, and an
+    ``@import`` directive in any attribute value or style element's text, which has no
+    same-document form at all. An empty ``href`` is no reference and is skipped, and a style
+    element is matched by its expanded name, so the document's own prefix is irrelevant.
+
+    Every attribute value and every style element's text is refused when it carries
+    :data:`_CSS_ESCAPE_MARKER`, before any of those forms is looked for. A CSS escape sequence
+    spells any character as a backslash and its code point, so ``u\\72 l(http://host/x)`` and
+    ``\\75 rl(http://host/x)`` are one ``url(http://host/x)`` to a renderer while neither carries
+    the text this scan matches -- and a presentation attribute is a CSS property value in SVG, so a
+    ``fill="\\75 rl(...)"`` hides the same reference without a ``style`` attribute at all. The
+    escape is refused rather than resolved, because resolving it here would be a second
+    implementation of the renderer's own value parser; a conforming encoder emits no backslash, so
+    no legitimate artefact is refused.
+    """
+    for element in root.iter():
+        for name, value in element.attrib.items():
+            if _CSS_ESCAPE_MARKER in value:
+                return ("a CSS escape sequence", value)
+            if (name == "href" or name.endswith("}href")) and value.strip():
+                if not _is_same_document_fragment(value):
+                    return ("an 'href' reference", value)
+            if _CSS_IMPORT_DIRECTIVE.search(value) is not None:
+                return ("a CSS '@import' directive", value)
+            target = _refused_css_url(value)
+            if target is not None:
+                return ("a CSS 'url(...)' reference", target)
+        if element.tag == "style" or str(element.tag).endswith("}style"):
+            text = "".join(element.itertext())
+            if _CSS_ESCAPE_MARKER in text:
+                return ("a CSS escape sequence", text.strip())
+            if _CSS_IMPORT_DIRECTIVE.search(text) is not None:
+                return ("a CSS '@import' directive", text.strip())
+            target = _refused_css_url(text)
+            if target is not None:
+                return ("a CSS 'url(...)' reference", target)
+    return None
+
+
+def _parse_svg(svg_bytes: bytes) -> ElementTree.Element:
+    """Return the parsed document of a vector artefact, bounded and reference-checked first.
+
+    The one parse path every reader of a target's SVG takes, so no caller can hand a document to a
+    rasterizer without the reference scan. The refusals run in the cheap order: the byte length,
+    then the refused XML declarations, then -- after the parse -- any reference that is not a
+    same-document fragment.
 
     Raises:
-        ElementTree.ParseError: The bytes are not well-formed XML. ValueError: The canvas cannot be
-            read, is not square, or its sides disagree about their unit; the artefact is longer than
-            :data:`_MAX_SVG_BYTES`; or it carries a :data:`_REFUSED_XML_DECLARATIONS` declaration.
+        ElementTree.ParseError: The bytes are not well-formed XML.
+        _ExternalReferenceRefused: The document references a resource outside itself.
+        ValueError: The artefact is longer than :data:`_MAX_SVG_BYTES`, or it carries a
+            :data:`_REFUSED_XML_DECLARATIONS` declaration.
     """
     payload = bytes(svg_bytes)
     if len(payload) > _MAX_SVG_BYTES:
@@ -1092,10 +1497,60 @@ def _svg_canvas(svg_bytes: bytes) -> tuple[float, float, str]:
     if declaration is not None:
         raise ValueError(
             f"the SVG artefact declares {declaration}, which this framework refuses to parse: an "
-            f"internal entity is expanded while the document is read, before any canvas guard "
-            f"applies, so a target's vector artefact may not carry one"
+            f"internal entity is expanded while the document is read, and a stylesheet instruction "
+            f"names a resource the rasterizer would fetch, before any canvas guard applies, so a "
+            f"target's vector artefact may not carry one"
         )
     root = ElementTree.fromstring(payload)
+    refused = _refused_reference(root)
+    if refused is not None:
+        form, reference = refused
+        raise _ExternalReferenceRefused(
+            f"the SVG artefact carries {form} {reference!r}, which names a resource outside the "
+            f"document: a rasterizer handed a reference that leaves it fetches a host this "
+            f"framework never chose or reads a local file, and a conforming encoder emits only "
+            f"same-document '{_FRAGMENT_PREFIX}' fragments (AAP NFR-2)"
+        )
+    return root
+
+
+def _svg_canvas(svg_bytes: bytes) -> tuple[float, float, str]:
+    """Return the vector canvas as ``(width, height, unit)``.
+
+    ``viewBox`` is preferred when the document has one, because its third and fourth numbers are the
+    canvas in the user units the geometry is drawn in; ``width`` and ``height`` are the fallback.
+    Nothing else about the document is inspected: element names, attribute sets and byte layout are
+    encoder-defined and AAP §0.3.5 forbids asserting them.
+
+    The artefact is untrusted, so it is read through :func:`_parse_svg` and not around it: a
+    document longer than :data:`_MAX_SVG_BYTES`, or one that declares a ``<!DOCTYPE``, an
+    ``<!ENTITY`` or an ``<?xml-stylesheet`` instruction, is refused rather than parsed -- an
+    internal entity is expanded as the document is read, before any geometry a caller could check
+    (CWE-776), and a stylesheet instruction is one the parser drops, so no scan of the tree would
+    see it -- and one that references anything outside itself is refused before any rasterizer sees
+    it (:class:`_ExternalReferenceRefused`).
+
+    Raises:
+        ElementTree.ParseError: The bytes are not well-formed XML.
+        _ExternalReferenceRefused: The document references a resource outside itself.
+        ValueError: The canvas cannot be read, is not square, or its sides disagree about their
+            unit; the artefact is longer than :data:`_MAX_SVG_BYTES`; or it carries a
+            :data:`_REFUSED_XML_DECLARATIONS` declaration.
+    """
+    return _canvas_of(_parse_svg(svg_bytes))
+
+
+def _canvas_of(root: ElementTree.Element) -> tuple[float, float, str]:
+    """Return the canvas `root` declares as ``(width, height, unit)``.
+
+    The parsing half of :func:`_svg_canvas`, split from the byte-level refusals so a caller that
+    already holds the parsed document prices its canvas without reading the artefact again.
+
+    Raises:
+        ValueError: The canvas cannot be read, is not square, or its sides disagree about their
+            unit. SVG authoring is encoder-defined, so an unreadable canvas is reported as a
+            mismatch rather than assumed.
+    """
     view_box = root.get("viewBox")
     if view_box:
         parts = [part for part in _SVG_SEPARATORS.split(view_box.strip()) if part]
@@ -1127,30 +1582,15 @@ def _canvas_side_px(width: float, height: float, unit: str) -> float | None:
 
     A vector artefact is untrusted input and a rasterizer allocates the canvas it is told to draw,
     so the declared side is priced in pixels before any rasterizer runs. This is the pure arithmetic
-    half of that guard: a caller that has already parsed the document hands the canvas in, so one
-    case never parses its artefact twice. A unit outside :data:`_UNIT_TO_PX` (a percentage, say) has
-    no absolute extent and is left to the rasterizer -- this is a resource guard, not a geometry
-    assertion.
+    half of that guard: a caller that has already parsed the document hands the canvas in, so the
+    guard never reads it out of the tree a second time. A unit outside :data:`_UNIT_TO_PX` (a
+    percentage, say) has no absolute extent and is left to the rasterizer -- this is a resource
+    guard, not a geometry assertion.
     """
     factor = _UNIT_TO_PX.get(unit)
     if factor is None:
         return None
     return max(width, height) * factor
-
-
-def _declared_canvas_side_px(svg_bytes: bytes) -> float | None:
-    """Return the canvas side `svg_bytes` declares, in pixels, or ``None`` when it declares none.
-
-    The parsing form of :func:`_canvas_side_px`, for a caller that has not read the document yet --
-    :func:`rasterize_svg`'s own guard. A document whose canvas cannot be read is left to the
-    rasterizer: it is a geometry question the rasterizer answers, while the ceiling here is a
-    resource question this module answers first.
-    """
-    try:
-        width, height, unit = _svg_canvas(svg_bytes)
-    except (ElementTree.ParseError, ValueError):
-        return None
-    return _canvas_side_px(width, height, unit)
 
 
 # The one temporary artefact: the logo overlay bitmap
@@ -1886,15 +2326,18 @@ def _run_svg(
     """Rasterize one vector artefact and assert the geometry and the symbol it carries.
 
     Emits ``missing_dependency`` when no rasterizer was discovered, ``value_mismatch`` when the
-    document does not parse or is refused before the parse, its declared canvas is above
-    :data:`_MAX_RASTER_SIDE_PX` per side, its canvas is not a positive square carrying the module
-    count at one integral pitch, or the raster carries no decodable symbol, and ``sampling_failed``
-    when no module count could be implied. What a target's own artefact says is a verdict, so the
-    declared canvas is priced here from the one parse of the document and an oversized canvas is
-    ``value_mismatch`` with ``canvas_above_raster_ceiling``, leaving the run's exit code at 1
-    (AAP §0.3.4). A rasterizer or host fault -- a binary that exits non-zero, times out or writes
-    nothing -- raises, and the runner records an ``error`` result, which is exit 3. The decoded
-    payload is recorded rather than asserted: fidelity is ``RT-ROUNDTRIP``'s assertion.
+    document does not parse or is refused before the parse, references anything outside itself, its
+    declared canvas is above :data:`_MAX_RASTER_SIDE_PX` per side, its canvas is not a positive
+    square carrying the module count at one integral pitch, or the raster carries no decodable
+    symbol, and ``sampling_failed`` when no module count could be implied. What a target's own
+    artefact says is a verdict, so the declared canvas is priced and the document's references are
+    checked here from the one parse of it: an oversized canvas is ``value_mismatch`` with
+    ``canvas_above_raster_ceiling``, an unreadable canvas ``svg_canvas_unreadable``, and a reference
+    that leaves the document ``svg_external_reference``, each leaving the run's exit code at 1 and
+    refusing the rasterization entirely (AAP §0.3.4, AAP NFR-2). A rasterizer or host fault -- a
+    binary that exits non-zero, times out or writes nothing -- raises, and the runner records an
+    ``error`` result, which is exit 3. The decoded payload is recorded rather than asserted:
+    fidelity is ``RT-ROUNDTRIP``'s assertion.
     """
     # Deferred: importing this module starts no image stack in a process that only lists checks.
     from qrcheck.decode.matrix import module_count_for_version
@@ -1946,7 +2389,15 @@ def _run_svg(
     try:
         canvas_width, canvas_height, canvas_unit = _svg_canvas(symbol.image_bytes)
     except (ElementTree.ParseError, ValueError) as error:
-        decoded["problems"] = ["svg_canvas_unreadable"]
+        # A reference to anything outside the document is the target's own artefact trying to send
+        # this framework's rasterizer to a host or a file of its choosing, so it is a verdict about
+        # the target with its own problem token -- exit 1 -- and not the framework fault an
+        # unreadable canvas is priced as (AAP §0.3.4 exit codes, AAP NFR-2).
+        decoded["problems"] = [
+            "svg_external_reference"
+            if isinstance(error, _ExternalReferenceRefused)
+            else "svg_canvas_unreadable"
+        ]
         decoded["svg_error"] = f"{type(error).__name__}: {error}"
         result = support.fail(
             RN_SVG,

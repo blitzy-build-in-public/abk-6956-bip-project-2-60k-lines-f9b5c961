@@ -29,7 +29,12 @@ visible too.
 Three reasons are asserted as the owning module documents them: ``SY-MASK``, ``IV-BAD-OPTION``
 and ``CL-ARTIFACTS`` report ``value_mismatch``, and ``RN-SVG``'s round too rather than
 ``sampling_failed``. ``DM-RESILIENCE``'s eight invocations are held against each family module's
-own ``EXPECTED_ENCODES``, and ``DM-SEEDED`` clears the memo ``DM-RESILIENCE`` leaves first."""
+own ``EXPECTED_ENCODES``, and ``DM-SEEDED`` clears the memo ``DM-RESILIENCE`` leaves first.
+
+``RN-SVG``'s document guard is additionally driven through the product's own ``rasterize_svg``
+rather than the stub: the reference allow-list the rasterizer sink enforces and the byte bound it
+captures with are proved against the real function, never against a stand-in for it.
+"""
 
 from __future__ import annotations
 
@@ -39,6 +44,7 @@ import io
 import math
 import sys
 import tempfile
+import types
 import zlib
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
@@ -67,6 +73,7 @@ from qrcheck.registry.check import (
     registered_ids,
 )
 from qrcheck.report.model import CaseResult, Counts, Reason, Status
+from qrcheck.targets import cli as cli_adapter
 from qrcheck.targets.base import (
     GenerateRequest,
     GeneratedSymbol,
@@ -469,6 +476,23 @@ NEGATIVE_CASES: Final[dict[str, NegativeSpec]] = {
             ),
             NegativeRound(
                 label=(
+                    "the document carries a stylesheet instruction, which the parser drops and the "
+                    "byte scan refuses"
+                ),
+                reason=Reason.VALUE_MISMATCH,
+                case_limit=1,
+                symbol_defect="svg-stylesheet-instruction",
+            ),
+            NegativeRound(
+                label=(
+                    "a reference outside the document is refused before any rasterizer runs"
+                ),
+                reason=Reason.VALUE_MISMATCH,
+                case_limit=1,
+                symbol_defect="svg-external-reference",
+            ),
+            NegativeRound(
+                label=(
                     "the vector canvas carries a quiet zone the request did not ask for, so the "
                     "module pitch is not integral"
                 ),
@@ -834,6 +858,8 @@ _SYMBOL_DEFECT_NAMES: Final[tuple[str, ...]] = (
     "svg-canvas-above-raster-ceiling",
     "svg-canvas-not-module-multiple",
     "svg-entity-declaration",
+    "svg-external-reference",
+    "svg-stylesheet-instruction",
     "svg-utf16-entity-declaration",
     "wrong-module-size",
 )
@@ -982,6 +1008,13 @@ _ENTITY_DECLARATION: Final[bytes] = (
     b"]>\n"
 )
 
+# The processing instruction a hostile target splices in: it names a stylesheet a renderer would
+# fetch, and ElementTree drops a processing instruction as it parses, so the tree the reference scan
+# walks never carries it and only the byte scan can refuse it.
+_STYLESHEET_INSTRUCTION: Final[bytes] = (
+    b'<?xml-stylesheet type="text/css" href="http://example.invalid/x.css"?>'
+)
+
 
 def _png_declaring_canvas(png_bytes: bytes, side: int) -> bytes:
     """Return `png_bytes` with its IHDR declaring a `side` x `side` canvas.
@@ -1010,14 +1043,31 @@ def _pnm_declaring_canvas(side: int) -> bytes:
     return f"P6\n{side} {side}\n255\n".encode("ascii") + b"\x00\x00\x00"
 
 
-def _svg_with_entity_declaration(svg_bytes: bytes) -> bytes:
-    """Return `svg_bytes` carrying :data:`_ENTITY_DECLARATION` after its XML declaration."""
+def _svg_with_bytes_after_declaration(svg_bytes: bytes, spliced: bytes) -> bytes:
+    """Return `svg_bytes` carrying `spliced` after its XML declaration, or ahead of a document that
+    carries none.
+
+    Spliced exactly where a hostile target puts it -- immediately after the declaration the
+    conforming encoder writes -- so the document stays well-formed XML, the spliced bytes are the
+    only defect in it, and the refusal observed is the framework's own byte scan rather than a
+    parser fault.
+    """
     marker = b"?>"
     closing = svg_bytes.find(marker)
     if not svg_bytes.startswith(b"<?xml") or closing < 0:
-        return _ENTITY_DECLARATION + svg_bytes
+        return spliced + svg_bytes
     split_at = closing + len(marker)
-    return svg_bytes[:split_at] + b"\n" + _ENTITY_DECLARATION + svg_bytes[split_at:].lstrip(b"\r\n")
+    return svg_bytes[:split_at] + b"\n" + spliced + svg_bytes[split_at:].lstrip(b"\r\n")
+
+
+def _svg_with_entity_declaration(svg_bytes: bytes) -> bytes:
+    """Return `svg_bytes` carrying :data:`_ENTITY_DECLARATION` after its XML declaration."""
+    return _svg_with_bytes_after_declaration(svg_bytes, _ENTITY_DECLARATION)
+
+
+def _svg_with_stylesheet_instruction(svg_bytes: bytes) -> bytes:
+    """Return `svg_bytes` carrying :data:`_STYLESHEET_INSTRUCTION` after its XML declaration."""
+    return _svg_with_bytes_after_declaration(svg_bytes, _STYLESHEET_INSTRUCTION)
 
 
 def _svg_in_utf16_with_entity_declaration(svg_bytes: bytes) -> bytes:
@@ -1037,6 +1087,41 @@ def _svg_in_utf16_with_entity_declaration(svg_bytes: bytes) -> bytes:
         f"{text}"
     )
     return document.encode("utf-16")
+
+
+# The remote image the external-reference defect splices into the conforming document: the form a
+# hostile target uses to make a rasterizer fetch a host the framework never chose. It declares the
+# ``xlink`` namespace itself, so the document stays well-formed XML and the refusal under test is
+# the framework's reference rule rather than a parser fault, and it carries no geometry of its own,
+# so the canvas, the payload and the module grid stay the ones the conforming stub drew.
+_REMOTE_IMAGE_ELEMENT: Final[bytes] = (
+    b'<image xmlns:xlink="http://www.w3.org/1999/xlink"'
+    b' xlink:href="http://example.invalid/x.png" width="1" height="1"/>'
+)
+
+# The URL that element names, which a refusal must quote back.
+_REFUSED_REFERENCE: Final[str] = "http://example.invalid/x.png"
+
+# The closing element a rendered SVG document ends with, which is where the defect splices in.
+_SVG_CLOSING_TAG: Final[bytes] = b"</svg>"
+
+
+def _svg_with_remote_image(svg_bytes: bytes) -> bytes:
+    """Return `svg_bytes` carrying :data:`_REMOTE_IMAGE_ELEMENT` before its closing element.
+
+    Inserted rather than substituted, so the payload, the geometry and the canvas are exactly the
+    conforming ones and the remote reference is the only defect in the document.
+
+    Raises:
+        ValueError: The artefact carries no closing ``</svg>``, so it is not the document this
+            module's conforming stub renders and there is nowhere to splice the element in.
+    """
+    closing = svg_bytes.rfind(_SVG_CLOSING_TAG)
+    if closing < 0:
+        raise ValueError(
+            f"the conforming artefact carries no {_SVG_CLOSING_TAG!r} to splice a reference into"
+        )
+    return svg_bytes[:closing] + _REMOTE_IMAGE_ELEMENT + svg_bytes[closing:]
 
 
 def _symbol_defect(name: str) -> SymbolDefect:
@@ -1110,6 +1195,27 @@ def _symbol_defect(name: str) -> SymbolDefect:
             output_format=symbol.output_format,
         )
 
+    def svg_stylesheet_instruction(
+        request: GenerateRequest, symbol: GeneratedSymbol
+    ) -> GeneratedSymbol:
+        """Carry a ``<?xml-stylesheet`` instruction, which the parser drops and the byte scan
+        refuses."""
+        del request
+        return GeneratedSymbol(
+            image_bytes=_svg_with_stylesheet_instruction(symbol.image_bytes),
+            output_format=symbol.output_format,
+        )
+
+    def svg_external_reference(
+        request: GenerateRequest, symbol: GeneratedSymbol
+    ) -> GeneratedSymbol:
+        """Carry an image sourced from a remote URL, which no rasterizer may be sent to fetch."""
+        del request
+        return GeneratedSymbol(
+            image_bytes=_svg_with_remote_image(symbol.image_bytes),
+            output_format=symbol.output_format,
+        )
+
     def canvas_not_module_multiple(
         request: GenerateRequest, symbol: GeneratedSymbol
     ) -> GeneratedSymbol:
@@ -1180,6 +1286,10 @@ def _symbol_defect(name: str) -> SymbolDefect:
         return svg_entity_declaration
     if name == "svg-utf16-entity-declaration":
         return svg_utf16_entity_declaration
+    if name == "svg-external-reference":
+        return svg_external_reference
+    if name == "svg-stylesheet-instruction":
+        return svg_stylesheet_instruction
     if name == "changing-mask":
         return changing_mask_factory()
     raise KeyError(
@@ -1480,6 +1590,20 @@ def _drive(check_id: str, harness: _Harness) -> _CheckRun:
 # still stops at the first candidate its probe accepts.
 _STUB_RASTERIZER: Final[str] = "rsvg-convert"
 
+# The product's own rasterization, captured at import time because the autouse fixture below
+# replaces the module attribute: the tests that drive the sink's document guard and its byte bound
+# must run the real function, not the stub that answers a fixed PNG.
+_REAL_RASTERIZE_SVG: Final[Callable[..., bytes]] = render_family.rasterize_svg
+
+# The rasterizer status those tests run against, built directly rather than probed, so no test in
+# this module depends on which tools the host happens to provide.
+_RASTERIZER_STATUS: Final[render_family.RasterizerStatus] = render_family.RasterizerStatus(
+    configured="auto",
+    name=_STUB_RASTERIZER,
+    available=True,
+    attempted=(_STUB_RASTERIZER,),
+)
+
 # The side, in pixels, of the image the stub rasterizer answers with: stub geometry, not a
 # threshold any check reads.
 _STUB_RASTER_SIDE_PX: Final[int] = 8
@@ -1713,6 +1837,47 @@ def test_an_unmeasurable_artefact_records_the_ceiling_and_never_an_invented_canv
     assert refused.decoded["artefact_side_px"] is None
 
 
+# What a refused artefact records: the token the refusal carries, and the text the refused document
+# named.  An external reference is a target-side verdict with its own token; an ``<?xml-stylesheet``
+# instruction is refused by the pre-parse byte scan, because the parser drops a processing
+# instruction and no scan of the parsed tree could see the stylesheet it names, so it carries the
+# unreadable-canvas token the two entity rounds carry.  Both are ``value_mismatch``, which is the
+# point: the target's own bytes are a verdict about the target rather than a framework error (AAP
+# §0.3.4's exit codes, AAP NFR-2).  Case inputs, not thresholds.
+_REFUSED_ARTEFACT_ROUNDS: Final[tuple[tuple[str, str, str], ...]] = (
+    ("svg-external-reference", "svg_external_reference", _REFUSED_REFERENCE),
+    ("svg-stylesheet-instruction", "svg_canvas_unreadable", "<?xml-stylesheet"),
+)
+
+
+@pytest.mark.parametrize(
+    ("symbol_defect", "problem", "named"),
+    _REFUSED_ARTEFACT_ROUNDS,
+    ids=[entry[0] for entry in _REFUSED_ARTEFACT_ROUNDS],
+)
+def test_a_refused_artefact_is_a_verdict_about_the_target(
+    symbol_defect: str, problem: str, named: str, harness: _Harness
+) -> None:
+    """An artefact that references something outside itself, and one carrying a declaration the
+    parser would drop, are both refused before any rasterizer runs: the case is ``value_mismatch``
+    carrying `problem`, the recorded error names `named` from the document, and the target's own
+    bytes are a verdict about the target, never a framework error (AAP §0.3.4's exit codes)."""
+    run = _drive("RN-SVG", harness)
+    refused = [outcome for outcome in run.rounds if outcome.round.symbol_defect == symbol_defect]
+    assert len(refused) == 1, f"RN-SVG declares exactly one {symbol_defect} round"
+    result = refused[0].results[0]
+    assert result.status is Status.FAILED, (
+        f"{result.case_id}: a refused artefact is the target's own and never an error result, "
+        f"got {result.status.value}/{result.reason!r}"
+    )
+    assert result.reason is Reason.VALUE_MISMATCH, result.reason
+    assert result.decoded["problems"] == [problem], result.decoded["problems"]
+    assert named in str(result.decoded["svg_error"]), (
+        f"the recorded error must name {named!r} from the document, got "
+        f"{result.decoded['svg_error']!r}"
+    )
+
+
 # What a refused decode canvas records, and that the refusal costs no decode at all
 
 
@@ -1909,3 +2074,366 @@ def test_the_image_boundary_declares_the_pillow_module_the_probe_builds_with() -
         f"__all__ declares {sorted(mux.__all__)}"
     )
     assert mux.Image is Image, f"mux.Image must be PIL.Image itself, got {mux.Image!r}"
+
+
+# The rasterization sink itself: its document guard, driven through the real function
+#
+# The autouse stub stands in for the tool, never for the guard: the reference allow-list, the byte
+# bound and the capture all live in ``rasterize_svg``, so these tests drive the real function with
+# the discovered tool replaced by an argv-only command that is this interpreter.
+
+# The square canvas, in pixels, every sink document below declares: one pixel per module of the
+# smallest legal symbol, so the document's own canvas guard is satisfied and the reference rule is
+# the only thing under test. Case geometry, not a threshold any check reads.
+_SINK_CANVAS_PX: Final[int] = 21
+
+# The references a sink document carries outside itself, each one quoted back by the refusal: an
+# absolute local path, a remote stylesheet, and the protocol-relative form that inherits the
+# fetching host's scheme.
+_LOCAL_FILE_REFERENCE: Final[str] = "/etc/passwd"
+_REMOTE_STYLESHEET_REFERENCE: Final[str] = "http://example.invalid/p.svg#g"
+_PROTOCOL_RELATIVE_REFERENCE: Final[str] = "//example.invalid/x.svg#g"
+
+
+def _sink_document(body: str) -> bytes:
+    """Return an SVG document declaring :data:`_SINK_CANVAS_PX` per side and carrying `body`.
+
+    The ``xlink`` namespace is declared on the root because ``xlink:href`` is one of the reference
+    forms under test: without it the document would not be well-formed XML, and the refusal observed
+    would be a parser fault rather than the framework's reference rule.
+    """
+    return (
+        '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" '
+        f'width="{_SINK_CANVAS_PX}" height="{_SINK_CANVAS_PX}">{body}</svg>'
+    ).encode("utf-8")
+
+
+# The reference forms a target's document may carry that name something outside it, each with the
+# form's own identifier and the text the refusal must quote back. Case inputs, not thresholds.
+_EXTERNAL_REFERENCE_DOCUMENTS: Final[tuple[tuple[str, str, bytes], ...]] = (
+    (
+        "remote-href",
+        _REFUSED_REFERENCE,
+        _sink_document('<image href="http://example.invalid/x.png" width="1" height="1"/>'),
+    ),
+    (
+        "xlink-href-local-path",
+        _LOCAL_FILE_REFERENCE,
+        _sink_document('<image xlink:href="/etc/passwd" width="1" height="1"/>'),
+    ),
+    (
+        "style-url-remote",
+        _REMOTE_STYLESHEET_REFERENCE,
+        _sink_document(
+            '<rect width="1" height="1" style="fill:url(http://example.invalid/p.svg#g)"/>'
+        ),
+    ),
+    (
+        "style-import",
+        "@import",
+        _sink_document('<style>@import "x.css";</style>'),
+    ),
+    (
+        "style-protocol-relative",
+        _PROTOCOL_RELATIVE_REFERENCE,
+        _sink_document("<style>rect{fill:url(//example.invalid/x.svg#g)}</style>"),
+    ),
+)
+
+
+# The same hole spelled with a CSS escape, which no scan of the raw value can see: CSS writes any
+# character as a backslash and its code point, so ``u\72 l(...)`` and ``\75 rl(...)`` are both
+# ``url(...)`` to a renderer while neither reads as one here.  The entries cover the two spellings
+# the verifier reproduced and the presentation-attribute form of the same hole, which carries no
+# ``style`` attribute at all.  Case inputs, not thresholds.
+_CSS_ESCAPE_REFERENCE_DOCUMENTS: Final[tuple[tuple[str, str, bytes], ...]] = (
+    (
+        "style-escape-code-point",
+        "fill:u\\72 l(http://example.invalid/x)",
+        _sink_document(
+            '<rect width="1" height="1" style="fill:u\\72 l(http://example.invalid/x)"/>'
+        ),
+    ),
+    (
+        "style-escape-with-prefix",
+        "fill:\\75 rl(http://example.invalid/x)",
+        _sink_document(
+            '<rect width="1" height="1" style="fill:\\75 rl(http://example.invalid/x)"/>'
+        ),
+    ),
+    (
+        "presentation-attribute-escape",
+        "\\75 rl(http://example.invalid/x)",
+        _sink_document('<rect width="1" height="1" fill="\\75 rl(http://example.invalid/x)"/>'),
+    ),
+)
+
+
+# The document a hostile target sends to make a rasterizer fetch a stylesheet, with the instruction
+# immediately after the XML declaration where a target puts it: ElementTree drops it, so only the
+# byte scan can refuse the resource it names.
+_STYLESHEET_DOCUMENT: Final[bytes] = (
+    b'<?xml version="1.0"?>'
+    + _STYLESHEET_INSTRUCTION
+    + _sink_document('<rect width="1" height="1" fill="#000000"/>')
+)
+
+
+# Every document the sink must refuse, one row per form: `label` names the form, `offending` is the
+# value the artefact carries from outside itself, and `document` is the artefact carrying it.  The
+# forms are the external references above, the same hole spelled as a CSS escape that no scan of a
+# value's text can see, and the stylesheet instruction the parser drops before any scan of the tree
+# could meet it.  Case inputs, not thresholds.
+_REFUSED_SINK_DOCUMENTS: Final[tuple[tuple[str, str, bytes], ...]] = (
+    *_EXTERNAL_REFERENCE_DOCUMENTS,
+    *_CSS_ESCAPE_REFERENCE_DOCUMENTS,
+    ("stylesheet-instruction", "<?xml-stylesheet", _STYLESHEET_DOCUMENT),
+)
+
+
+@pytest.mark.parametrize(
+    ("label", "offending", "document"),
+    _REFUSED_SINK_DOCUMENTS,
+    ids=[entry[0] for entry in _REFUSED_SINK_DOCUMENTS],
+)
+def test_the_rasterizer_sink_refuses_a_document_reaching_outside_itself(
+    label: str,
+    offending: str,
+    document: bytes,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every form of reference outside the document, and the stylesheet instruction no scan of the
+    parsed tree can meet, is refused before a command is built, so the discovered tool is never
+    spawned: `label` names the form under test, the raise quotes the offending value back in the
+    form the scan reports it -- an escape spelling in its escaped form -- and a refused document
+    that reached the command seam would fail the case here (AAP NFR-2)."""
+    argv_requests: list[str] = []
+
+    def command(name: str) -> tuple[str, ...]:
+        """Record an argv request: reaching here means a refused document was about to run."""
+        argv_requests.append(name)
+        return (name,)
+
+    monkeypatch.setattr(render_family, "_rasterizer_command", command)
+    with pytest.raises(RuntimeError) as excinfo:
+        _REAL_RASTERIZE_SVG(document, _RASTERIZER_STATUS)
+    # A value carrying a CSS escape is reported in the escaped form it was written in, which the
+    # refusal quotes through ``repr``; every other form is quoted as it stands.
+    quoted = repr(offending) if "\\" in offending else offending
+    assert quoted in str(excinfo.value), (
+        f"{label}: the refusal must quote {quoted}, got {str(excinfo.value)!r}"
+    )
+    assert not argv_requests, (
+        f"{label}: a refused document must never reach a rasterizer, but {argv_requests} was built"
+    )
+
+
+# The document whose only references are same-document fragments: a gradient that the rectangle's
+# fill and the use element both name by ``#id``, which is what a conforming encoder emits.
+_FRAGMENT_ONLY_DOCUMENT: Final[bytes] = _sink_document(
+    '<defs><linearGradient id="g"><stop offset="0" stop-color="#000000"/></linearGradient></defs>'
+    '<rect width="1" height="1" fill="url(#g)"/>'
+    '<use href="#g"/>'
+)
+
+
+def _emitting_command(png_bytes: bytes) -> tuple[str, ...]:
+    """Return an argv-only command that writes `png_bytes` to its stdout, reading its stdin first.
+
+    The stand-in for the discovered tool: the sink is what these tests drive, so the command it runs
+    may be this interpreter as long as both halves of the contract -- an SVG on stdin, a PNG on
+    stdout -- are honoured.
+    """
+    program = (
+        "import sys; sys.stdin.buffer.read(); "
+        "sys.stdout.buffer.write(bytes.fromhex(sys.argv[1]))"
+    )
+    return (sys.executable, "-c", program, png_bytes.hex())
+
+
+def test_the_rasterizer_sink_still_rasterizes_a_document_of_same_document_fragments(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A conforming artefact's ``#fragment`` references pass the allow-list and the document is
+    rasterized: the bytes the tool wrote come back unchanged, so the guard refuses references
+    without refusing the artefact a conforming encoder produces."""
+
+    def command(name: str) -> tuple[str, ...]:
+        """Answer the rasterizer argv with a command that emits the stub's PNG."""
+        del name
+        return _emitting_command(_STUB_RASTER)
+
+    monkeypatch.setattr(render_family, "_rasterizer_command", command)
+    assert _REAL_RASTERIZE_SVG(_FRAGMENT_ONLY_DOCUMENT, _RASTERIZER_STATUS) == _STUB_RASTER
+
+
+def _cairosvg_stand_in(*, accepts_fetcher: bool, seen: list[object]) -> types.ModuleType:
+    """Return a stand-in ``cairosvg`` module whose ``svg2png`` records the fetcher it was offered.
+
+    `accepts_fetcher` decides whether the stand-in's ``svg2png`` takes the ``url_fetcher`` keyword,
+    which is the whole difference between the cairosvg the framework must restrict and an older one
+    it must still run; `seen` receives the fetcher, or ``None`` for the shape that takes none.
+    """
+    module = types.ModuleType("cairosvg")
+    if accepts_fetcher:
+
+        def with_fetcher(
+            bytestring: bytes, url_fetcher: Callable[..., bytes] | None = None
+        ) -> bytes:
+            """Answer the artefact and record the fetcher the caller offered."""
+            del bytestring
+            seen.append(url_fetcher)
+            return _STUB_RASTER
+
+        module.svg2png = with_fetcher
+        return module
+
+    def without_fetcher(bytestring: bytes) -> bytes:
+        """Answer the artefact without offering a fetcher at all."""
+        del bytestring
+        seen.append(None)
+        return _STUB_RASTER
+
+    module.svg2png = without_fetcher
+    return module
+
+
+@pytest.mark.parametrize(
+    "accepts_fetcher", [True, False], ids=["accepts-url-fetcher", "no-url-fetcher"]
+)
+def test_the_cairosvg_path_restricts_the_fetcher_only_where_the_module_takes_one(
+    accepts_fetcher: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The cairosvg path hands a fetcher that refuses every URL to a module whose ``svg2png`` takes
+    one, and still calls a module whose ``svg2png`` does not: the restriction is never an argument
+    an older cairosvg would reject, and the document's own scan guards both (AAP NFR-2)."""
+    seen: list[object] = []
+    monkeypatch.setitem(
+        sys.modules,
+        "cairosvg",
+        _cairosvg_stand_in(accepts_fetcher=accepts_fetcher, seen=seen),
+    )
+    assert render_family._rasterize_with_cairosvg(_FRAGMENT_ONLY_DOCUMENT) == _STUB_RASTER
+    assert len(seen) == 1, "the stand-in's svg2png must be called exactly once"
+    fetcher = seen[0]
+    if not accepts_fetcher:
+        assert fetcher is None, "a module taking no url_fetcher must be called without one"
+        return
+    assert callable(fetcher), "a module taking url_fetcher must be handed a fetcher"
+    with pytest.raises(render_family._ExternalReferenceRefused):
+        fetcher(_REFUSED_REFERENCE)
+
+
+def _flooding_command(stream: str, payload: bytes) -> tuple[str, ...]:
+    """Return an argv-only command that writes `payload` to `stream`, reading its stdin first.
+
+    The same stand-in aimed at one stream at a time: `stream` is ``"stdout"`` or ``"stderr"``, named
+    as an attribute of :mod:`sys` in the child, so one command shape proves the capture bound on
+    either stream and the stream that is not under test is left with nothing in it.
+    """
+    program = (
+        "import sys; sys.stdin.buffer.read(); "
+        "flood = getattr(sys, sys.argv[2]).buffer; "
+        "flood.write(bytes.fromhex(sys.argv[1])); flood.flush()"
+    )
+    return (sys.executable, "-c", program, payload.hex(), stream)
+
+
+# The capture ceiling the over-bound round installs, in bytes: one stub-image side's worth, derived
+# from the stub's own geometry so the stub PNG the emitting command writes passes it many times
+# over, and so this module restates no byte bound of its own.
+_TINY_STREAM_BOUND_BYTES: Final[int] = _STUB_RASTER_SIDE_PX
+
+
+@pytest.mark.parametrize("stream", ["stdout", "stderr"], ids=["stdout", "stderr"])
+def test_the_rasterizer_sink_refuses_a_stream_past_its_byte_ceiling(
+    stream: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A rasterizer that floods either stream is refused for that alone: `stream` names the stream
+    under test, and the raise names the ceiling the capture applied and the stream that passed it,
+    so that stream was closed at the bound instead of being buffered whole (AAP §0.3.2's bounded
+    reads, the rule the cli adapter applies to a target's streams)."""
+    monkeypatch.setattr(render_family, "_MAX_CAPTURED_RASTER_BYTES", _TINY_STREAM_BOUND_BYTES)
+
+    def command(name: str) -> tuple[str, ...]:
+        """Answer the rasterizer argv with a command that floods the stream under test."""
+        del name
+        return _flooding_command(stream, _STUB_RASTER)
+
+    monkeypatch.setattr(render_family, "_rasterizer_command", command)
+    with pytest.raises(RuntimeError) as excinfo:
+        _REAL_RASTERIZE_SVG(_FRAGMENT_ONLY_DOCUMENT, _RASTERIZER_STATUS)
+    message = str(excinfo.value)
+    assert f"{_TINY_STREAM_BOUND_BYTES}-byte" in message, (
+        f"the refusal must name the ceiling it applied, got {message!r}"
+    )
+    assert f"its {stream}" in message, (
+        f"the refusal must name the {stream} that passed the ceiling, got {message!r}"
+    )
+
+
+# The stderr the failing rasterizer writes, in bytes: several times the documented diagnostic tail,
+# derived from that constant rather than restated, so a message carrying the stream would show.
+_LONG_STDERR_BYTES: Final[int] = render_family._RASTERIZER_DIAGNOSTIC_CHARS * 4
+
+# The last thing that rasterizer writes to stderr, which only a message quoting the tail can carry.
+_STDERR_TAIL_MARKER: Final[str] = "qrcheck-rasterizer-stderr-tail"
+
+# The exit status the failing rasterizer leaves, which the refusal must name.
+_RASTERIZER_FAILURE_EXIT: Final[int] = 3
+
+
+def _failing_command() -> tuple[str, ...]:
+    """Return an argv-only command that floods stderr and exits non-zero, reading its stdin first.
+
+    The other half of the stand-in contract: a rasterizer that fails is reported by its exit status
+    and by what it last said, so this command says a great deal and then fails.
+    """
+    program = (
+        "import sys; sys.stdin.buffer.read(); "
+        "sys.stderr.buffer.write(b'x' * int(sys.argv[1])); "
+        "sys.stderr.buffer.write(sys.argv[2].encode('utf-8')); "
+        "sys.exit(int(sys.argv[3]))"
+    )
+    return (
+        sys.executable,
+        "-c",
+        program,
+        str(_LONG_STDERR_BYTES),
+        _STDERR_TAIL_MARKER,
+        str(_RASTERIZER_FAILURE_EXIT),
+    )
+
+
+def test_a_failing_rasterizer_reports_the_exit_status_and_only_the_tail_of_its_stderr(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A rasterizer that exits non-zero is reported by its exit status and by the last
+    :data:`render_family._RASTERIZER_DIAGNOSTIC_CHARS` characters of its stderr, so one diagnostic
+    never carries a whole captured stream into the report or the evidence."""
+
+    def command(name: str) -> tuple[str, ...]:
+        """Answer the rasterizer argv with a command that floods stderr and fails."""
+        del name
+        return _failing_command()
+
+    monkeypatch.setattr(render_family, "_rasterizer_command", command)
+    with pytest.raises(RuntimeError) as excinfo:
+        _REAL_RASTERIZE_SVG(_FRAGMENT_ONLY_DOCUMENT, _RASTERIZER_STATUS)
+    message = str(excinfo.value)
+    assert f"exited {_RASTERIZER_FAILURE_EXIT}" in message, message
+    assert _STDERR_TAIL_MARKER in message, "the message must carry the end of what the tool said"
+    assert len(message) < _LONG_STDERR_BYTES, (
+        f"the message must not carry the whole stream: {len(message)} characters for a "
+        f"{_LONG_STDERR_BYTES}-byte stderr"
+    )
+
+
+def test_the_rasterizer_capture_ceiling_is_the_cli_adapters_stream_bound() -> None:
+    """The rasterizer's per-stream capture ceiling is the cli adapter's per-stream bound -- and so
+    the same 16 MiB the http adapter reads from one body -- asserted rather than restated here, so
+    the three bounds cannot drift apart."""
+    assert render_family._MAX_CAPTURED_RASTER_BYTES == cli_adapter._MAX_CAPTURED_STREAM_BYTES, (
+        "the rasterizer capture ceiling must equal the cli adapter's per-stream bound: "
+        f"{render_family._MAX_CAPTURED_RASTER_BYTES} != {cli_adapter._MAX_CAPTURED_STREAM_BYTES}"
+    )

@@ -179,6 +179,10 @@ Each threshold has exactly one home — the committed `qrcheck.toml` entry, with
 
 `none` disables rasterizing. `RN-SVG` then reports `skipped` with reason `missing_dependency` and records the order it tried — a skip, never a pass. The same happens when `auto` finds nothing. `dependencies.md` covers the binaries and what each absence costs; `qrcheck/checks/render.py` is the single discovery and invocation implementation.
 
+A target's SVG is never handed to a rasterizer with a reference the framework did not choose. Before any rasterizer runs, the document is parsed once and every `href` (the `xlink:href` form included), every CSS `url(...)` in an attribute value, and every `@import` in an attribute value or a `<style>` element must name a same-document `#fragment`. Anything else — an `http` or `https` URL, a `file:` URI, a `data:` URI, a bare relative or absolute path, a protocol-relative `//host/x` — is refused, recorded as a `value_mismatch` about the target with `problems = ["svg_external_reference"]`, and never reaches the tool. A conforming encoder emits only same-document fragments, so no legitimate artefact is refused, and the rule is what keeps the rasterizer inside the document rather than letting a target aim this framework's own tool at a host or a file of its choosing.
+
+For a target you do not trust, pin `svg_rasterizer` away from `magick` and `convert`: their SVG delegates are a known code-execution surface for attacker-authored input, while `rsvg-convert`, `resvg` and `cairosvg` are the safer choices, and `none` degrades to the skip described above. The reference rule above holds for every choice, `auto` included.
+
 ### 6.2 `[checks.performance]` — the latency and throughput floors
 
 | Key | Type | Default | Validation | Diagnostic on violation |

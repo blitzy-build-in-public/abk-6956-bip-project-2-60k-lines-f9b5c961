@@ -444,6 +444,8 @@ The product is local, single-user and offline, so its security controls are abou
 - **No `eval`, `exec`, `pickle` or unsafe deserialization anywhere.** Deserialization is JSON and TOML only.
 - **No credentials, environment secrets or telemetry, because there are none to protect.** The framework reads no credential store, sets no API key header and reports to no endpoint; the loopback transport has no credential material to leak.
 - **Untrusted artefacts are bounded before they are decoded.** An artefact whose longer side exceeds the declared ceiling, and an SVG whose canvas would exceed it, are refused before a decoder or a rasterizer allocates anything, because a rasterizer allocates the canvas it is told to draw.
+- **A target's SVG may reference nothing outside itself.** The document is parsed once before any rasterizer runs, and every `href`, `xlink:href`, CSS `url(...)` and `@import` must name a same-document `#fragment`. Anything else is refused as a `value_mismatch` about the target, so a target cannot make the framework's own rasterizer fetch a host or read a local file; `configuration.md` documents the rule beside the key it governs.
+- **The rasterizer's output streams are bounded too.** Its stdout and stderr are captured through the same per-stream byte bound the `cli` adapter applies to a target's output, and a stream that passes it is refused rather than buffered, with only a short tail of it carried into a diagnostic.
 
 ## 13. The request's MUST/MUST NOT constraints, and where each is held
 
