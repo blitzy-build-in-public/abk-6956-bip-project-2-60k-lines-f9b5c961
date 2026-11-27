@@ -787,6 +787,7 @@ def test_a_missing_runtime_dependency_resolves_to_a_missing_dependency_skip() ->
 
 
 def test_a_missing_dependency_skip_records_the_discovery_order_it_attempted() -> None:
+    """A missing-dependency skip records the order it walked in the outcome and the evidence."""
     contract = get_check("RN-SVG")
     unavailable = {
         token: token != DEPENDENCY_SVG_RASTERIZER for token in sorted(DEPENDENCY_TOKENS)
@@ -808,6 +809,7 @@ def test_a_missing_dependency_skip_records_the_discovery_order_it_attempted() ->
 
 
 def test_a_capability_shortfall_records_no_discovery_order() -> None:
+    """A capability shortfall records no attempted order: installing the tool would not help."""
     contract = get_check("RN-SVG")
     nothing_available = {token: False for token in sorted(DEPENDENCY_TOKENS)}
 
@@ -826,6 +828,7 @@ def test_a_capability_shortfall_records_no_discovery_order() -> None:
 
 
 def test_an_attempted_order_must_name_declared_tokens_and_candidate_names() -> None:
+    """A refused attempted order names the offending token or the candidate that is not a name."""
     contract = get_check("RN-SVG")
     unavailable = {
         token: token != DEPENDENCY_SVG_RASTERIZER for token in sorted(DEPENDENCY_TOKENS)

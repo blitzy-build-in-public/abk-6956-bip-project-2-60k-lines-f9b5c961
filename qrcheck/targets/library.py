@@ -146,10 +146,9 @@ class LibraryAdapter:
                 mapping's shape alone -- that every key and value is non-empty
                 text -- because which framework fields a target accepts is this
                 adapter's vocabulary and not the schema's, so this is a
-                configuration fault to fix in the file and not a framework
-                defect: the message names ``targets.<name>.kwargs_map``, and
-                ``qrcheck.cli.run`` reports it as exit code 2 before any check
-                runs.
+                configuration fault to fix in the file and not a framework defect: the
+                message names ``targets.<name>.kwargs_map``, and ``qrcheck.cli.run``
+                reports it as exit code 2 before any check runs.
         """
         self.name: str = name if name is not None else config.type
         self.capabilities: frozenset[Capability] = declared_capabilities(config)

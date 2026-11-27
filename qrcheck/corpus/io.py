@@ -39,8 +39,8 @@ def write_corpus(records: Sequence[CorpusRecord], path: str | Path) -> None:
     before the file is opened, so a record that cannot be serialised leaves no file.
 
     Raises:
-    TypeError: A record holds a value that is not JSON-serialisable -- a caller defect.
-    OSError: The parent directory cannot be created or the file cannot be written.
+        TypeError: A record holds a value that is not JSON-serialisable -- a caller defect.
+        OSError: The parent directory cannot be created or the file cannot be written.
     """
     destination = Path(path)
     # A record that cannot be serialised must leave no artefact, so the text is rendered first.
@@ -60,9 +60,9 @@ def load_corpus(path: str | Path) -> list[CorpusRecord]:
     record would make the drift check report on a different corpus than the one on disk.
 
     Raises:
-    CorpusError: A line is malformed; the message names the 1-based line number and the record
-    ``id`` when the line carries one.
-    OSError: The file is missing or unreadable; ``FileNotFoundError`` propagates untouched.
+        CorpusError: A line is malformed; the message names the 1-based line number and the record
+            ``id`` when the line carries one.
+        OSError: The file is missing or unreadable; ``FileNotFoundError`` propagates untouched.
     """
     source = Path(path)
     lines = source.read_text(encoding="utf-8").split("\n")

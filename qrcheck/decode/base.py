@@ -413,6 +413,18 @@ class DecodeResult:
     why the ``False`` case exists at all; this field is the only place the
     narrowing of the disagreement rule is visible, so no consumer has to infer
     it from a decoder's status.
+
+    ``unavailable_decoders`` extends them for the one case in which a decoder is
+    not an answer at all: a decoder the run did not consult, mapped to the reason
+    it could not be. It is empty whenever every decoder was consulted, which is
+    the ordinary case, and it is why single-decoder mode's evidence lists one
+    decoder in ``per_decoder`` (AAP §0.6.6 row 4): a binding that cannot be
+    imported raised nothing about the artefact, so it is recorded here instead of
+    as an outcome with ``status == "error"``, which means a decoder that ran and
+    raised (AAP §0.4.5). A decoder appears in ``per_decoder`` or in
+    ``unavailable_decoders``, never in both, and the degradation therefore stays
+    recorded in the evidence a reader has even though the noise of a decoder that
+    never ran is gone.
     """
 
     payload_bytes: bytes | None
@@ -433,22 +445,25 @@ class DecodeResult:
     sampling: SampledMatrix | None = None
     format_info: Mapping[str, Any] | None = None
     secondary_comparable: bool | None = None
+    unavailable_decoders: Mapping[str, str] = dataclasses.field(default_factory=dict)
 
     def __post_init__(self) -> None:
         """Normalise the mappings and make the digest unable to go stale.
 
-        ``per_decoder``, ``metrics`` and ``format_info`` become read-only
-        mappings with sorted keys, so iteration order cannot depend on how a
-        producer built them and a result cannot be mutated after construction.
-        When a grid is present the digest is computed here if the caller passed
-        ``None``.
+        ``per_decoder``, ``metrics``, ``format_info`` and ``unavailable_decoders``
+        become read-only mappings with sorted keys, so iteration order cannot
+        depend on how a producer built them and a result cannot be mutated after
+        construction. When a grid is present the digest is computed here if the
+        caller passed ``None``.
 
         Raises:
             ValueError: ``agreement`` or ``polarity_applied`` is outside its
                 closed vocabulary, ``secondary_comparable`` is neither a
-                ``bool`` nor ``None``, a ``per_decoder`` key is not a known
-                decoder, or ``matrix_sha256`` was supplied with a grid and
-                disagrees with it.
+                ``bool`` nor ``None``, a ``per_decoder`` or an
+                ``unavailable_decoders`` key is not a known decoder, a decoder is
+                recorded in both places -- it either answered or did not run --
+                an unavailable decoder carries no reason, or ``matrix_sha256`` was
+                supplied with a grid and disagrees with it.
         """
         if self.agreement not in _AGREEMENT_VALUES:
             raise ValueError(
@@ -462,8 +477,35 @@ class DecodeResult:
         unknown = sorted(name for name in self.per_decoder if name not in DECODER_ORDER)
         if unknown:
             raise ValueError(f"unknown decoder name(s) in per_decoder: {unknown}")
+        unconsulted = sorted(self.unavailable_decoders.items())
+        unknown_unavailable = sorted(
+            name for name, _ in unconsulted if name not in DECODER_ORDER
+        )
+        if unknown_unavailable:
+            raise ValueError(
+                f"unknown decoder name(s) in unavailable_decoders: {unknown_unavailable}"
+            )
+        unreasoned = sorted(
+            name
+            for name, reason in unconsulted
+            if not isinstance(reason, str) or not reason.strip()
+        )
+        if unreasoned:
+            raise ValueError(
+                f"decoder(s) recorded as unavailable without a reason: {unreasoned}"
+            )
+        both = sorted(name for name, _ in unconsulted if name in self.per_decoder)
+        if both:
+            raise ValueError(
+                f"decoder(s) recorded both as consulted and as unavailable: {both}"
+            )
         object.__setattr__(
             self, "per_decoder", types.MappingProxyType(dict(sorted(self.per_decoder.items())))
+        )
+        object.__setattr__(
+            self,
+            "unavailable_decoders",
+            types.MappingProxyType(dict(unconsulted)),
         )
         object.__setattr__(
             self, "metrics", types.MappingProxyType(dict(sorted(self.metrics.items())))
@@ -501,9 +543,11 @@ class DecodeResult:
         becomes ``payload_b64`` and ``payload_len`` (plus ``payload_text`` when
         the bytes round-trip through UTF-8) so no raw ``bytes`` object survives,
         and ``matrix`` is represented by ``matrix_sha256`` so the grid itself
-        never reaches the evidence. No timestamp, hostname, absolute path or
-        duration is emitted: a duration belongs to the result model, not to the
-        decoded evidence.
+        never reaches the evidence. ``unavailable_decoders`` is always present
+        and is ``{}`` when every decoder was consulted, so a consumer never has
+        to tell an absent key from an empty one. No timestamp, hostname,
+        absolute path or duration is emitted: a duration belongs to the result
+        model, not to the decoded evidence.
         """
         projected: dict[str, Any] = {
             "agreement": self.agreement,
@@ -527,6 +571,7 @@ class DecodeResult:
             "secondary_comparable": self.secondary_comparable,
             "symbology_identifier": self.symbology_identifier,
             "text": self.text,
+            "unavailable_decoders": _sorted_dict(dict(self.unavailable_decoders)),
             "version": self.version,
         }
         if self.payload_bytes is not None:
@@ -550,8 +595,11 @@ class DecoderAvailability:
 
     ``primary_version`` and ``secondary_version`` are the installed
     distribution versions, or ``None`` when the distribution is absent.
-    ``qrcheck doctor --json`` and ``qrcheck list --json`` consume
-    :meth:`as_dict`.
+    ``qrcheck doctor --json`` consumes these four values through the two
+    dependency rows it builds, and ``qrcheck run`` reads ``primary`` and
+    ``secondary`` for its dependency probes; ``qrcheck list --json`` publishes
+    the check registry and reads none of them. :meth:`as_dict` is the record's
+    JSON-safe projection for a caller that needs the four values as one mapping.
     """
 
     primary: bool

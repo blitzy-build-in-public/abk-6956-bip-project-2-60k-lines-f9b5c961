@@ -30,8 +30,10 @@ one process starts empty whatever its target, seed or level. A ``DM-SEEDED`` run
 comparing against another run's artefacts, while the two checks of one run still share the symbols,
 readings and variants they exist to share. :func:`clear_symbol_memo` empties it outright.
 
-Reasons emitted: ``value_mismatch``, ``sampling_failed`` (pristine measurement only),
-``missing_dependency``, plus ``target_rejected``, ``unsupported_capability`` and ``contract_error``
+Reasons emitted: ``value_mismatch``, ``sampling_failed`` (the pristine measurement only: no grid
+could be read, or the artefact's own header declares a canvas above :data:`_MAX_ARTEFACT_SIDE_PX`
+per side, which is refused before a pixel is allocated), ``missing_dependency``, plus
+``target_rejected``, ``unsupported_capability`` and ``contract_error``
 from :func:`~qrcheck.checks.support.case_status_for_error` -- ``contract_error`` when the artefact
 the target returned is an image no installed library can open, which fails that one case with the
 artefact's first 256 bytes in ``decoded["hex_prefix"]`` (AAP §0.3.4) rather than aborting the run;
@@ -51,7 +53,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Protocol
 
 from qrcheck.checks import support
-from qrcheck.config.models import DamageLimits
+from qrcheck.config.models import DEFAULT_DECODE_IMAGE_PX, DamageLimits
 from qrcheck.config.seeding import derive_seed
 from qrcheck.evidence.naming import DAMAGE_KINDS
 from qrcheck.registry.check import (
@@ -154,6 +156,17 @@ _FIRST_VERSION_WITH_VERSION_INFO: Final[int] = 7
 # is also the quiet zone's, so a rotated or skewed symbol extends its quiet zone instead of
 # gaining a dark border that would be a second, unintended damage kind.
 _FILL_VALUE: Final[float] = 255.0
+
+# The largest canvas this module decodes from an untrusted artefact, per side, in pixels: eight
+# times the reference decode size ``[checks.performance] decode_image_px``, whose single
+# declaration ``qrcheck.config.models`` owns (AAP §0.6.2), so 4000 px per side -- the same ceiling
+# ``qrcheck.decode.consensus`` and ``qrcheck.checks.render`` hold for the same bytes.  It leaves
+# room for the symbols this framework asks a target for, since a Version-40 symbol is 177 modules
+# plus an 8-module quiet zone and a rotated copy of it needs a square root of two more across,
+# while refusing a canvas that would expand the colour, grayscale and float64 copies into
+# gigabytes of memory the target dictated.  Derived from the one configuration default rather
+# than declared here, so this module still holds no threshold of its own.
+_MAX_ARTEFACT_SIDE_PX: Final[int] = 8 * DEFAULT_DECODE_IMAGE_PX
 
 
 # The run-scoped memo: the symbol, the pristine reading and the damaged variant of each sampled
@@ -786,8 +799,71 @@ def _raster(pixels: numpy.ndarray, reference: Any) -> Any:
     return canvas
 
 
+class _ArtefactTooLarge(ValueError):
+    """A target artefact whose declared canvas this framework will not decode.
+
+    A named member of the :exc:`ValueError` family rather than a bare exception, so the two case
+    executors catch exactly this refusal and every other fault still escapes: the artefact is a
+    target's own bytes, and refusing to decode it is a verdict about that target rather than a
+    framework defect. ``width`` and ``height`` are the canvas the header declares, which is what
+    the case records as its evidence, or ``None`` for both when the declaration is one the image
+    library refuses to open for its size -- the dimensions of such a canvas are never read out, so
+    none is invented for it.
+    """
+
+    def __init__(self, width: int | None, height: int | None) -> None:
+        """Hold the refused canvas' declared dimensions, in pixels, when they could be read."""
+        self.width = width
+        self.height = height
+        if width is None or height is None:
+            declared = "declares a canvas the image library itself refuses to open for its size"
+        else:
+            declared = (
+                f"declares {width}x{height} pixels, above the {_MAX_ARTEFACT_SIDE_PX} px per-side "
+                f"ceiling this framework decodes"
+            )
+        super().__init__(
+            f"the damage artefact {declared}: a target artefact is untrusted and decoding it "
+            f"would allocate the canvas"
+        )
+
+    @property
+    def declared_px(self) -> tuple[int, int] | None:
+        """Return the ``(width, height)`` the header declared, or ``None`` when it declared none."""
+        if self.width is None or self.height is None:
+            return None
+        return self.width, self.height
+
+    @property
+    def longer_side_px(self) -> int | None:
+        """Return the artefact's longer declared side in pixels, or ``None`` when it has none."""
+        declared = self.declared_px
+        return None if declared is None else max(declared)
+
+
+def _unopenable(symbol: GeneratedSymbol, error: BaseException) -> TargetContractError:
+    """Return the contract failure one artefact no installed library can open maps to.
+
+    The library's own text is deliberately not interpolated: Pillow names the buffer it refused by
+    its ``repr`` (``<_io.BytesIO object at 0x...>``), and that address changes with every run, so
+    the diagnostic names the exception class instead and keeps ``decoded.json`` byte-identical for
+    one case and seed (AAP §0.5.4). One factory rather than one message per arm, because the header
+    probe and the decode refuse the same bytes for the same reason.
+    """
+    return TargetContractError(
+        f"damage artefact of {len(symbol.image_bytes)} bytes in format "
+        f"{symbol.output_format!r} is an image no library can open: {type(error).__name__}",
+        body_prefix=symbol.image_bytes,
+    )
+
+
 def _reference_raster(symbol: GeneratedSymbol) -> tuple[Any, numpy.ndarray]:
     """Return the target's artefact opened as an image, plus its ``(H, W, 3)`` ``uint8`` pixels.
+
+    The header is priced first and a declared canvas above :data:`_MAX_ARTEFACT_SIDE_PX` per side is
+    refused before a pixel is allocated -- the ceiling :mod:`qrcheck.decode.consensus` and
+    :mod:`qrcheck.checks.render` apply to the same untrusted bytes -- so the target cannot dictate
+    how much memory this case spends.
 
     The bytes came from the target, so an artefact no installed image library can open is that
     target's contract failure rather than this module's (AAP §0.3.4): it becomes a
@@ -795,12 +871,10 @@ def _reference_raster(symbol: GeneratedSymbol) -> tuple[Any, numpy.ndarray]:
     :func:`~qrcheck.checks.support.case_status_for_error` reports as one ``contract_error`` case
     with the first 256 bytes in ``decoded["hex_prefix"]``.
 
-    The library's own text is deliberately not interpolated: Pillow names the buffer it refused by
-    its ``repr`` (``<_io.BytesIO object at 0x...>``), and that address changes with every run, so
-    the diagnostic names the exception class instead and keeps ``decoded.json`` byte-identical for
-    one case and seed (AAP §0.5.4).
-
     Raises:
+        _ArtefactTooLarge: the header declares a canvas above the per-side ceiling, or declares one
+            the image library refuses to open for its size. Either is a fact about the target's own
+            output, which a case reports as ``sampling_failed``.
         TargetContractError: the artefact is not an image any library can open, or its pixels
             cannot be read as RGB. ``PIL.UnidentifiedImageError`` is an :exc:`OSError` and the
             image mux's refusal of an empty body a :exc:`ValueError`, so these two arms cover
@@ -810,17 +884,28 @@ def _reference_raster(symbol: GeneratedSymbol) -> tuple[Any, numpy.ndarray]:
     # Deferred: importing this module starts no image stack in a process that only lists checks.
     import numpy
 
-    from qrcheck.evidence import mux
+    from qrcheck.evidence.mux import DeclaredCanvasTooLarge
+    from qrcheck.evidence.mux import decode_image
+    from qrcheck.evidence.mux import probe_image_size
 
     try:
-        reference = mux.decode_image(symbol.image_bytes)
+        width, height = probe_image_size(symbol.image_bytes)
+    except DeclaredCanvasTooLarge as error:
+        # A PNG is priced from its own IHDR, above, without the library being consulted; any other
+        # format is priced by the library's header probe, and a canvas the library refuses for its
+        # size is the same fact about the same untrusted bytes, so it is refused the same way
+        # instead of escaping the case as a framework fault.  The refused dimensions were never
+        # read out, so the refusal carries none rather than an invented pair.
+        raise _ArtefactTooLarge(None, None) from error
+    except (OSError, ValueError) as error:
+        raise _unopenable(symbol, error) from error
+    if max(width, height) > _MAX_ARTEFACT_SIDE_PX:
+        raise _ArtefactTooLarge(width, height)
+    try:
+        reference = decode_image(symbol.image_bytes)
         pixels = numpy.asarray(reference.convert("RGB"), dtype=numpy.uint8)
     except (OSError, ValueError) as error:
-        raise TargetContractError(
-            f"damage artefact of {len(symbol.image_bytes)} bytes in format "
-            f"{symbol.output_format!r} is an image no library can open: {type(error).__name__}",
-            body_prefix=symbol.image_bytes,
-        ) from error
+        raise _unopenable(symbol, error) from error
     return reference, pixels
 
 
@@ -1077,6 +1162,64 @@ def _measure(
     return _Measurement(frame=frame, reading=reading, decoded_ec=ec_level)
 
 
+def _canvas_above_ceiling(
+    ctx: RunContext,
+    check_id: str,
+    case_id: str,
+    request: GenerateRequest,
+    symbol: GeneratedSymbol,
+    error: _ArtefactTooLarge,
+    started: float,
+    seed: int,
+) -> CaseResult:
+    """Return the documented "this artefact cannot be decoded" outcome for one case.
+
+    A target artefact whose header declares a canvas above :data:`_MAX_ARTEFACT_SIDE_PX` per side
+    -- or one the image library itself refuses to open for its size -- is a fact about the target's
+    own output, not a framework fault, so it is reported as ``sampling_failed`` with the declared
+    side and the ceiling in ``decoded`` and the artefact persisted as evidence. The refusal stands
+    in for the pristine measurement: every measurement would allocate the canvas the target
+    declared, so nothing about the symbol is asserted, and the case is neither a
+    ``value_mismatch`` nor an ``error`` result. A refusal the image library made never reads the
+    dimensions out, so ``artefact_px`` and ``artefact_side_px`` are then recorded as ``null``
+    rather than guessed at.
+
+    Raises:
+        TypeError: A mapping holds a value the result model rejects.
+        ValueError: An identifier, a duration or a seed is outside its documented range.
+    """
+    declared = error.declared_px
+    decoded: dict[str, Any] = {
+        "assertion": "artefact_decodable",
+        "reason": "artefact_canvas_above_decode_ceiling",
+        "artefact_px": None if declared is None else list(declared),
+        "artefact_side_px": error.longer_side_px,
+        "artefact_side_ceiling_px": _MAX_ARTEFACT_SIDE_PX,
+    }
+    expected: dict[str, Any] = {
+        "pristine": (
+            "the module grid and the error-correction level the symbol's format information "
+            "carries, which the occlusion budget is derived from"
+        ),
+        "established": False,
+        "why_not": (
+            "the artefact declares a canvas above the per-side decode ceiling, so no pixel of it "
+            "was read"
+        ),
+    }
+    result = support.fail(
+        check_id,
+        case_id,
+        reason=Reason.SAMPLING_FAILED,
+        request=request.as_dict(),
+        decoded=decoded,
+        expected=expected,
+        duration_ms=support.elapsed_ms(started),
+        seed=seed,
+    )
+    return support.record_evidence(ctx, result, symbol=symbol)
+
+
 def _damage_evidence(
     measurement: _Measurement,
     outcome: DecodeResult,
@@ -1187,9 +1330,10 @@ def _run_resilience_case(ctx: RunContext, record: _Record, kind: str) -> CaseRes
     """Damage one record's symbol with `kind` and assert the payload survives it.
 
     The family's contract in order: build the one legal request, take the record's memoised symbol
-    (encoding it on first touch), take the memoised pristine reading for the module count and the
-    symbol's EC level, apply the kind, record the variant for ``DM-SEEDED``, decode the damaged
-    image once, and compare the primary decoder's payload with the requested one.
+    (encoding it on first touch), open the artefact through the decode ceiling that refuses a
+    canvas above it before any pixel is read, take the memoised pristine reading for the module
+    count and the symbol's EC level, apply the kind, record the variant for ``DM-SEEDED``, decode
+    the damaged image once, and compare the primary decoder's payload with the requested one.
 
     Raises:
         TargetUnavailable: the target could not be reached; propagated to the runner, which owns the
@@ -1205,7 +1349,15 @@ def _run_resilience_case(ctx: RunContext, record: _Record, kind: str) -> CaseRes
     started = time.perf_counter()
     try:
         symbol = _symbol_for(ctx, record, request)
-        reference, pixels = _reference_raster(symbol)
+        try:
+            reference, pixels = _reference_raster(symbol)
+        except _ArtefactTooLarge as error:
+            # The header is priced before a pixel is allocated, so a canvas this framework refuses
+            # costs the case no memory: it fails as an unmeasurable artefact rather than aborting
+            # the run.  The refusal is not an adapter error and never reaches the net below.
+            return _canvas_above_ceiling(
+                ctx, DM_RESILIENCE, case_id, request, symbol, error, started, seed
+            )
         measurement = _measure(
             request,
             _reading_for(ctx, record, symbol, request),
@@ -1274,7 +1426,9 @@ def _run_seeded_case(ctx: RunContext, record: _Record, kind: str) -> CaseResult:
     applied with the same derived seed and resolved thresholds, and the encoded result is compared
     with the recorded bytes before decoding it and asserting the payload again. An empty memo skips
     the case with reason ``missing_dependency``, never a pass; a held artefact no image library can
-    open fails it with reason ``contract_error``, as the resilience executor reports it.
+    open fails it with reason ``contract_error``, as the resilience executor reports it, and one
+    whose own header declares a canvas above the per-side decode ceiling fails it with
+    ``sampling_failed`` for the same reason it is refused there.
     """
     # Deferred: importing this module starts no image stack in a process that only lists checks.
     from qrcheck.evidence import mux
@@ -1312,6 +1466,14 @@ def _run_seeded_case(ctx: RunContext, record: _Record, kind: str) -> CaseResult:
         )
     try:
         reference, pixels = _reference_raster(symbol)
+    except _ArtefactTooLarge as error:
+        # The held artefact is refused for the same reason the resilience executor refuses it: its
+        # own header prices it above the ceiling this framework decodes, so it is reported rather
+        # than allocated.  The arm stands before the adapter-error arm because this refusal is a
+        # verdict about the artefact, not one of the port's five errors.
+        return _canvas_above_ceiling(
+            ctx, DM_SEEDED, case_id, request, symbol, error, started, seed
+        )
     except (TargetRejected, TargetContractError, TargetUnsupported) as error:
         # The seeded case asks the target for nothing, so the one failure it can translate here
         # is the held artefact no library opens; the arm mirrors the resilience executor's.

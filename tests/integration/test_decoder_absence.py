@@ -8,9 +8,9 @@ at all, since exit 2 is decided before a single case runs (AAP §0.3.4). Row 4:
 ``opencv-python-headless`` corroborates and never decides, so its absence is a *supported
 degradation* -- doctor stays green and reports the entry as degraded, the run proceeds in
 single-decoder mode, every decoded result records ``agreement == "primary_only"`` with one
-``per_decoder`` entry (or two, the second at status ``error``, when the decoder is installed but
-unusable), the evidence a failing case writes shows the same decoder set, and ``index.html``
-states the degradation.
+``per_decoder`` entry, ``unavailable_decoders`` names the decoder the run could not consult and
+why, the evidence a failing case writes shows the same decoder set, and ``index.html`` states the
+degradation.
 
 A third degradation is held here too (AAP §0.3.5, §0.7.2): with no SVG rasterizer, ``RN-SVG``
 skips whole, carrying its discovery order and its evidence directory, and never counts as a pass.
@@ -26,8 +26,9 @@ child process does not inherit a ``sys.modules`` entry, while row 3's harder sta
 **present but unimportable**, which ``find_spec`` cannot produce -- runs out of process through
 the :func:`unimportable_module` fixture's stub file ahead of ``site-packages`` on
 ``PYTHONPATH``. The degradation is reached a second way and held here too: an *installed* but
-unimportable binding passes the availability probe, so consensus asks it and it answers
-``status: "error"``, with only :func:`qrcheck.decode.opencv._load_cv2` replaced.
+unimportable binding passes the availability probe, so the decode pipeline probes the binding,
+finds it cannot be loaded, and records it as an unavailable decoder instead of asking it -- with
+only :func:`qrcheck.decode.opencv._load_cv2` replaced.
 
 No test here skips for an absent decoder: every supported platform has a wheel (AAP §0.2.3), so
 a genuinely missing one means a broken environment and must surface as a loud failure naming the
@@ -92,11 +93,6 @@ STATUS_DEGRADED: Final[str] = "degraded"
 
 STATUS_SKIPPED: Final[str] = "skipped"
 REASON_MISSING_DEPENDENCY: Final[str] = "missing_dependency"
-
-#: The status a decoder records in ``per_decoder`` when it could not be run at all, which is what a
-#: present-but-unimportable binding leaves behind: consensus asked it, and it answered with an
-#: error rather than a payload.
-UNUSABLE_DECODER_STATUS: Final[str] = "error"
 
 #: The six keys the doctor report object carries, exactly (AAP §0.8.3), so a field that is added,
 #: dropped or renamed fails here instead of shrinking a machine-readable surface.
@@ -325,6 +321,30 @@ def dependency(document: Mapping[str, Any], name: str) -> dict[str, Any]:
         f"{sorted(entry)}"
     )
     return entry
+
+
+def unconsulted_reasons(decoded: Mapping[str, Any], where: str) -> dict[str, str]:
+    """Return ``decoded``'s ``unavailable_decoders``, requiring the secondary decoder in it.
+
+    The degradation has to stay recorded in the evidence even though it no longer reaches
+    ``per_decoder`` (AAP §0.6.6 row 4, §0.14.1), so this is the one assertion every
+    single-decoder test here makes about that record: exactly the secondary decoder, and a reason
+    a reader can act on. ``where`` names the result in a failure message.
+    """
+    unavailable = decoded.get("unavailable_decoders")
+    assert isinstance(unavailable, Mapping), (
+        f"{where} records unavailable_decoders as {unavailable!r}, not a mapping; the run's "
+        f"degradation would then be recorded nowhere in the evidence"
+    )
+    assert sorted(unavailable) == [SECONDARY_DECODER], (
+        f"{where} records {sorted(unavailable)} as unavailable, not the secondary decoder alone"
+    )
+    reason = unavailable[SECONDARY_DECODER]
+    assert isinstance(reason, str) and reason.strip(), (
+        f"{where} records the secondary decoder as unavailable with no reason ({reason!r}), so "
+        f"the degradation cannot be diagnosed from the evidence"
+    )
+    return dict(unavailable)
 
 
 # ---------------------------------------------------------------------------
@@ -614,6 +634,7 @@ def test_run_degrades_to_single_decoder_mode(
             f"{entry['check_id']} {entry['case_id']} records the decoders "
             f"{sorted(decoded['per_decoder'])}, not the primary decoder alone"
         )
+        unconsulted_reasons(decoded, f"{entry['check_id']} {entry['case_id']}")
 
 
 def test_evidence_records_a_single_decoder_block(
@@ -674,6 +695,7 @@ def test_evidence_records_a_single_decoder_block(
         f"the evidence records agreement {document['agreement']!r}, not "
         f"{SINGLE_DECODER_AGREEMENT!r}"
     )
+    unconsulted_reasons(document, str(decoded_path))
     canonical = json.dumps(document, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
     assert raw == canonical, (
         f"{decoded_path} is not canonical sorted-key JSON with two-space indent and one "
@@ -737,14 +759,17 @@ def test_run_degrades_when_the_secondary_decoder_cannot_be_imported(
 ) -> None:
     """A decoder that is installed but unusable degrades the run, and the report says so.
 
-    ``module_absent`` above is the easy half of row 4: ``find_spec`` answers ``None``, consensus
-    never asks the secondary decoder, and its name never reaches ``per_decoder``. A binding that is
-    *installed* but cannot be imported is the half that looks different while meaning the same
-    thing -- the availability probe discovers it, so consensus does ask it, and it answers with
-    ``status: "error"``. The run is single-decoder in effect while the evidence names both
-    decoders, so the degradation has to be derived from what each decoder recorded, not from the
-    decoder set. Breaks if ``index.html`` goes silent again for this shape, which is how a degraded
-    run came to be indistinguishable from a fully corroborated one (AAP §0.6.6 row 4, §0.7.2).
+    ``module_absent`` above is the easy half of row 4: ``find_spec`` answers ``None``, the run
+    resolves the secondary decoder as unavailable, and its name never reaches ``per_decoder``. A
+    binding that is *installed* but cannot be imported is the half that looks different while
+    meaning the same thing -- the availability probe finds the module, so the run's resolution keeps
+    the decoder, and the decode pipeline's own probe is what discovers that it cannot be loaded. It
+    is therefore asked nothing and recorded as unavailable with its reason, rather than as a decoder
+    that ran and raised, so ``per_decoder`` still lists the primary decoder alone. Breaks if an
+    unimportable binding goes back to leaving a second ``per_decoder`` entry -- a consumer counting
+    entries would then read two decoders where one answered -- or if ``index.html`` goes silent
+    again for this shape, which is how a degraded run came to be indistinguishable from a fully
+    corroborated one (AAP §0.6.6 row 4, §0.7.2).
     """
     assert importlib.util.find_spec(SECONDARY_MODULE) is not None, (
         f"{SECONDARY_MODULE!r} is not installed in this environment, so the binding could not be "
@@ -780,22 +805,27 @@ def test_run_degrades_when_the_secondary_decoder_cannot_be_imported(
         f"decoder that could not answer must not fail, error or skip a case; counts: {counts!r}"
     )
     entries = results_of(summary)
+    assert len(entries) > 1, (
+        f"the {CORPUS_CLASS!r} filter produced {len(entries)} result(s), so 'every result' "
+        f"would be satisfied by a single case"
+    )
     for entry in entries:
+        where = f"{entry['check_id']} {entry['case_id']}"
         decoded = entry["decoded"]
         assert decoded["agreement"] == SINGLE_DECODER_AGREEMENT, (
-            f"{entry['check_id']} {entry['case_id']} records agreement "
-            f"{decoded['agreement']!r}, not {SINGLE_DECODER_AGREEMENT!r}, although the "
-            f"secondary decoder answered with an error"
+            f"{where} records agreement {decoded['agreement']!r}, not "
+            f"{SINGLE_DECODER_AGREEMENT!r}, although the secondary decoder could not be loaded"
         )
-        assert sorted(decoded["per_decoder"]) == sorted([PRIMARY_DECODER, SECONDARY_DECODER]), (
-            f"{entry['check_id']} {entry['case_id']} records the decoders "
-            f"{sorted(decoded['per_decoder'])}; an installed-but-unusable decoder is asked, so "
-            f"both names are recorded even though only one answered"
+        assert sorted(decoded["per_decoder"]) == [PRIMARY_DECODER], (
+            f"{where} records the decoders {sorted(decoded['per_decoder'])}; a binding that "
+            f"cannot be imported raised nothing about this artefact, so it is not a decoder that "
+            f"answered and the primary decoder alone is listed"
         )
-        secondary = decoded["per_decoder"][SECONDARY_DECODER]
-        assert secondary["status"] == UNUSABLE_DECODER_STATUS, (
-            f"{entry['check_id']} {entry['case_id']} records the secondary decoder's status as "
-            f"{secondary['status']!r}, not {UNUSABLE_DECODER_STATUS!r}; entry: {secondary}"
+        unavailable = unconsulted_reasons(decoded, where)
+        assert SECONDARY_DISTRIBUTION in unavailable[SECONDARY_DECODER], (
+            f"{where} records the secondary decoder as unavailable because "
+            f"{unavailable[SECONDARY_DECODER]!r}, which does not name "
+            f"{SECONDARY_DISTRIBUTION!r}: a reader is not told which dependency to install"
         )
     html_path = space.report_dir / HTML_FILENAME
     assert html_path.is_file(), (

@@ -133,9 +133,9 @@ def _parse_string(text: str, key: str) -> list[_ParsedLeaf]:
     """Parse one template string and require every placeholder to be a known field.
 
     Raises:
-    ConfigError: The string is not well formed, or names a field outside
-    :data:`~qrcheck.config.models.TEMPLATE_FIELDS` -- the belt-and-braces path for a record built
-    without passing through the loader.
+        ConfigError: The string is not well formed, or names a field outside
+            :data:`~qrcheck.config.models.TEMPLATE_FIELDS` -- the belt-and-braces path for a record
+            built without passing through the loader.
     """
     try:
         parsed = list(_FORMATTER.parse(text))
@@ -160,8 +160,8 @@ def _parse_template(template: object, key_prefix: str) -> dict[str, Any]:
     string holding that object's JSON text.
 
     Raises:
-    ConfigError: The template is not a table, its JSON text does not parse, or the parsed value is
-    not a JSON object -- so it leaves as exit 2 naming the key.
+        ConfigError: The template is not a table, its JSON text does not parse, or the parsed value
+            is not a JSON object -- so it leaves as exit 2 naming the key.
     """
     key = f"{key_prefix}.request_template"
     body: object
@@ -314,8 +314,8 @@ def _query_parameters(body: Mapping[str, Any], key_prefix: str) -> dict[str, Any
     """Return the rendered template as query parameters for a ``GET`` request.
 
     Raises:
-    TargetContractError: A parameter is a table or an array. A query string carries scalars only;
-    the message names the template path.
+        TargetContractError: A parameter is a table or an array. A query string carries scalars
+            only; the message names the template path.
     """
     params: dict[str, Any] = {}
     for name, value in body.items():
@@ -336,7 +336,7 @@ def _json_body(body: Mapping[str, Any], key_prefix: str) -> bytes:
     Keys are sorted so a request's bytes are a function of the configuration alone.
 
     Raises:
-    ConfigError: The template holds a value JSON cannot carry -- a configuration fault.
+        ConfigError: The template holds a value JSON cannot carry -- a configuration fault.
     """
     try:
         return json.dumps(body, sort_keys=True).encode("utf-8")
@@ -371,8 +371,8 @@ def _parse_response_json(body: bytes, key_prefix: str, target: str) -> object:
     The refused body travels on ``body_prefix``, so a report records the bytes that were not JSON.
 
     Raises:
-    TargetContractError: The body is not UTF-8, or not JSON, although ``image_field`` names a field
-    inside it.
+        TargetContractError: The body is not UTF-8, or not JSON, although ``image_field`` names a
+            field inside it.
     """
     try:
         text = body.decode("utf-8")
@@ -398,8 +398,8 @@ def _base64_text(value: object, field: str, key_prefix: str) -> bytes:
     """Decode the base64 text carried by one response field.
 
     Raises:
-    TargetContractError: The field is not base64 text, or holds text that does not decode;
-    ``validate=True`` reports a stray character rather than skipping it.
+        TargetContractError: The field is not base64 text, or holds text that does not decode;
+            ``validate=True`` reports a stray character rather than skipping it.
     """
     if isinstance(value, str):
         encoded = value.strip()
@@ -430,7 +430,8 @@ def _raw_field_bytes(value: object, field: str, key_prefix: str) -> bytes:
     """Return one response field's bytes under the ``raw`` encoding.
 
     Raises:
-    TargetContractError: The field is neither text nor bytes, so no image can be recovered from it.
+        TargetContractError: The field is neither text nor bytes, so no image can be recovered from
+            it.
     """
     if isinstance(value, bytes):
         return value
@@ -451,7 +452,7 @@ def _required_capabilities(request: GenerateRequest) -> frozenset[Capability]:
     operation only when that value is pinned or non-default.
 
     Raises:
-    ValueError: ``output_format`` is neither ``png`` nor ``svg`` -- a framework defect.
+        ValueError: ``output_format`` is neither ``png`` nor ``svg`` -- a framework defect.
     """
     format_capability = _FORMAT_CAPABILITIES.get(request.output_format)
     if format_capability is None:
@@ -487,9 +488,9 @@ class HttpAdapter:
         """Prepare the adapter for `config` without any I/O.
 
         Raises:
-        ConfigError: The template is malformed, names an unknown placeholder, carries no payload
-        placeholder, or ``metadata_map`` names an unknown framework field.
-        ValueError: ``url`` is not an ``http``/``https`` URL on a loopback host.
+            ConfigError: The template is malformed, names an unknown placeholder, carries no payload
+                placeholder, or ``metadata_map`` names an unknown framework field.
+            ValueError: ``url`` is not an ``http``/``https`` URL on a loopback host.
         """
         self._config = config
         self.name = config.type if name is None else name
@@ -520,12 +521,13 @@ class HttpAdapter:
         before the client is touched, so an unhonourable request never opens a connection.
 
         Raises:
-        TargetUnsupported: An undeclared capability, or a pin or overlay no placeholder carries.
-        TargetUnavailable: The connection was refused or the address was unusable.
-        TargetTimeout: No response arrived within ``timeout_s``.
-        TargetContractError: A response arrived but was unusable -- a non-2xx status, an empty or
-        unparseable body, an absent field, undecodable base64, or a body past the read bound.
-        ConfigError: The template cannot be rendered or sent as configured.
+            TargetUnsupported: An undeclared capability, or a pin or overlay no placeholder carries.
+            TargetUnavailable: The connection was refused or the address was unusable.
+            TargetTimeout: No response arrived within ``timeout_s``.
+            TargetContractError: A response arrived but was unusable -- a non-2xx status, an empty
+                or unparseable body, an absent field, undecodable base64, or a body past the read
+                bound.
+            ConfigError: The template cannot be rendered or sent as configured.
         """
         require_capabilities(self, _required_capabilities(request))
         self._reject_inexpressible(request)
@@ -634,8 +636,8 @@ class HttpAdapter:
         own check exits 2 naming the host.
 
         Raises:
-        ValueError: The URL does not parse, its scheme or host is not loopback, or it carries
-        credentials.
+            ValueError: The URL does not parse, its scheme or host is not loopback, or it carries
+                credentials.
         """
         try:
             parts = urllib.parse.urlsplit(url)
@@ -663,9 +665,9 @@ class HttpAdapter:
         """Require every ``metadata_map`` key to be one of the four framework fields.
 
         Raises:
-        ConfigError: A key is outside ``version``, ``ec``, ``mask`` and ``mode``; the message names
-        every offending key. The schema's own check is authoritative, and this path spares a
-        hand-built record a bare ``ValueError`` from the metadata mapper.
+            ConfigError: A key is outside ``version``, ``ec``, ``mask`` and ``mode``; the message
+                names every offending key. The schema's own check is authoritative, and this path
+                spares a hand-built record a bare ``ValueError`` from the metadata mapper.
         """
         unknown = sorted(set(metadata_map) - set(METADATA_FIELDS))
         if not unknown:
@@ -685,7 +687,7 @@ class HttpAdapter:
         payload.
 
         Raises:
-        TargetUnsupported: Such a request. Raised before any I/O.
+            TargetUnsupported: Such a request. Raised before any I/O.
         """
         if "payload_b64" not in self._payload_placeholders:
             if _utf8_text(request.payload) is None:
@@ -707,8 +709,8 @@ class HttpAdapter:
         """Return the request mapping the configured template produces.
 
         Raises:
-        ConfigError: The template rendered to something other than a table, which turns a future
-        change into a configuration fault rather than a crash.
+            ConfigError: The template rendered to something other than a table, which turns a future
+                change into a configuration fault rather than a crash.
         """
         rendered = _render_node(
             self._template, _template_values(request), "", self._key_prefix
@@ -727,8 +729,8 @@ class HttpAdapter:
         most the bytes up to the bound.
 
         Raises:
-        TargetContractError: The body grew past the bound; the diagnostic names the bound, the bytes
-        received, the target, the method and the URL.
+            TargetContractError: The body grew past the bound; the diagnostic names the bound, the
+                bytes received, the target, the method and the URL.
         """
         body = bytearray()
         received = 0
@@ -761,8 +763,8 @@ class HttpAdapter:
         content.
 
         Raises:
-        TargetContractError: The status is outside 2xx, the body is unusable, a configured path is
-        absent, or the artefact is not the requested format.
+            TargetContractError: The status is outside 2xx, the body is unusable, a configured path
+                is absent, or the artefact is not the requested format.
         """
         status = response.status_code
         if status < 200 or status >= 300:
@@ -790,8 +792,8 @@ class HttpAdapter:
         declares no metadata.
 
         Raises:
-        TargetContractError: The body is empty, is not the JSON ``image_field`` needs, does not
-        carry the named path, or is not the requested artefact format.
+            TargetContractError: The body is empty, is not the JSON ``image_field`` needs, does not
+                carry the named path, or is not the requested artefact format.
         """
         field = self._config.image_field
         if not body:
@@ -819,9 +821,9 @@ class HttpAdapter:
         """Return the image bytes `value` carries under ``image_encoding``.
 
         Raises:
-        TargetContractError: The value does not match the declared encoding.
-        ValueError: ``image_encoding`` is neither ``base64`` nor ``raw`` -- a framework defect,
-        since the schema rejects that value at load.
+            TargetContractError: The value does not match the declared encoding.
+            ValueError: ``image_encoding`` is neither ``base64`` nor ``raw`` -- a framework defect,
+                since the schema rejects that value at load.
         """
         encoding = self._config.image_encoding
         if encoding == _BASE64_ENCODING:
@@ -836,8 +838,8 @@ class HttpAdapter:
         """Return the metadata the target declared, through the configured map.
 
         Raises:
-        TargetContractError: A configured path is absent or holds the wrong type, or metadata was
-        configured but the response is not a JSON object to read it from.
+            TargetContractError: A configured path is absent or holds the wrong type, or metadata
+                was configured but the response is not a JSON object to read it from.
         """
         metadata_map = self._config.metadata_map
         if not metadata_map or parsed is None:

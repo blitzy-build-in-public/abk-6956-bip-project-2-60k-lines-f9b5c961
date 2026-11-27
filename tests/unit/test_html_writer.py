@@ -15,7 +15,11 @@ prove a degradation, the errored case's traceback, and a second write byte-ident
 first.
 
 Self-containment and escaping are held here too: the page reaches no external origin, and
-escaped text keeps its non-ASCII characters literally and still parses back out of the panel."""
+escaped text keeps its non-ASCII characters literally and still parses back out of the panel.
+Markup escaping is not the whole promise either: a target's lone surrogate -- a code point UTF-8
+cannot encode -- reaches the document as itself, so the finished document is made encodable before
+the file is opened and each such code point becomes U+FFFD. The page is then written whole, with no
+raw surrogate in it and no truncated ``index.html`` behind a failed write."""
 
 import dataclasses
 import io
@@ -114,6 +118,14 @@ _TRACEBACK: str = (
     "RuntimeError: boom"
 )
 
+# The lone surrogate a target's JSON can carry: ``"\ud800"`` is a legal JSON escape that
+# ``json.loads`` materialises as one code point, and UTF-8 has no byte sequence for it. Spelled
+# through ``chr`` so this module's own source stays valid UTF-8 and holds no surrogate itself.
+_LONE_SURROGATE: str = chr(0xD800)
+
+# What the writer replaces it with: U+FFFD, the replacement character, one code point for one.
+_REPLACEMENT_CHARACTER: str = "\ufffd"
+
 # The decoder maps a result can record: both decoders agreeing, which is the healthy shape;
 # the primary decoder alone, which is the single-decoder degradation, both when the secondary
 # decoder is absent and when it is installed but unusable; and the shapes that prove nothing.
@@ -125,9 +137,10 @@ _SINGLE_DECODER_DECODE: dict[str, object] = {
     "agreement": "primary_only",
     "per_decoder": {"zxing": {"status": "decoded"}},
 }
-# The shape a decoder that is installed but cannot be imported leaves: consensus asked it, it
-# answered with an error, and the primary decoder read the payload alone. It proves the same
-# degradation as the shape above, so it must raise the same banner.
+# The shape a decoder that was consulted and raised leaves: its binding loaded, the call itself
+# failed, so it is recorded as an outcome with status error rather than as an unavailable decoder,
+# and the primary decoder read the payload alone. The degradation is the same one, so it must
+# raise the same banner.
 _UNUSABLE_SECONDARY_DECODE: dict[str, object] = {
     "agreement": "primary_only",
     "per_decoder": {"opencv": {"status": "error"}, "zxing": {"status": "decoded"}},
@@ -383,7 +396,11 @@ def test_zero_result_footer_offers_no_row_to_rerun(tmp_path: Path) -> None:
 
     assert "Every row of the results table" not in document
     assert "No case ran, so there is no row to re-run at a seed" in document
-    assert "qrcheck run --checks &lt;CHECK-ID&gt; --seed &lt;seed&gt;" in document
+    command = (
+        "qrcheck run --adapter reference --ec M --checks &lt;CHECK-ID&gt; "
+        f"--seed {_SEED}"
+    )
+    assert command in document
     assert "<code>summary.json</code> and <code>junit.xml</code>" in document
 
 
@@ -453,6 +470,44 @@ def test_hostile_identifier_stays_escaped_and_parses_back_out_of_the_panel(
     panel = _REQUEST_PANEL.search(document)
     assert panel is not None
     assert json.loads(unescape(panel.group("body")))["case_id"] == hostile
+
+
+def test_a_lone_surrogate_in_an_identifier_or_a_decoded_value_becomes_u_fffd(
+    tmp_path: Path,
+) -> None:
+    """A target's lone surrogate cannot abort the write or leave a truncated ``index.html``.
+
+    Both the case identifier and a decoder message carry a code point UTF-8 has no bytes for, which
+    ``html_escape`` passes through because it makes text inert rather than encodable, so the write
+    used to raise half-way through the file. The document is now made encodable before the
+    destination is even created: the page is complete, the text a target sent reads as U+FFFD, and
+    no raw surrogate reaches it.
+    """
+    case = dataclasses.replace(
+        _failed_case(_REQUEST),
+        case_id=f"corpus:bad{_LONE_SURROGATE}",
+        decoded={"decoder_message": f"rejected: {_LONE_SURROGATE} is not a code point"},
+    )
+    # Recorded rather than left unpersisted: a failing case's detail block needs its evidence, and
+    # the store now writes a case whose text carries a surrogate instead of refusing the case.
+    recorded = dataclasses.replace(case, evidence_dir=EvidenceStore(tmp_path).record(case))
+    assert recorded.evidence_dir is not None
+
+    document = _write_page(tmp_path, _run(recorded))
+
+    page = tmp_path / "index.html"
+    assert page.read_bytes().decode("utf-8") == document, "the file must be UTF-8 end to end"
+    assert _LONE_SURROGATE not in document
+    assert document.endswith("</html>\n"), "the page is written whole, never truncated"
+    assert [row["Case"] for row in _rows(document)] == [
+        f"corpus:bad{_REPLACEMENT_CHARACTER}"
+    ]
+    assert f"rejected: {_REPLACEMENT_CHARACTER} is not a code point" in document
+    # The evidence that was written for the case reads the same way, so the page and the artefact
+    # it renders agree on what the target's text became.
+    artefact = (tmp_path / recorded.evidence_dir / "decoded.json").read_text(encoding="utf-8")
+    assert f"rejected: {_REPLACEMENT_CHARACTER} is not a code point" in artefact
+    assert _LONE_SURROGATE not in artefact
 
 
 @pytest.mark.parametrize(
@@ -991,11 +1046,13 @@ def test_two_writes_of_one_run_are_byte_identical(tmp_path: Path) -> None:
 
 
 def test_each_failing_case_block_carries_its_own_reproduction_command(tmp_path: Path) -> None:
-    """The block's command is built from its own case, not copied from the footer's constant.
+    """The block's command names its own check and the run's target, seed and EC level.
 
-    The two cases differ only in their check ID and seed, so a single constant command could
-    not satisfy both, and the count at the end separates the two block commands from the
-    footer's placeholder one.
+    The two cases differ in their check ID, so a single constant command cannot satisfy
+    both, and the count at the end separates the two block commands from the footer's
+    placeholder one. Each block's command repeats the run's adapter, EC level and run seed,
+    because those are the values a copy has to carry to re-run a case of this run rather
+    than of the configured default target.
     """
     cases = (
         _failed_case(_REQUEST),
@@ -1010,14 +1067,80 @@ def test_each_failing_case_block_carries_its_own_reproduction_command(tmp_path: 
 
     document = _write_page(tmp_path, _run(*recorded))
 
+    commands: list[str] = []
     for case in cases:
         start = document.index(f"<h3>{case.check_id} — {case.case_id}</h3>")
         block = document[start : document.index("</section>", start)]
-        assert (
-            f'<p class="command"><code>qrcheck run --checks {case.check_id} '
-            f'--seed {case.seed}</code></p>' in block
+        command = (
+            '<p class="command"><code>qrcheck run --adapter reference --ec M '
+            f"--checks {case.check_id} --seed {_SEED}</code></p>"
         )
-    assert document.count("qrcheck run --checks") == len(cases) + 1
+        assert command in block
+        assert "&lt;CHECK-ID&gt;" not in block
+        commands.append(command)
+    assert commands[0] != commands[1]
+    assert document.count("qrcheck run --adapter reference --ec M") == len(cases) + 1
+
+
+def test_the_command_carries_the_run_seed_not_the_case_s_derived_one(tmp_path: Path) -> None:
+    """A derived case seed must not reach the command's run-seed slot.
+
+    ``DM-RESILIENCE`` derives each case's seed from the run seed, so passing that derived
+    value back into ``--seed`` re-derives every draw from the wrong root and reproduces a
+    different case than the page shows. The command carries the run seed, while the block's
+    ``seed`` fact keeps recording the case's own derived seed that the damage artefact is
+    named for (AAP §0.5.2, §0.3.4).
+    """
+    derived = 1617066119022174236
+    failure = dataclasses.replace(_failed_case(_REQUEST), seed=derived)
+    recorded = dataclasses.replace(
+        failure, evidence_dir=EvidenceStore(tmp_path).record(failure)
+    )
+
+    document = _write_page(tmp_path, _run(recorded))
+
+    assert (
+        '<p class="command"><code>qrcheck run --adapter reference --ec M '
+        f"--checks DM-RESILIENCE --seed {_SEED}</code></p>" in document
+    )
+    assert f"--seed {derived}</code>" not in document
+    assert f"<div><dt>seed</dt><dd>{derived}</dd></div>" in document
+
+
+def test_a_command_from_a_non_default_target_names_that_target(tmp_path: Path) -> None:
+    """Both commands name the run's adapter and EC level, which the CLI would default away.
+
+    ``--adapter`` defaults to the configured ``default_adapter`` and ``--ec`` to ``M``, so a
+    command naming neither re-runs the conforming default target and reports passes where
+    the page shows the defective target's failures (AAP §0.8.4, §0.8.3). A page written for
+    a differently targeted run differs in exactly that position.
+    """
+    failure = _failed_case(_REQUEST)
+    recorded = dataclasses.replace(
+        failure, evidence_dir=EvidenceStore(tmp_path).record(failure)
+    )
+
+    document = _write_page(tmp_path, _run(recorded, adapter="defective", ec_level="L"))
+
+    block_command = (
+        '<p class="command"><code>qrcheck run --adapter defective --ec L '
+        f"--checks DM-RESILIENCE --seed {_SEED}</code></p>"
+    )
+    footer_command = (
+        '<p class="command"><code>qrcheck run --adapter defective --ec L '
+        f"--checks &lt;CHECK-ID&gt; --seed {_SEED}</code></p>"
+    )
+    assert block_command in document
+    assert footer_command in document
+    assert document.count("--adapter defective --ec L") == 2
+
+    other = write_html(_run(recorded), tmp_path / "reference-target.html", tmp_path)
+    other_document = other.read_text(encoding="utf-8")
+    assert block_command not in other_document
+    assert (
+        '<p class="command"><code>qrcheck run --adapter reference --ec M '
+        f"--checks DM-RESILIENCE --seed {_SEED}</code></p>" in other_document
+    )
 
 
 def test_the_decoded_panel_renders_the_artefact_the_store_wrote(tmp_path: Path) -> None:

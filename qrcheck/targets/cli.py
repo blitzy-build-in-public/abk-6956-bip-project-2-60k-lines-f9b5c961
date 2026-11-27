@@ -168,11 +168,11 @@ class _BoundedStreamCapture:
         """Create the pipe and start draining it.
 
         Args:
-        name: ``"stdout"`` or ``"stderr"``, the stream this object holds, for diagnostics.
+            name: ``"stdout"`` or ``"stderr"``, the stream this object holds, for diagnostics.
 
         Raises:
-        OSError: The pipe itself could not be created.
-        RuntimeError: The drain thread could not be started.
+            OSError: The pipe itself could not be created.
+            RuntimeError: The drain thread could not be started.
         """
         self._name: str = name
         self._buffer: bytearray = bytearray()
@@ -281,8 +281,8 @@ class CliAdapter:
         """Prepare the adapter for `config` without spawning anything.
 
         Raises:
-        ValueError: An empty ``command``, a NUL in a configured string, a ``returns`` outside its
-        set, or a ``metadata_map`` beside a stdout-based ``returns``.
+            ValueError: An empty ``command``, a NUL in a configured string, a ``returns`` outside
+                its set, or a ``metadata_map`` beside a stdout-based ``returns``.
         """
         self.name: str = name if name is not None else config.type
         self.capabilities: frozenset[Capability] = declared_capabilities(config)
@@ -312,14 +312,14 @@ class CliAdapter:
         """Run the target once for `request` and return the symbol it produced.
 
         Raises:
-        TargetUnsupported: An undeclared capability, or a pin or overlay no template carries.
-        TargetUnavailable: The program could not be spawned, or the scratch directory its
-        artefact needs could not be created.
-        TargetTimeout: The target outlived ``timeout_s`` and was killed.
-        TargetRejected: The target declared a client-side rejection.
-        TargetContractError: It exited without a usable artefact or a declared rejection, or wrote
-        more than the documented byte bound to one of its streams.
-        ValueError: An unknown placeholder, or a payload the template cannot take.
+            TargetUnsupported: An undeclared capability, or a pin or overlay no template carries.
+            TargetUnavailable: The program could not be spawned, or the scratch directory its
+                artefact needs could not be created.
+            TargetTimeout: The target outlived ``timeout_s`` and was killed.
+            TargetRejected: The target declared a client-side rejection.
+            TargetContractError: It exited without a usable artefact or a declared rejection, or
+                wrote more than the documented byte bound to one of its streams.
+            ValueError: An unknown placeholder, or a payload the template cannot take.
         """
         require_capabilities(self, _required_capabilities(request))
         self._reject_inexpressible(request)
@@ -348,26 +348,27 @@ class CliAdapter:
         """Spawn the child once and capture a bounded prefix of each of its two output streams.
 
         The child is run as it always was -- one argv list, no shell, the configured ``timeout_s``,
-        no inherited environment -- but its stdout and stderr are the two bounded pipes of
+        and ``env=None``, so it inherits this framework's environment and working directory, as
+        ``docs/targets.md`` states -- but its stdout and stderr are the two bounded pipes of
         :class:`_BoundedStreamCapture` rather than ``capture_output``, so no volume of output can
         grow this process past :data:`_MAX_CAPTURED_STREAM_BYTES` however much of ``timeout_s`` is
         left. Both pipes are released on every path, before any error is converted.
 
         Args:
-        invocation: The command line, stdin bytes and artefact path one ``generate`` call runs.
+            invocation: The command line, stdin bytes and artefact path one ``generate`` call runs.
 
         Returns:
-        The completed process, rebuilt over the bytes captured from both streams, and the duration
-        of the spawn in milliseconds measured as soon as the child exited.
+            The completed process, rebuilt over the bytes captured from both streams, and the
+            duration of the spawn in milliseconds measured as soon as the child exited.
 
         Raises:
-        TargetTimeout: The child outlived ``timeout_s`` and was killed; the message names the
-        configured timeout.
-        TargetUnavailable: The child could not be spawned, or no pipe could be created for its
-        output.
-        TargetContractError: One of the child's streams passed the documented byte bound, which
-        makes its output unusable whatever else happened -- an over-bound stream outranks a
-        timeout.
+            TargetTimeout: The child outlived ``timeout_s`` and was killed; the message names the
+                configured timeout.
+            TargetUnavailable: The child could not be spawned, or no pipe could be created for its
+                output.
+            TargetContractError: One of the child's streams passed the documented byte bound, which
+                makes its output unusable whatever else happened -- an over-bound stream outranks a
+                timeout.
         """
         stdout_capture, stderr_capture = self._open_captures()
         started = time.perf_counter()
@@ -422,7 +423,8 @@ class CliAdapter:
         is the same trigger as any other spawn failure.
 
         Raises:
-        TargetUnavailable: A pipe or a drain thread could not be created, so the target was not run.
+            TargetUnavailable: A pipe or a drain thread could not be created, so the target was not
+                run.
         """
         captures: list[_BoundedStreamCapture] = []
         try:
@@ -441,13 +443,13 @@ class CliAdapter:
         """Refuse a child stream that passed the documented byte bound.
 
         Args:
-        captures: The two captures of the child that just exited, in stream order.
+            captures: The two captures of the child that just exited, in stream order.
 
         Raises:
-        TargetContractError: One stream delivered more than :data:`_MAX_CAPTURED_STREAM_BYTES`. The
-        message names the stream, the bound and how much arrived, and the first
-        :data:`~qrcheck.targets.base.HEX_PREFIX_LIMIT` bytes travel on ``body_prefix`` -- the same
-        evidence shape a non-image body carries (AAP §0.6.6 row 8).
+            TargetContractError: One stream delivered more than :data:`_MAX_CAPTURED_STREAM_BYTES`.
+                The message names the stream, the bound and how much arrived, and the first
+                :data:`~qrcheck.targets.base.HEX_PREFIX_LIMIT` bytes travel on ``body_prefix`` --
+                the same evidence shape a non-image body carries (AAP §0.6.6 row 8).
         """
         for capture in captures:
             if not capture.overflowed:
@@ -467,7 +469,7 @@ class CliAdapter:
         ``command`` are spliced literally, so nothing this adapter runs can carry them.
 
         Raises:
-        TargetUnsupported: A version or mask pin, or a logo overlay. Raised before any I/O.
+            TargetUnsupported: A version or mask pin, or a logo overlay. Raised before any I/O.
         """
         for field_name, capability in _INEXPRESSIBLE_FIELDS:
             if getattr(request, field_name) is None:
@@ -485,11 +487,11 @@ class CliAdapter:
         ``output_arg`` needs.
 
         Raises:
-        ValueError: ``payload_arg`` is neither a template nor a flag, or ``output_arg`` names no
-        path.
-        TargetUnavailable: No scratch directory for the artefact could be created, so the target
-        was not run.
-        TargetContractError: The payload cannot be interpolated as UTF-8 text.
+            ValueError: ``payload_arg`` is neither a template nor a flag, or ``output_arg`` names no
+                path.
+            TargetUnavailable: No scratch directory for the artefact could be created, so the target
+                was not run.
+            TargetContractError: The payload cannot be interpolated as UTF-8 text.
         """
         words, stdin_payload = self._payload_argument(request)
         argv = [*self._command, *words]
@@ -523,8 +525,8 @@ class CliAdapter:
         """Return the payload's argv words and, for the stdin form, the bytes to pipe.
 
         Raises:
-        ValueError: ``payload_arg`` is neither a placeholder template nor a flag.
-        TargetContractError: A text placeholder was given a payload that is not UTF-8-decodable.
+            ValueError: ``payload_arg`` is neither a placeholder template nor a flag.
+            TargetContractError: A text placeholder was given a payload that is not UTF-8-decodable.
         """
         template = self._payload_arg
         if _TOKEN_PATTERN.search(template):
@@ -548,14 +550,14 @@ class CliAdapter:
         """Substitute every placeholder in `template` from `request`.
 
         Args:
-        template: The configured argument template.
-        request: The request being rendered.
-        key: ``payload_arg`` or ``output_arg``, for the diagnostic.
-        path: The artefact path that ``{}`` stands for.
+            template: The configured argument template.
+            request: The request being rendered.
+            key: ``payload_arg`` or ``output_arg``, for the diagnostic.
+            path: The artefact path that ``{}`` stands for.
 
         Raises:
-        ValueError: A placeholder is outside the token vocabulary.
-        TargetContractError: A text placeholder needs a UTF-8 payload and has none.
+            ValueError: A placeholder is outside the token vocabulary.
+            TargetContractError: A text placeholder needs a UTF-8 payload and has none.
         """
 
         def substitute(match: re.Match[str]) -> str:
@@ -573,8 +575,8 @@ class CliAdapter:
         """Return the text one placeholder stands for.
 
         Raises:
-        ValueError: `token` is outside the vocabulary.
-        TargetContractError: A text placeholder needs a UTF-8 payload.
+            ValueError: `token` is outside the vocabulary.
+            TargetContractError: A text placeholder needs a UTF-8 payload.
         """
         if not token:
             if path is not None:
@@ -610,8 +612,8 @@ class CliAdapter:
         would make the ``IV-*`` checks vacuous.
 
         Raises:
-        TargetRejected: The target declared a rejection, in its own words.
-        TargetContractError: It exited non-zero without declaring one.
+            TargetRejected: The target declared a rejection, in its own words.
+            TargetContractError: It exited non-zero without declaring one.
         """
         stdout_text = _decoded(completed.stdout)
         stderr_text = _decoded(completed.stderr)
@@ -634,8 +636,8 @@ class CliAdapter:
         """Return the artefact a zero exit delivered, under the configured `returns`.
 
         Raises:
-        TargetContractError: No artefact sits where ``returns`` says to read it, or the bytes are
-        not the format the request asked for.
+            TargetContractError: No artefact sits where ``returns`` says to read it, or the bytes
+                are not the format the request asked for.
         """
         if self._returns in _STDOUT_RETURNS:
             data = decode_returned_image(completed.stdout, self._returns)
@@ -664,8 +666,8 @@ class CliAdapter:
         """Return the metadata the target declared, projected through `metadata_map`.
 
         Raises:
-        TargetContractError: stdout is not the one JSON object a configured ``metadata_map`` reads,
-        or a configured field is absent from it.
+            TargetContractError: stdout is not the one JSON object a configured ``metadata_map``
+                reads, or a configured field is absent from it.
         """
         if not self._metadata_map:
             return {}
@@ -696,7 +698,7 @@ def _required_capabilities(request: GenerateRequest) -> frozenset[Capability]:
     level conformance declares the capability itself and is skipped first.
 
     Raises:
-    ValueError: The request asks for a format outside ``OUTPUT_FORMATS`` -- a framework defect.
+        ValueError: The request asks for a format outside ``OUTPUT_FORMATS`` -- a framework defect.
     """
     try:
         needed = {Capability(request.output_format)}
@@ -721,8 +723,8 @@ def _checked_returns(returns: str, name: str) -> ReturnsKind:
     """Return `returns` when it is one of the four delivery modes.
 
     Raises:
-    ValueError: It is outside :data:`qrcheck.config.models.RETURNS_KINDS`, which means a
-    configuration record was built by hand.
+        ValueError: It is outside :data:`qrcheck.config.models.RETURNS_KINDS`, which means a
+            configuration record was built by hand.
     """
     if isinstance(returns, str) and returns in RETURNS_KINDS:
         return cast(ReturnsKind, returns)
@@ -738,7 +740,7 @@ def _check_no_nul(value: str, name: str, key: str) -> None:
     catching it at construction keeps it from surfacing mid-run as an unexplained framework fault.
 
     Raises:
-    ValueError: `value` contains a NUL character.
+        ValueError: `value` contains a NUL character.
     """
     if "\x00" in value:
         raise ValueError(
@@ -757,8 +759,8 @@ def _payload_text(payload: bytes, name: str, key: str) -> str:
     """Return `payload` as UTF-8 text for a text placeholder.
 
     Raises:
-    TargetContractError: The payload is not strictly UTF-8-decodable, or carries a NUL no argv word
-    can transport; the message names the binary-safe placeholder that would work.
+        TargetContractError: The payload is not strictly UTF-8-decodable, or carries a NUL no argv
+            word can transport; the message names the binary-safe placeholder that would work.
     """
     try:
         text = payload.decode("utf-8")
@@ -849,8 +851,8 @@ def _json_object(stdout: bytes, name: str, keys: list[str]) -> dict[str, object]
     The stdout bytes are the response that arrived, so each refusal carries them on ``body_prefix``.
 
     Raises:
-    TargetContractError: stdout is empty, is not UTF-8, is not JSON, or is not a JSON object --
-    naming the configured fields read from it.
+        TargetContractError: stdout is empty, is not UTF-8, is not JSON, or is not a JSON object --
+            naming the configured fields read from it.
     """
     configured = ", ".join(repr(key) for key in keys)
     if not stdout.strip():

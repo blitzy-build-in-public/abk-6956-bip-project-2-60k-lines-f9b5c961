@@ -192,8 +192,8 @@ class CorpusRecord:
         ``payload_b64`` is decoded with validation, so a corrupt string fails loudly here.
 
         Raises:
-        CorpusError: Neither payload field is set -- a record built around the constructor's
-        invariants.
+            CorpusError: Neither payload field is set -- a record built around the constructor's
+                invariants.
         """
         if self.payload_b64 is not None:
             return _decode_base64(self.payload_b64, self.id)
@@ -231,8 +231,8 @@ class CorpusRecord:
         and a key spelled any other way is rejected.
 
         Raises:
-        CorpusError: An unknown key, a missing required key, a value of the wrong type, or a record
-        that breaks an invariant.
+            CorpusError: An unknown key, a missing required key, a value of the wrong type, or a
+                record that breaks an invariant.
         """
         if not isinstance(raw, Mapping):
             raise CorpusError(
@@ -270,8 +270,8 @@ def build_corpus(seed: int) -> list[CorpusRecord]:
     `seed` and of the capacity tables alone.
 
     Raises:
-    CorpusError: `seed` is not a non-negative integer, a class has no payload generator, or the
-    assembled corpus fails an invariant.
+        CorpusError: `seed` is not a non-negative integer, a class has no payload generator, or the
+            assembled corpus fails an invariant.
     """
     _require_seed(seed)
     _require_generator_coverage()

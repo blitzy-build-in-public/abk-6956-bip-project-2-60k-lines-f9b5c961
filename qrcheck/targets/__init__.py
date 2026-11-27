@@ -60,8 +60,8 @@ class _AdapterTypes(Mapping[str, Callable[..., Adapter]]):
         resolved per-type record and the configured target name.
 
         Raises:
-        KeyError: ``key`` is not a declared target type; raised from the row lookup, so an unknown
-        ``type`` imports no adapter.
+            KeyError: ``key`` is not a declared target type; raised from the row lookup, so an
+                unknown ``type`` imports no adapter.
         """
         module_name, class_name = _ADAPTER_ENTRIES[key]
         adapter: Callable[..., Adapter] = getattr(

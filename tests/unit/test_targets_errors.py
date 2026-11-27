@@ -1649,9 +1649,9 @@ def _scan(source: str, module: str) -> tuple[tuple[_Handler, ...], tuple[_Violat
     """Return the handlers `source` declares and every violation of the closed vocabulary.
 
     Args:
-    source: The module's text, parsed rather than imported, so a defect is read from the file a
-    reviewer opens.
-    module: The file name, which selects the module's contract errors and its exemptions.
+        source: The module's text, parsed rather than imported, so a defect is read from the file a
+            reviewer opens.
+        module: The file name, which selects the module's contract errors and its exemptions.
     """
     tree = ast.parse(source, filename=module)
     scopes = _enclosing_scopes(tree)
@@ -2157,13 +2157,13 @@ def test_reference_adapter_rejects_at_the_ratio_the_product_measures(
     ),
 )
 def test_reference_adapter_holds_no_second_copy_of_the_contrast_formula(name: str) -> None:
-    """cc121-F02: the WCAG ratio has one owner, so this module must not re-derive it.
+    """The WCAG ratio has one implementation, :mod:`qrcheck.decode.consensus`.
 
     The ``_SRGB_*`` constants and the ``_linear_channel``/``_relative_luminance``/
-    ``_contrast_ratio`` helpers this module used to carry were a second implementation: they agreed
-    with :mod:`qrcheck.decode.consensus` only because both copied the same numbers, so retuning
-    either side would silently decouple the floor ``IV-BAD-OPTION`` measures from the floor this
-    target rejects at. The target reaches the one implementation at the point of use instead, which
+    ``_contrast_ratio`` helpers here would be a second implementation: they would agree with
+    :mod:`qrcheck.decode.consensus` only because both copy the same numbers, so retuning either
+    side would silently decouple the floor ``IV-BAD-OPTION`` measures from the floor this target
+    rejects at. The target reaches the one implementation at the point of use instead, which
     :func:`test_reference_adapter_rejects_at_the_ratio_the_product_measures` pins from the other
     side.
     """

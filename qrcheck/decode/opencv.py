@@ -13,10 +13,12 @@ damage, where a miss and a detection without a decode map to distinct ``error_te
 unreliable one-module quiet zone, which produces the ``primary_only`` case consensus records rather
 than judges.
 
-It never raises for a decode failure -- a missing binding, or an exception from it, becomes
-``status="error"``, because consensus treats a secondary error as absence and must never manufacture
-a ``decoder_disagreement``. ``cv2`` is resolved lazily, and ``ValueError`` is reserved for a caller
-defect.
+It never raises for a decode failure -- an exception from the binding becomes ``status="error"``,
+because consensus treats a secondary error as absence and must never manufacture a
+``decoder_disagreement``. A binding that cannot be imported is not a decode failure at all:
+:func:`binding_problem` lets consensus record it as an unavailable decoder rather than as an outcome
+(AAP §0.4.5), while a direct call to :func:`read_secondary` still answers with ``status="error"``.
+``cv2`` is resolved lazily, and ``ValueError`` is reserved for a caller defect.
 """
 
 from __future__ import annotations
@@ -33,7 +35,9 @@ from qrcheck.decode.base import SECONDARY_DECODER, DecoderOutcome, Polarity
 
 __all__ = [
     "DECODER_NAME",
+    "RESOLUTION_ABSENT_TEXT",
     "SecondaryReading",
+    "binding_problem",
     "decode_secondary",
     "read_secondary",
 ]
@@ -48,6 +52,10 @@ _MISSING_DEPENDENCY_TEXT: Final = (
     "opencv-python-headless is not importable; the secondary decoder is a "
     "degradable dependency"
 )
+
+#: Recorded when the run's own resolution left the secondary decoder out, so it was
+#: never asked: the reason a caller reads in ``DecodeResult.unavailable_decoders``.
+RESOLUTION_ABSENT_TEXT: Final = "the run resolved the secondary decoder as unavailable"
 
 #: ``points is None``: the binding found no symbol anywhere in the image.
 _NO_SYMBOL_TEXT: Final = "no symbol detected"
@@ -172,6 +180,23 @@ def read_secondary(
         ),
         straight_qrcode=rectified,
     )
+
+
+def binding_problem() -> str | None:
+    """Return why the binding cannot be consulted, or ``None`` when it can.
+
+    The probe the decode pipeline consults *before* it asks this decoder anything: a binding that
+    cannot be imported raised nothing about any artefact, so it is recorded as an unavailable
+    decoder rather than as an outcome with ``status="error"``, which is what makes single-decoder
+    mode's evidence list one decoder (AAP §0.6.6 row 4, §0.4.5). Built on :func:`_load_cv2`, so an
+    :exc:`ImportError` from an absent distribution and an :exc:`OSError` from a compiled extension
+    that cannot be loaded both mean unavailable, and a successful import is cached by the
+    interpreter, so a probe before every decode costs one import for the whole run.
+
+    Never raises. :func:`read_secondary` keeps its own behaviour, so a direct caller that asks for
+    a decode still gets an ``error`` outcome when the binding is missing.
+    """
+    return None if _load_cv2() is not None else _MISSING_DEPENDENCY_TEXT
 
 
 def _load_cv2() -> types.ModuleType | None:

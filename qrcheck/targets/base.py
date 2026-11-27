@@ -155,8 +155,8 @@ def _check_capability_vocabulary() -> bool:
     this gate is what makes a rename on either side fail loudly at import.
 
     Raises:
-    RuntimeError: The declarations differ; the message names both sites and every member present in
-    only one of them.
+        RuntimeError: The declarations differ; the message names both sites and every member present
+            in only one of them.
     """
     drift = frozenset(Capability) ^ frozenset(CAPABILITY_NAMES)
     if not drift:
@@ -179,8 +179,8 @@ def declared_capabilities(config: TargetConfig) -> frozenset[Capability]:
     the one sort that keeps resolution deterministic.
 
     Raises:
-    ValueError: A declared name is not a :class:`Capability` member -- a framework defect, since the
-    schema rejects an unknown member at load.
+        ValueError: A declared name is not a :class:`Capability` member -- a framework defect, since
+            the schema rejects an unknown member at load.
     """
     try:
         return frozenset(Capability(name) for name in sorted(config.capabilities))
@@ -340,11 +340,11 @@ class Adapter(Protocol):
         never touches a process, a socket or the filesystem.
 
         Raises:
-        TargetUnsupported: Undeclared capability; raised before any I/O.
-        TargetUnavailable: The target could not be reached at all.
-        TargetTimeout: No response within the configured timeout.
-        TargetRejected: The target declared a client-side rejection of the request.
-        TargetContractError: A response arrived but could not be used.
+            TargetUnsupported: Undeclared capability; raised before any I/O.
+            TargetUnavailable: The target could not be reached at all.
+            TargetTimeout: No response within the configured timeout.
+            TargetRejected: The target declared a client-side rejection of the request.
+            TargetContractError: A response arrived but could not be used.
         """
         ...
 
@@ -379,8 +379,8 @@ def build_request(
     Text is refused, because the caller's encoding must stay visible.
 
     Raises:
-    ValueError: A field is outside its documented range or the payload does not fit; the message
-    names the field. A framework-side defect, deliberately not :class:`TargetRejected`.
+        ValueError: A field is outside its documented range or the payload does not fit; the message
+            names the field. A framework-side defect, deliberately not :class:`TargetRejected`.
     """
     body = _checked_payload(payload)
     level = _checked_ec_level(ec_level)
@@ -446,7 +446,7 @@ def _checked_payload(payload: object) -> bytes:
     """Return `payload` as ``bytes``, refusing text and anything else.
 
     Raises:
-    ValueError: ``payload`` is not bytes-like; text is refused, never encoded.
+        ValueError: ``payload`` is not bytes-like; text is refused, never encoded.
     """
     if isinstance(payload, bytes):
         return payload
@@ -463,7 +463,7 @@ def _checked_ec_level(ec_level: object) -> str:
     """Return `ec_level` when it is one of ``L``, ``M``, ``Q``, ``H``.
 
     Raises:
-    ValueError: It is not one of the four levels of ISO/IEC 18004 clause 7.5.
+        ValueError: It is not one of the four levels of ISO/IEC 18004 clause 7.5.
     """
     if isinstance(ec_level, str) and ec_level in EC_LEVELS:
         return ec_level
@@ -474,7 +474,7 @@ def _checked_output_format(output_format: object) -> str:
     """Return `output_format` lowered when it is ``png`` or ``svg``.
 
     Raises:
-    ValueError: It is not one of :data:`OUTPUT_FORMATS`.
+        ValueError: It is not one of :data:`OUTPUT_FORMATS`.
     """
     if isinstance(output_format, str):
         normalised = output_format.strip().lower()
@@ -498,7 +498,7 @@ def _checked_optional_int(
     would otherwise validate silently.
 
     Raises:
-    ValueError: ``value`` is not an integer or is out of bounds; the message names `field`.
+        ValueError: ``value`` is not an integer or is out of bounds; the message names `field`.
     """
     if value is None:
         return None
@@ -514,8 +514,8 @@ def _checked_rgb(field: str, value: object) -> tuple[int, int, int]:
     """Return `value` as a three-channel colour tuple of 0..255 integers.
 
     Raises:
-    ValueError: ``value`` is not three in-range integers; the message names `field`, and a ``bool``
-    channel is refused.
+        ValueError: ``value`` is not three in-range integers; the message names `field`, and a
+            ``bool`` channel is refused.
     """
     expected = (
         f"{field} must be a 3-tuple of integers in "
@@ -539,7 +539,7 @@ def _checked_logo_path(value: object) -> Path | None:
     """Return `value` as a path when a logo overlay is requested.
 
     Raises:
-    ValueError: ``value`` is neither ``None`` nor a filesystem path.
+        ValueError: ``value`` is neither ``None`` nor a filesystem path.
     """
     if value is None:
         return None
@@ -580,10 +580,10 @@ def require_capabilities(
     request never reaches a target and never consumes its ``timeout_s``.
 
     Raises:
-    TargetUnsupported: A requirement is not declared; the message names the adapter and every
-    missing capability in sorted order.
-    ValueError: A member of `needed`, or a name the adapter declares, is not a :class:`Capability`
-    -- a framework defect.
+        TargetUnsupported: A requirement is not declared; the message names the adapter and every
+            missing capability in sorted order.
+        ValueError: A member of `needed`, or a name the adapter declares, is not a
+            :class:`Capability` -- a framework defect.
     """
     if isinstance(needed, str):
         required = frozenset({Capability(needed)})
@@ -615,8 +615,8 @@ def decode_returned_image(
     ``file_path`` name a path the target chose and one the framework supplied.
 
     Raises:
-    TargetContractError: `value` does not match `returns`, or the artefact is empty.
-    ValueError: `returns` is not one of ``RETURNS_KINDS`` -- a framework defect.
+        TargetContractError: `value` does not match `returns`, or the artefact is empty.
+        ValueError: `returns` is not one of ``RETURNS_KINDS`` -- a framework defect.
     """
     if returns not in RETURNS_KINDS:
         raise ValueError(f"returns must be one of {', '.join(RETURNS_KINDS)}; got {returns!r}")
@@ -641,7 +641,7 @@ def _raw_bytes(value: object) -> bytes:
     """Return `value` as artefact bytes for the ``raw_bytes`` contract.
 
     Raises:
-    TargetContractError: `value` is not bytes-like.
+        TargetContractError: `value` is not bytes-like.
     """
     if isinstance(value, bytes):
         return value
@@ -656,7 +656,7 @@ def _base64_bytes(value: object) -> bytes:
     """Decode `value` as base64 text for the ``base64`` contract.
 
     Raises:
-    TargetContractError: `value` is not text, is not ASCII, or is not valid base64.
+        TargetContractError: `value` is not text, is not ASCII, or is not valid base64.
     """
     if isinstance(value, str):
         encoded = value.strip()
@@ -693,10 +693,10 @@ def _path_bytes(
     quotes and which is never a resolved absolute path.
 
     Raises:
-    TargetContractError: `value` is not a path, is an empty path, or cannot be read; the path is
-    not a regular file the target wrote, so it is never opened; the artefact is larger than
-    :data:`_MAX_ARTEFACT_BYTES`, so it is refused rather than read; or it grew past that ceiling
-    while it was being read.
+        TargetContractError: `value` is not a path, is an empty path, or cannot be read; the path is
+            not a regular file the target wrote, so it is never opened; the artefact is larger than
+            :data:`_MAX_ARTEFACT_BYTES`, so it is refused rather than read; or it grew past that
+            ceiling while it was being read.
     """
     if isinstance(value, Path):
         given = value
@@ -758,9 +758,9 @@ def resolve_dotted_path(data: object, path: str) -> object:
     value is a mapping and a zero-based index when it is a sequence.
 
     Raises:
-    KeyError: A segment is absent, is not a valid index, is out of range, or the value is neither a
-    mapping nor a sequence.
-    ValueError: `path` is not a non-empty string -- a framework defect.
+        KeyError: A segment is absent, is not a valid index, is out of range, or the value is
+            neither a mapping nor a sequence.
+        ValueError: `path` is not a non-empty string -- a framework defect.
     """
     if not isinstance(path, str) or not path:
         raise ValueError(f"dotted path must be a non-empty string; got {path!r}")
@@ -813,9 +813,9 @@ def apply_metadata_map(
     target's claims -- evidence, never the assertion a check makes.
 
     Raises:
-    TargetContractError: A configured source is absent, resolves to ``None``, or cannot be coerced
-    -- the "missing field named in config" contract failure.
-    ValueError: `metadata_map` names a field outside :data:`METADATA_FIELDS`.
+        TargetContractError: A configured source is absent, resolves to ``None``, or cannot be
+            coerced -- the "missing field named in config" contract failure.
+        ValueError: `metadata_map` names a field outside :data:`METADATA_FIELDS`.
     """
     if not metadata_map:
         return {}
@@ -848,7 +848,7 @@ def _metadata_value(field_name: str, source: str, value: object) -> object:
     """Coerce one configured metadata value to its framework field's type.
 
     Raises:
-    TargetContractError: The value is ``None`` or cannot be coerced.
+        TargetContractError: The value is ``None`` or cannot be coerced.
     """
     if value is None:
         raise TargetContractError(
@@ -863,8 +863,8 @@ def _metadata_int(field_name: str, source: str, value: object) -> int:
     """Return `value` as an integer for a numeric metadata field.
 
     Raises:
-    TargetContractError: `value` is a bool, a non-integral number, or text that is not a base-10
-    integer.
+        TargetContractError: `value` is a bool, a non-integral number, or text that is not a base-10
+            integer.
     """
     invalid = (
         f"metadata_map[{field_name!r}] names {source!r}, whose value {value!r} is not an "
@@ -886,7 +886,7 @@ def _metadata_text(field_name: str, source: str, value: object) -> str:
     """Return `value` stripped as text for a textual metadata field.
 
     Raises:
-    TargetContractError: `value` is not text.
+        TargetContractError: `value` is not text.
     """
     if isinstance(value, str):
         return value.strip()
@@ -903,9 +903,9 @@ def ensure_image_bytes(data: bytes, output_format: str) -> bytes:
     of those, and one whose format contradicts the requested `output_format`.
 
     Raises:
-    TargetContractError: The body is empty, unrecognisable or the wrong format; the refused body
-    travels on ``body_prefix``.
-    ValueError: `data` is not bytes-like -- a framework defect.
+        TargetContractError: The body is empty, unrecognisable or the wrong format; the refused body
+            travels on ``body_prefix``.
+        ValueError: `data` is not bytes-like -- a framework defect.
     """
     if isinstance(data, (bytearray, memoryview)):
         body = bytes(data)
@@ -968,7 +968,7 @@ def hex_prefix(data: bytes, limit: int = HEX_PREFIX_LIMIT) -> str:
     asserts.
 
     Raises:
-    ValueError: `limit` is negative, or `data` is not bytes-like.
+        ValueError: `limit` is negative, or `data` is not bytes-like.
     """
     if isinstance(data, (bytearray, memoryview)):
         body = bytes(data)

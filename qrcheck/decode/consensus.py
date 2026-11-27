@@ -55,6 +55,13 @@ or the primary decoder produced no payload.  A reader of ``decoded.json`` or ``s
 therefore tell "the secondary said nothing" from "the secondary's answer could not be compared",
 which the ``primary_only`` classification alone records identically.
 
+A decoder that cannot be consulted at all is not an outcome. ``per_decoder`` lists only the
+decoders that answered, and a decoder the run never asked -- one the run's own resolution left
+out, or a binding that ``importlib.util.find_spec`` finds but that cannot be imported -- is
+recorded in ``DecodeResult.unavailable_decoders`` with the reason it could not be. That is what
+makes single-decoder mode's evidence list one decoder (AAP §0.6.6 row 4), and it keeps ``status
+== "error"`` meaning what AAP §0.4.5 says it means: a decoder that ran and raised.
+
 Imports: the four decode-layer modules this pipeline joins, ``qrcheck.evidence.mux`` (the owner of
 every byte the framework turns into an image, so the pixel decode is delegated rather than
 repeated) and ``qrcheck.config.models`` (which declares the reference decode size
@@ -75,14 +82,14 @@ from __future__ import annotations
 import dataclasses
 import io
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Final
 
 import numpy
 from PIL import Image
 
 from qrcheck.config.models import DEFAULT_DECODE_IMAGE_PX
-from qrcheck.decode import base, format_info, matrix, opencv, zxing
+from qrcheck.decode import format_info, matrix, opencv, zxing
 from qrcheck.decode.base import (
     PRIMARY_DECODER,
     SECONDARY_DECODER,
@@ -623,17 +630,39 @@ def _classify(
     return "undetected", comparable
 
 
-def _unreadable_result(reason: str, secondary_ok: bool) -> DecodeResult:
+def _secondary_consultation(secondary: bool | None) -> str | None:
+    """Return why the secondary decoder cannot be consulted, or ``None`` when it can.
+
+    ``secondary=False`` is the run's own resolution that the decoder is unavailable, so
+    it is recorded as such without a probe; ``True`` and ``None`` both ask the binding
+    whether it loads, because a module present on ``sys.path`` is not necessarily one
+    that can be imported -- a shadowing module or an extension built for another
+    architecture answers ``find_spec`` and fails its import. A decoder that answers a
+    reason here is never asked anything, so nothing it would have produced reaches
+    ``per_decoder``: it is recorded as unavailable instead of as an outcome with
+    ``status == "error"``, which means a decoder that ran and raised (AAP §0.6.6
+    row 4, §0.4.5).
+    """
+    if secondary is False:
+        return opencv.RESOLUTION_ABSENT_TEXT
+    return opencv.binding_problem()
+
+
+def _unreadable_result(
+    reason: str, secondary_ran: bool, unavailable_decoders: Mapping[str, str]
+) -> DecodeResult:
     """Record bytes no decoder can be shown as ``undetected``, with the reason.
 
-    One ``error`` outcome is recorded per decoder that would have been run, so
+    One ``error`` outcome is recorded per decoder that was consulted, so
     ``decoded.json`` names the decoders and the reason in the same place a decoded
     case names its payload, and the result's ``agreement`` stays ``undetected``
     because no decoder found anything -- an unreadable artefact is not a
-    disagreement between two decoders that both ran.
+    disagreement between two decoders that both ran. A decoder the run did not
+    consult is carried in ``unavailable_decoders`` instead, because it never saw
+    these bytes and so has nothing to record about them.
     """
     names: list[str] = [PRIMARY_DECODER]
-    if secondary_ok:
+    if secondary_ran:
         names.append(SECONDARY_DECODER)
     per_decoder = {
         name: DecoderOutcome(
@@ -665,6 +694,7 @@ def _unreadable_result(reason: str, secondary_ok: bool) -> DecodeResult:
         metrics={},
         sampling=None,
         secondary_comparable=None,
+        unavailable_decoders=unavailable_decoders,
     )
 
 
@@ -698,11 +728,13 @@ def decode_symbol(
         request: The request the artefact was produced for. Only its colours are
             read here, to decide the polarity; every other assertion belongs to a
             check.
-        secondary: ``True`` to run the secondary decoder, ``False`` to record
-            single-decoder mode, ``None`` (the default) to probe whether it is
-            installed. A caller passing ``False`` gets a ``per_decoder`` map with
-            the primary decoder alone, which is the degraded mode a report shows a
-            banner for.
+        secondary: ``True`` to consult the secondary decoder, ``False`` to record the
+            run's own resolution that it is unavailable, ``None`` (the default) to
+            probe whether its binding loads. A decoder that cannot be consulted --
+            resolved absent, or present with a binding that cannot be imported --
+            is recorded in ``unavailable_decoders`` with the reason and never
+            reaches ``per_decoder``, so this is the setting that puts a result in
+            single-decoder mode, the degradation a report shows a banner for.
 
     Returns:
         The assembled :class:`DecodeResult`. ``payload_bytes`` is the primary
@@ -714,7 +746,8 @@ def decode_symbol(
         itself -- both copies' distances and the bit errors corrected -- and is
         ``None`` both when no grid could be sampled and when a sampled grid's two
         copies were both beyond the correction radius; ``sampling.reason`` tells
-        those two apart.
+        those two apart. ``unavailable_decoders`` names every decoder this run did
+        not consult, with the reason, and is empty when both were consulted.
 
     Raises:
         ValueError: ``image_bytes`` is not bytes, or ``request`` carries no
@@ -723,16 +756,20 @@ def decode_symbol(
             unreadable symbol and an unsamplable grid all return a result.
     """
     inverted = is_inverted_request(request)
-    secondary_ok = base.secondary_available() if secondary is None else bool(secondary)
+    secondary_problem = _secondary_consultation(secondary)
+    secondary_ran = secondary_problem is None
+    unavailable_decoders: dict[str, str] = {}
+    if secondary_problem is not None:
+        unavailable_decoders[SECONDARY_DECODER] = secondary_problem
 
     try:
         gray = _rasterise(image_bytes)
     except _UnreadableRaster as exc:
-        return _unreadable_result(str(exc), secondary_ok)
+        return _unreadable_result(str(exc), secondary_ran, unavailable_decoders)
 
     primary_original = zxing.read_primary(gray, polarity="original")
     secondary_original = (
-        opencv.read_secondary(gray, polarity="original") if secondary_ok else None
+        opencv.read_secondary(gray, polarity="original") if secondary_ran else None
     )
 
     # An inverted request is decoded twice, with both decoders, on the artefact as
@@ -746,7 +783,7 @@ def decode_symbol(
     if inverted:
         inverted_gray = invert_image(gray)
         primary_inverted = zxing.read_primary(inverted_gray, polarity="inverted")
-        if secondary_ok:
+        if secondary_ran:
             secondary_inverted = opencv.read_secondary(inverted_gray, polarity="inverted")
 
     polarity_applied, authority = _authoritative(primary_original, primary_inverted)
@@ -809,5 +846,6 @@ def decode_symbol(
         sampling=sampling,
         format_info=None if format_details is None else format_details.as_dict(),
         secondary_comparable=secondary_comparable,
+        unavailable_decoders=unavailable_decoders,
     )
 

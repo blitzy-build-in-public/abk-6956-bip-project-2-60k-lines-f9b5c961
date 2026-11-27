@@ -178,7 +178,7 @@ def capacity_bits(version: int, ec: str) -> int:
     ecc_per_block) * 8``.
 
     Raises:
-    ValueError: `version` is not an integer in 1..40, or `ec` is not one of `EC_LEVELS`.
+        ValueError: `version` is not an integer in 1..40, or `ec` is not one of `EC_LEVELS`.
     """
     _require_version(version)
     _require_ec(ec)
@@ -191,7 +191,7 @@ def data_codewords(version: int, ec: str) -> int:
     Guarantees ``capacity_bits(version, ec) // 8``.
 
     Raises:
-    ValueError: `version` is outside 1..40, or `ec` is not one of `EC_LEVELS`.
+        ValueError: `version` is outside 1..40, or `ec` is not one of `EC_LEVELS`.
     """
     _require_version(version)
     _require_ec(ec)
@@ -207,8 +207,8 @@ def max_payload_bytes(version: int, ec: str, mode: str) -> int:
     the data capacity before the per-character bit cost is applied (ISO/IEC 18004 §7.4).
 
     Raises:
-    ValueError: `version` is outside 1..40, `ec` is not one of `EC_LEVELS`, or `mode` is not one of
-    `MODES`; the message names the offending value.
+        ValueError: `version` is outside 1..40, `ec` is not one of `EC_LEVELS`, or `mode` is not one
+            of `MODES`; the message names the offending value.
     """
     _require_version(version)
     _require_ec(ec)
@@ -230,7 +230,7 @@ def minimal_version(length: int, ec: str, mode: str) -> int | None:
     caller can tell "does not fit at all" from "does not fit at this version".
 
     Raises:
-    ValueError: `length` is not a non-negative integer, `ec` or `mode` is outside its set.
+        ValueError: `length` is not a non-negative integer, `ec` or `mode` is outside its set.
     """
     _require_ec(ec)
     _require_mode(mode)
@@ -255,7 +255,7 @@ def truncation_keeps_version(length: int, window: int, ec: str) -> bool:
     either overflows even Version 40; a `window` of 0 is legal.
 
     Raises:
-    ValueError: `length` or `window` is not a non-negative integer, or `ec` is not a level.
+        ValueError: `length` or `window` is not a non-negative integer, or `ec` is not a level.
     """
     window_version = minimal_version(window, ec, "byte")
     payload_version = minimal_version(length, ec, "byte")

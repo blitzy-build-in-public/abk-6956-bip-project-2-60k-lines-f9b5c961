@@ -97,7 +97,7 @@ class ReferenceAdapter:
         is not read because the encode has no boundary to bound.
 
         Raises:
-        TypeError: ``contrast_floor`` is not a real number -- the record was built by hand.
+            TypeError: ``contrast_floor`` is not a real number -- the record was built by hand.
         """
         self.name: str = config.type if name is None else name
         self.capabilities: frozenset[Capability] = frozenset(Capability)
@@ -119,13 +119,14 @@ class ReferenceAdapter:
         window. The four ``declared_*`` fields are the target's claim, evidence only.
 
         Raises:
-        TargetUnsupported: An undeclared capability, or a ``logo_overlay`` on a vector artefact.
-        TargetRejected: The request breaks the target's own contract: an error level outside
-        L/M/Q/H, a version or mask out of range, a non-positive module size, a negative quiet zone,
-        a malformed colour, an empty payload, a payload that does not fit the pinned version, or a
-        contrast ratio below the declared floor.
-        TargetContractError: segno or the writer failed for a reason the request does not explain,
-        the bytes are not the artefact requested, or the named overlay is unreadable.
+            TargetUnsupported: An undeclared capability, or a ``logo_overlay`` on a vector artefact.
+            TargetRejected: The request breaks the target's own contract: an error level outside
+                L/M/Q/H, a version or mask out of range, a non-positive module size, a negative
+                quiet zone, a malformed colour, an empty payload, a payload that does not fit the
+                pinned version, or a contrast ratio below the declared floor.
+            TargetContractError: segno or the writer failed for a reason the request does not
+                explain, the bytes are not the artefact requested, or the named overlay is
+                unreadable.
         """
         require_capabilities(self, self._required_capabilities(request))
         self._validate(request)
@@ -194,8 +195,8 @@ class ReferenceAdapter:
         rules happen to be written in.
 
         Raises:
-        TargetRejected: The request breaks one of the target's own rules; the message names the
-        field and is public API.
+            TargetRejected: The request breaks one of the target's own rules; the message names the
+                field and is public API.
         """
         self._validate_shape(request)
         self._check_payload(request)
@@ -208,7 +209,7 @@ class ReferenceAdapter:
         module size, quiet zone and colours.
 
         Raises:
-        TargetRejected: One parameter is outside its documented range.
+            TargetRejected: One parameter is outside its documented range.
         """
         ec_level = request.ec_level
         if ec_level not in EC_LEVELS:
@@ -242,7 +243,7 @@ class ReferenceAdapter:
         render as 1.
 
         Raises:
-        TargetRejected: `value` is not three integers in 0..255; the message names `field`.
+            TargetRejected: `value` is not three integers in 0..255; the message names `field`.
         """
         expected = (
             f"{field} must be a 3-tuple of integers in "
@@ -270,7 +271,7 @@ class ReferenceAdapter:
         same rejection.
 
         Raises:
-        TargetRejected: The payload is empty, or it does not fit the pinned version.
+            TargetRejected: The payload is empty, or it does not fit the pinned version.
         """
         payload = self._effective_payload(request)
         if not payload:
@@ -299,7 +300,7 @@ class ReferenceAdapter:
         cannot fire on this path.
 
         Raises:
-        TargetRejected: The measured ratio is below the floor; both values are reported.
+            TargetRejected: The measured ratio is below the floor; both values are reported.
         """
         from qrcheck.decode.consensus import contrast_ratio
 
@@ -363,8 +364,8 @@ class ReferenceAdapter:
         """Return the normalised artefact kind to render.
 
         Raises:
-        TargetRejected: The request asks for neither ``png`` nor ``svg`` -- the belt-and-braces path
-        for an out-of-contract request.
+            TargetRejected: The request asks for neither ``png`` nor ``svg`` -- the belt-and-braces
+                path for an out-of-contract request.
         """
         requested = request.output_format
         normalised = requested.strip().lower() if isinstance(requested, str) else ""
@@ -387,10 +388,10 @@ class ReferenceAdapter:
         metadata.
 
         Raises:
-        TargetRejected: segno reports that the content does not fit or a parameter is illegal -- in
-        the pinned release every such complaint is a plain ``ValueError``, so it is a request the
-        target should itself have refused first.
-        TargetContractError: segno failed for a reason the request does not explain.
+            TargetRejected: segno reports that the content does not fit or a parameter is illegal --
+                in the pinned release every such complaint is a plain ``ValueError``, so it is a
+                request the target should itself have refused first.
+            TargetContractError: segno failed for a reason the request does not explain.
         """
         payload = self._effective_payload(request)
         ec_level = self._effective_ec(request)
@@ -450,8 +451,8 @@ class ReferenceAdapter:
         ``logo_overlay_path`` is composited by :meth:`_composite_overlay`.
 
         Raises:
-        TargetContractError: The writer failed, produced an empty body, or the overlay is
-        unreadable.
+            TargetContractError: The writer failed, produced an empty body, or the overlay is
+                unreadable.
         """
         kind = self._effective_output_format(request)
         scale = self._effective_module_size(request)
@@ -496,8 +497,8 @@ class ReferenceAdapter:
         use so importing this package never loads Pillow.
 
         Raises:
-        TargetContractError: The path cannot be read, does not hold an image Pillow can open, or the
-        rendered bytes no longer decode.
+            TargetContractError: The path cannot be read, does not hold an image Pillow can open, or
+                the rendered bytes no longer decode.
         """
         from qrcheck.evidence.mux import composite_overlay, decode_image, encode_png, open_image
 

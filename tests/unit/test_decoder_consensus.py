@@ -67,6 +67,8 @@ __all__ = [
     "test_secondary_disabled_degrades_the_run_to_primary_only",
     "test_silence_in_both_decoders_is_undetected_and_never_a_disagreement",
     "test_sym_ec_match_fails_with_format_info_disagreement_and_keeps_both_values",
+    "test_unavailable_decoders_refuses_an_impossible_record",
+    "test_unimportable_binding_is_recorded_as_unavailable_and_never_consulted",
 ]
 
 # Fixed inputs: a request parameter and not a configuration threshold. No value in this module
@@ -674,6 +676,23 @@ def test_secondary_disabled_degrades_the_run_to_primary_only(
         "single-decoder mode: only the primary decoder may appear, got "
         f"{tuple(result.per_decoder)!r}"
     )
+    assert sorted(result.unavailable_decoders) == [SECONDARY_DECODER], (
+        "single-decoder mode: the decoder the run did not consult must be recorded as "
+        f"unavailable, got {sorted(result.unavailable_decoders)!r}"
+    )
+    assert result.unavailable_decoders[SECONDARY_DECODER].strip(), (
+        "single-decoder mode: an unavailable decoder must carry the reason it could not be "
+        "consulted, and this one carries none"
+    )
+    projected = result.as_dict()
+    assert sorted(projected["unavailable_decoders"]) == [SECONDARY_DECODER], (
+        "single-decoder mode: the projection must carry the same unavailable decoder the result "
+        f"holds, got {sorted(projected['unavailable_decoders'])!r}"
+    )
+    assert sorted(projected["per_decoder"]) == [PRIMARY_DECODER], (
+        "single-decoder mode: the projection must list the primary decoder alone, got "
+        f"{sorted(projected['per_decoder'])!r}"
+    )
     assert result.agreement == "primary_only", (
         f"single-decoder mode: agreement must be 'primary_only', got {result.agreement!r}"
     )
@@ -688,6 +707,68 @@ def test_secondary_disabled_degrades_the_run_to_primary_only(
     assert primary.pass_count == 1, (
         f"single-decoder mode: the primary decoder must still be called once, got "
         f"{primary.pass_count}"
+    )
+
+
+def test_unimportable_binding_is_recorded_as_unavailable_and_never_consulted(
+    monkeypatch: pytest.MonkeyPatch,
+    make_decoder_outcome: Callable[..., DecoderOutcome],
+) -> None:
+    """A binding that cannot be loaded is unavailable, not a decoder that ran and raised.
+
+    ``find_spec`` finds an installed distribution whose module still fails its import -- a
+    shadowing module earlier on ``sys.path``, an extension built for another architecture -- so
+    module presence is not the fact the pipeline needs. The binding is probed before anything is
+    asked of it, and a probe that cannot load it keeps the decoder out of ``per_decoder`` and
+    records it in ``unavailable_decoders`` with its reason. That is what makes single-decoder
+    mode's evidence list one decoder, so a consumer counting entries reads one (AAP §0.6.6 row 4),
+    and it keeps ``status == "error"`` meaning a decoder that ran (AAP §0.4.5).
+    """
+    monkeypatch.setattr(consensus.opencv, "_load_cv2", lambda: None)
+    primary, secondary = _install_decoders(
+        monkeypatch,
+        make_decoder_outcome,
+        primary={_ORIGINAL: _PAYLOAD_A},
+        secondary={_ORIGINAL: _PAYLOAD_A},
+    )
+    result = consensus.decode_symbol(_SYMBOL_PNG, _request(_PAYLOAD_A), secondary=True)
+    assert secondary is not None, "this case needs the secondary stub installed to count its calls"
+    assert secondary.pass_count == 0, (
+        f"an unimportable binding was asked {secondary.pass_count} time(s); the probe must decide "
+        f"whether the decoder is consulted at all"
+    )
+    assert tuple(result.per_decoder) == (PRIMARY_DECODER,), (
+        "a decoder that cannot be imported is not an outcome, so it must be absent from "
+        f"per_decoder, got {tuple(result.per_decoder)!r}"
+    )
+    assert sorted(result.unavailable_decoders) == [SECONDARY_DECODER], (
+        f"the unavailable decoder was not recorded, got {sorted(result.unavailable_decoders)!r}"
+    )
+    assert result.unavailable_decoders[SECONDARY_DECODER].strip(), (
+        "the decoder was recorded as unavailable with no reason, so the degradation cannot be "
+        "diagnosed from evidence"
+    )
+    assert primary.pass_count == 1, (
+        f"the primary decoder must still be called once, got {primary.pass_count}"
+    )
+    assert result.agreement == "primary_only", (
+        f"one decoder answered, so agreement must be 'primary_only', got {result.agreement!r}"
+    )
+    assert result.secondary_comparable is None, (
+        "the secondary decoder never ran, so no comparison was attempted and secondary_comparable "
+        f"must be None, got {result.secondary_comparable!r}"
+    )
+    projected = result.as_dict()
+    assert sorted(projected["unavailable_decoders"]) == [SECONDARY_DECODER], (
+        "the projection must carry the unavailable decoder, got "
+        f"{sorted(projected['unavailable_decoders'])!r}"
+    )
+    assert projected["unavailable_decoders"][SECONDARY_DECODER] == (
+        result.unavailable_decoders[SECONDARY_DECODER]
+    ), "the projection and the result must record the same reason"
+    assert sorted(projected["per_decoder"]) == [PRIMARY_DECODER], (
+        "the projection must list the primary decoder alone, got "
+        f"{sorted(projected['per_decoder'])!r}"
     )
 
 
@@ -878,6 +959,33 @@ def test_secondary_comparable_refuses_a_value_outside_its_three(
     """
     with pytest.raises(ValueError, match="secondary_comparable"):
         make_decode_result(secondary_comparable=value)
+
+
+@pytest.mark.parametrize(
+    ("unavailable", "match"),
+    [
+        ({"zbar": "not a reference decoder"}, "unknown decoder"),
+        ({"zxing": "it answered, so it cannot be unavailable"}, "both as consulted"),
+        ({"opencv": ""}, "without a reason"),
+        ({"opencv": 3}, "without a reason"),
+    ],
+    ids=["unknown-name", "answered-and-unavailable", "empty-reason", "non-text-reason"],
+)
+def test_unavailable_decoders_refuses_an_impossible_record(
+    make_decode_result: Callable[..., DecodeResult],
+    unavailable: Mapping[str, Any],
+    match: str,
+) -> None:
+    """A decoder either answered or was unavailable, and the record refuses every other shape.
+
+    ``per_decoder`` and ``unavailable_decoders`` are two halves of one fact, so a decoder name that
+    is not a reference decoder, a decoder present in both -- it cannot both have answered and not
+    have run -- and an unavailable decoder with no reason a reader can act on are producer defects
+    rather than evidence, and each is refused at construction instead of persisted
+    (AAP §0.6.6 row 4, §0.4.5).
+    """
+    with pytest.raises(ValueError, match=match):
+        make_decode_result(unavailable_decoders=unavailable)
 
 
 # ---------------------------------------------------------------------------

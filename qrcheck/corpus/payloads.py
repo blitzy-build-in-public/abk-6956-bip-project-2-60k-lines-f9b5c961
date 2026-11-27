@@ -150,7 +150,7 @@ def mode_of(payload: bytes) -> str:
     contained in every charset, and both readings select Version 1 at every EC level.
 
     Raises:
-    ValueError: ``payload`` is not ``bytes`` -- a ``str`` must be encoded by the caller.
+        ValueError: ``payload`` is not ``bytes`` -- a ``str`` must be encoded by the caller.
     """
     if not isinstance(payload, bytes):
         raise ValueError(f"mode_of expects encoded bytes, got {type(payload).__name__}")
@@ -200,9 +200,9 @@ def _boundary_draft(
     """Verify a boundary payload's mode and capacity arithmetic, then describe it.
 
     Raises:
-    RuntimeError: The payload is not in ``expected_mode`` -- which would silently invalidate the
-    mode-optimality check -- or it does not need Version ``version`` at EC L and ``version + 1`` at
-    EC M. The message names the class, the index and the values seen.
+        RuntimeError: The payload is not in ``expected_mode`` -- which would silently invalidate
+            the mode-optimality check -- or it does not need Version ``version`` at EC L and
+            ``version + 1`` at EC M. The message names the class, the index and the values seen.
     """
     observed = mode_of(payload.encode("utf-8"))
     if observed != expected_mode:

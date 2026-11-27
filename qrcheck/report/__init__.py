@@ -58,8 +58,9 @@ class ReportPaths:
     chose (AAP §0.5.4).
 
     Attributes:
-        summary: The summary file, as the JSON writer returned it. junit: The JUnit document, as the
-        JUnit writer returned it. html: The self-contained page, as the HTML writer returned it.
+        summary: The summary file, as the JSON writer returned it.
+        junit: The JUnit document, as the JUnit writer returned it.
+        html: The self-contained page, as the HTML writer returned it.
     """
 
     summary: Path
@@ -83,8 +84,8 @@ def write_all_reports(
     ``qrcheck.cli.run`` to map to exit 3 with the path in its message (AAP §0.3.4).
 
     Args:
-        run_result: The completed run; all three artefacts come from this one model. report_dir:
-        Destination directory, normally the configured ``report_dir`` or the
+        run_result: The completed run; all three artefacts come from this one model.
+        report_dir: Destination directory, normally the configured ``report_dir`` or the
             ``--report-dir`` override, used as given and never resolved to an absolute path.
         evidence_root: The directory ``CaseResult.evidence_dir`` is relative to -- the report
             directory itself. Only the HTML writer reads it, to embed the images evidence holds
@@ -95,8 +96,8 @@ def write_all_reports(
 
     Raises:
         OSError: ``report_dir`` cannot be created, or a writer cannot create or write its file.
-        TypeError: a result field is not JSON-serialisable. ValueError: a result field holds a
-        non-finite float, which JSON does not define.
+        TypeError: a result field is not JSON-serialisable.
+        ValueError: a result field holds a non-finite float, which JSON does not define.
     """
     # Imported here rather than at module scope: see the module docstring. Beyond keeping this
     # package's import stdlib-only, the local import resolves each writer at call time, so a

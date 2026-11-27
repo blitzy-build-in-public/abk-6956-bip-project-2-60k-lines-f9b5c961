@@ -2,8 +2,9 @@
 
 No pinned decoder reports a version, yet ``SY-VERSION-MIN``, ``SY-EC-MATCH``, ``SY-MASK``,
 ``SY-MATRIX-EQUIV`` and the measured quiet zone all need the module grid, so the grid is recovered
-from the symbol itself. ISO/IEC 18004 §7.1 fixes a Model 2 dimension at ``4V + 17`` modules per
-side and :func:`version_from_dimension` inverts that rule; it is the product's only version source.
+from the symbol itself. ISO/IEC 18004:2015(E) §6.3.2.1 gives a Model 2 symbol 21 modules per side
+at Version 1 and four more per version, ``4V + 17`` in closed form, and
+:func:`version_from_dimension` inverts that rule; it is the product's only version source.
 
 Three acceptance paths and nothing else: the authoritative decoder's corner quadrangle projected by
 a planar homography, pitched from the finder pattern, snapped to a legal ``4V + 17`` and confirmed
@@ -39,7 +40,7 @@ __all__ = [
     "version_from_dimension",
 ]
 
-# ISO/IEC 18004 §7.1: a Model 2 symbol is identified by a version in 1..40, and
+# ISO/IEC 18004:2015(E) §6.3.2.1: a Model 2 symbol is identified by a version in 1..40, and
 # its dimension is exactly 4V + 17 modules per side. Micro QR (M1-M4) is out of
 # scope, so no second dimension rule exists in this product.
 MIN_VERSION: Final = 1
@@ -47,13 +48,13 @@ MAX_VERSION: Final = 40
 MIN_MODULE_COUNT: Final = 4 * MIN_VERSION + 17  # 21 modules, Version 1
 MAX_MODULE_COUNT: Final = 4 * MAX_VERSION + 17  # 177 modules, Version 40
 
-# ISO/IEC 18004 §7.3.3: each of the three finder patterns is a 7x7 module square
+# ISO/IEC 18004:2015(E) §6.3.3.1: each of the three finder patterns is a 7x7 module square
 # (dark outer ring, light ring, 3x3 dark core), so the dark run across its middle
 # row and down its middle column is exactly 7 modules wide. That is the measured
 # quantity the module pitch is derived from.
 FINDER_MODULE_COUNT: Final = 7
 
-# ISO/IEC 18004 §7.3.5: the timing patterns are the alternating dark/light lines
+# ISO/IEC 18004:2015(E) §6.3.5: the timing patterns are the alternating dark/light lines
 # between the finder patterns -- module row 6 horizontally and module column 6
 # vertically. Counting their alternations is the independent confirmation that
 # the chosen module count is right.
@@ -91,8 +92,8 @@ _FINDER_PROBE_LINES: Final = 3
 
 
 def module_count_for_version(version: int) -> int:
-    """Return the module count ``N = 4V + 17`` of a Model 2 symbol (ISO/IEC 18004 §7.1):
-    ``21`` for Version 1, ``177`` for Version 40.
+    """Return the module count ``N = 4V + 17`` of a Model 2 symbol
+    (ISO/IEC 18004:2015(E) §6.3.2.1): ``21`` for Version 1, ``177`` for Version 40.
 
     Raises:
         ValueError: ``version`` is not an integer in 1-40, so a Micro QR version has no module
@@ -108,8 +109,9 @@ def module_count_for_version(version: int) -> int:
 def version_from_dimension(module_count: int) -> int | None:
     """Return the version implied by a sampled dimension, or ``None`` if none is.
 
-    The product's only version source: ISO/IEC 18004 §7.1's ``N = 4V + 17`` inverted, never a
-    decoder -- the pinned ``zxing-cpp`` 2.2.0 reports none -- and never a target's metadata.
+    The product's only version source: ISO/IEC 18004:2015(E) §6.3.2.1's ``N = 4V + 17``
+    inverted, never a decoder -- the pinned ``zxing-cpp`` 2.2.0 reports none -- and never a
+    target's metadata.
     ``None`` covers a ``module_count - 17`` that is not a multiple of four, a version outside 1-40,
     and the negative offsets a Micro QR dimension would produce.
     """
@@ -254,8 +256,8 @@ def _rectify(luma: numpy.ndarray, quad: numpy.ndarray) -> tuple[numpy.ndarray, i
 
     The side is the mean of the quadrangle's four edge lengths, clipped to at least
     :data:`MIN_MODULE_COUNT`. The quadrangle bounds the symbol, not the 4-module quiet zone of
-    ISO/IEC 18004 §7.3.6, so the square holds the symbol area only. ``None`` when the homography is
-    singular, the inputs are empty, or a projected coordinate is not finite.
+    ISO/IEC 18004:2015(E) §6.3.8, so the square holds the symbol area only. ``None`` when the
+    homography is singular, the inputs are empty, or a projected coordinate is not finite.
     """
     if luma.size == 0:
         return None
@@ -305,10 +307,10 @@ def _finder_run_px(dark: numpy.ndarray) -> int:
     """Measure the top-left finder pattern's dark run, in pixels.
 
     The rectified square starts at the symbol's top-left corner, so the dark run from ``(0, 0)``
-    along row 0 and column 0 spans ISO/IEC 18004 §7.3.3's 7x7 finder's first module row and column,
-    the 1-module light separator at index 7 terminating it. The first :data:`_FINDER_PROBE_LINES`
-    lines of each axis are read and the longest taken, because the outermost line lies on the
-    symbol's edge and a blended row would refuse a samplable symbol.
+    along row 0 and column 0 spans ISO/IEC 18004:2015(E) §6.3.3.1's 7x7 finder's first module row
+    and column, the 1-module light separator at index 7 terminating it. The first
+    :data:`_FINDER_PROBE_LINES` lines of each axis are read and the longest taken, because the
+    outermost line lies on the symbol's edge and a blended row would refuse a samplable symbol.
     """
     rows = min(_FINDER_PROBE_LINES, int(dark.shape[0]))
     columns = min(_FINDER_PROBE_LINES, int(dark.shape[1]))
@@ -378,10 +380,10 @@ def _count_changes(values: numpy.ndarray) -> int:
 def _timing_transitions(grid: Matrix) -> tuple[int, int]:
     """Count the horizontal and vertical timing-pattern alternations of ``grid``.
 
-    ISO/IEC 18004 §7.3.5 alternates once per module between the finder patterns: over columns ``7
-    .. N-9`` that is ``N - 15`` samples and ``N - 16`` adjacent pairs, each of which must alternate,
-    and the same holds down column 6 over rows ``7 .. N-9``. Any other reading means a shifted grid
-    and a refused count.
+    ISO/IEC 18004:2015(E) §6.3.5 alternates once per module between the finder patterns: over
+    columns ``7 .. N-9`` that is ``N - 15`` samples and ``N - 16`` adjacent pairs, each of which
+    must alternate, and the same holds down column 6 over rows ``7 .. N-9``. Any other reading
+    means a shifted grid and a refused count.
     """
     module_count = int(grid.shape[0])
     stop = module_count - 8

@@ -115,11 +115,11 @@ class Defect:
     it instead of restating each injection's catches.
 
     Attributes:
-    name: The injection's stable identifier.
-    injection: Exactly what the code does, checkable against the hook implementing it.
-    caught_by: The check or checks designed to catch it; no check appears here twice.
-    consequential: Failures that follow unavoidably, declared rather than hidden.
-    rationale: Why the consequence -- or its absence -- is what it is.
+        name: The injection's stable identifier.
+        injection: Exactly what the code does, checkable against the hook implementing it.
+        caught_by: The check or checks designed to catch it; no check appears here twice.
+        consequential: Failures that follow unavoidably, declared rather than hidden.
+        rationale: Why the consequence -- or its absence -- is what it is.
     """
 
     name: str
@@ -221,7 +221,7 @@ def expected_failing_ids() -> frozenset[str]:
     ``SY-VERSION-MIN``.
 
     Raises:
-    RuntimeError: The union is not those nine, or one check is the primary catch of two defects.
+        RuntimeError: The union is not those nine, or one check is the primary catch of two defects.
     """
     failing: set[str] = set()
     primary: set[str] = set()
@@ -263,7 +263,8 @@ class DefectiveAdapter(ReferenceAdapter):
         Starts D4's mask cycle at zero.
 
         Raises:
-        TypeError: ``config.contrast_floor`` is not a real number -- the record was built by hand.
+            TypeError: ``config.contrast_floor`` is not a real number -- the record was built by
+                hand.
         """
         super().__init__(config, name=name)
         self._mask_counter: int = 0
@@ -331,7 +332,7 @@ class DefectiveAdapter(ReferenceAdapter):
         definition.
 
         Raises:
-        TargetRejected: The payload is empty, carrying the conforming target's own message.
+            TargetRejected: The payload is empty, carrying the conforming target's own message.
         """
         if request.version is None:
             super()._check_payload(request)

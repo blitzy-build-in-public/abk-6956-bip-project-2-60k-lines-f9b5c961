@@ -108,6 +108,10 @@ _RECORDS_PER_CHECK: Final[int] = 2
 _CEILING_MARGIN_PX: Final[int] = 1000
 _OVERSIZED_ARTEFACT_PX: Final[int] = render_family._MAX_ARTEFACT_SIDE_PX + _CEILING_MARGIN_PX
 _OVERSIZED_RASTER_PX: Final[int] = render_family._MAX_RASTER_SIDE_PX + _CEILING_MARGIN_PX
+# The canvas the damage family's decode-ceiling round declares.  Its ceiling is read from that
+# family module rather than restated here, and the margin only has to rule out an off-by-one, so
+# neither number is a threshold any check reads from this module.
+_OVERSIZED_DECODE_ARTEFACT_PX: Final[int] = damage_family._MAX_ARTEFACT_SIDE_PX + _CEILING_MARGIN_PX
 # The canvas the library-refusal round declares: above twice ``PIL.Image.MAX_IMAGE_PIXELS``, which
 # is where Pillow's own header probe raises instead of answering, derived from that value so the
 # round cannot go stale.  It is the library's rule, not a ceiling this framework holds.
@@ -506,6 +510,12 @@ NEGATIVE_CASES: Final[dict[str, NegativeSpec]] = {
                 case_limit=_DAMAGE_KINDS_PER_RECORD,
                 decode_defect="undetected-after-first",
             ),
+            NegativeRound(
+                label="the artefact declares a canvas above the per-side decode ceiling",
+                reason=Reason.SAMPLING_FAILED,
+                case_limit=_DAMAGE_KINDS_PER_RECORD,
+                symbol_defect="png-canvas-above-decode-ceiling",
+            ),
         ),
     ),
     "DM-SEEDED": NegativeSpec(
@@ -817,6 +827,7 @@ _SYMBOL_DEFECT_NAMES: Final[tuple[str, ...]] = (
     "changing-mask",
     "lightened-dark-palette",
     "logo-not-composited",
+    "png-canvas-above-decode-ceiling",
     "png-canvas-above-measurement-ceiling",
     "raster-canvas-above-library-limit",
     "short-quiet-zone",
@@ -1042,6 +1053,16 @@ def _symbol_defect(name: str) -> SymbolDefect:
         requested = _DEFAULT_SCALE_PX if request.module_size_px is None else request.module_size_px
         return _render_with(request, scale=requested + 2)
 
+    def png_canvas_above_decode_ceiling(
+        request: GenerateRequest, symbol: GeneratedSymbol
+    ) -> GeneratedSymbol:
+        """Declare a canvas above the decode ceiling in the artefact's own PNG header."""
+        del request
+        return GeneratedSymbol(
+            image_bytes=_png_declaring_canvas(symbol.image_bytes, _OVERSIZED_DECODE_ARTEFACT_PX),
+            output_format=symbol.output_format,
+        )
+
     def png_canvas_above_measurement_ceiling(
         request: GenerateRequest, symbol: GeneratedSymbol
     ) -> GeneratedSymbol:
@@ -1145,6 +1166,8 @@ def _symbol_defect(name: str) -> SymbolDefect:
         return lightened_dark_palette
     if name == "logo-not-composited":
         return logo_not_composited
+    if name == "png-canvas-above-decode-ceiling":
+        return png_canvas_above_decode_ceiling
     if name == "png-canvas-above-measurement-ceiling":
         return png_canvas_above_measurement_ceiling
     if name == "raster-canvas-above-library-limit":
@@ -1688,6 +1711,42 @@ def test_an_unmeasurable_artefact_records_the_ceiling_and_never_an_invented_canv
     assert declared.decoded["artefact_side_px"] == _OVERSIZED_ARTEFACT_PX
     assert refused.decoded["artefact_px"] is None, "a canvas never read out must not be invented"
     assert refused.decoded["artefact_side_px"] is None
+
+
+# What a refused decode canvas records, and that the refusal costs no decode at all
+
+
+def test_the_decode_ceiling_refuses_a_declared_canvas_before_any_decode(harness: _Harness) -> None:
+    """A canvas above the damage family's per-side decode ceiling is refused from the header alone:
+    every case of the round fails with ``sampling_failed``, the declared dimensions and the ceiling
+    are recorded, and the round asks the decode layer for zero decodes -- which is what proves no
+    pixel of the artefact the target returned was ever allocated."""
+    run = _drive("DM-RESILIENCE", harness)
+    refused = [
+        outcome
+        for outcome in run.rounds
+        if outcome.round.symbol_defect == "png-canvas-above-decode-ceiling"
+    ]
+    assert len(refused) == 1, "DM-RESILIENCE declares exactly one decode-ceiling round"
+    outcome = refused[0]
+    assert outcome.results, "the decode-ceiling round executed no case"
+    assert outcome.decodes == 0, (
+        f"{len(outcome.results)} refused case(s) asked the decode layer for {outcome.decodes} "
+        "decode(s); the refusal must happen before any decode"
+    )
+    for result in outcome.results:
+        assert result.status is Status.FAILED, (
+            f"{result.case_id}: a refused canvas must never become an error result, got "
+            f"{result.status.value}/{result.reason!r}"
+        )
+        assert result.reason is Reason.SAMPLING_FAILED, result.reason
+        assert result.decoded["reason"] == "artefact_canvas_above_decode_ceiling"
+        assert result.decoded["artefact_side_ceiling_px"] == damage_family._MAX_ARTEFACT_SIDE_PX
+        assert result.decoded["artefact_side_px"] == _OVERSIZED_DECODE_ARTEFACT_PX
+        assert result.decoded["artefact_px"] == [
+            _OVERSIZED_DECODE_ARTEFACT_PX,
+            _OVERSIZED_DECODE_ARTEFACT_PX,
+        ]
 
 
 # The declared invocation counts: an exact equality, so a retry is visible

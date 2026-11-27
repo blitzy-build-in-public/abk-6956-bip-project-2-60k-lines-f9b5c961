@@ -1249,6 +1249,7 @@ def test_exit_three_outranks_exit_one_when_a_run_both_fails_and_errors(
 
 
 def evidence_tree(report_dir: Path) -> list[str]:
+    """Return every path under the report root's evidence directory, relative to it and sorted."""
     root = report_dir / EVIDENCE_DIR_NAME
     return sorted(path.relative_to(root).as_posix() for path in root.rglob("*"))
 

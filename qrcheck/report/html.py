@@ -21,7 +21,11 @@ network" costs:
 * **Escaped text.** Everything the target or the run supplied - a case identifier, a
   payload, a decoder message - is untrusted (AAP §0.3.2) and reaches the document only
   through :data:`html_escape` with ``quote=True``. JSON is rendered as escaped text
-  inside ``<pre>``, never interpolated raw.
+  inside ``<pre>``, never interpolated raw. Markup escaping is not the whole promise,
+  though: a code point UTF-8 cannot encode - the lone surrogate a target's JSON can
+  carry - is replaced with U+FFFD once the document is complete and before the file is
+  opened (:func:`qrcheck.report.json_report.make_utf8_encodable`), so the target's text
+  can neither break the page's markup nor cost the run its report.
 * **No design system.** There is no component library, no design-token file and no
   external font to conform to, so none is introduced: one inline stylesheet, system font
   stacks only, and a single ``@media (max-width: 720px)`` rule that collapses the layout
@@ -55,7 +59,7 @@ from qrcheck.evidence.naming import (
     SYMBOL_SVG,
     is_evidence_artifact,
 )
-from qrcheck.report.json_report import dumps_canonical
+from qrcheck.report.json_report import dumps_canonical, make_utf8_encodable
 from qrcheck.report.model import CaseResult, Reason, RunResult, Status
 
 __all__ = ["write_html"]
@@ -452,6 +456,15 @@ def write_html(
     ``evidence_root``, and written in one direct pass with ``\\n`` line endings and
     exactly one trailing newline, so two writes of the same run are byte-identical.
 
+    The finished document passes through
+    :func:`~qrcheck.report.json_report.make_utf8_encodable` before the destination is created, so a
+    code point UTF-8 cannot encode - the lone surrogate a target's JSON can carry, which reaches an
+    identifier, a payload or a decoder message as itself - becomes U+FFFD instead of aborting the
+    write. Text a target supplied can then make the page say something was unreachable, but never
+    cost the run its report or leave a truncated ``index.html`` behind (AAP §0.3.2, §0.6.6 row
+    11); every character UTF-8 can encode is written exactly as escaped, so the page keeps its
+    bytes.
+
     Args:
         run_result: The completed run. Its ``results`` are already ordered by
             ``(check_id, case_id)``, and that stored order is the order the table and the
@@ -480,7 +493,9 @@ def write_html(
             exists anywhere in the product (AAP §0.3.4, §0.5.6).
     """
     target = Path(path)
-    document = _render_document(run_result, Path(evidence_root))
+    # Made encodable while it is still only a string: the write below cannot then fail on a code
+    # point UTF-8 has no bytes for, and the destination is not even created.
+    document = make_utf8_encodable(_render_document(run_result, Path(evidence_root)))
     target.parent.mkdir(parents=True, exist_ok=True)
     with target.open("w", encoding="utf-8", newline="\n") as handle:
         handle.write(document)
@@ -685,9 +700,12 @@ def _decoder_counts(results: Sequence[CaseResult]) -> tuple[int, int, int]:
       ``per_decoder`` member is a non-empty mapping, which is the only shape that records
       what a decoder did;
     * of those, how many the secondary decoder did not answer for - no ``opencv`` entry, or
-      an entry whose status is not ``decoded``. An absent decoder, a decoder that could not be
-      imported and a decoder that raised on one artefact are indistinguishable here, and the
-      banner says exactly that rather than choosing one of the three;
+      an entry whose status is not ``decoded``. Two states leave no entry to read: a decoder
+      the run never consulted, absent or unimportable, whose reason the evidence records under
+      ``unavailable_decoders``, and a decoder that ran and found nothing or raised, which its
+      own status records. This count reads the results alone, so it states the one consequence
+      both states share - the corroborating decoder did not answer for this artefact - rather
+      than choosing between them;
     * of those, how many the primary decoder read alone - the secondary did not answer and
       ``zxing`` recorded ``decoded``. That is the one claim a banner may make, because it is
       the case in which a payload was corroborated by the primary decoder alone
@@ -833,13 +851,13 @@ def _render_details(
 
     The block answers "can I see it": the recorded images inline as ``data:`` URIs, the
     request that produced them, the decoded-or-error outcome and the seed, plus the one
-    command that re-runs the case. The ``request.json`` panel renders the body
-    :func:`_request_payload` composes - the artefact's own content, its identity envelope
-    merged over the request projection - rather than the request alone, and both JSON
-    panels are built from the in-memory model through the canonical JSON formatter instead
-    of read back from the files on disk, which is what keeps this writer a pure function of
-    the result it is handed. Each block carries ``tabindex="-1"`` so a jump to it moves the
-    keyboard focus as well as the viewport.
+    command that re-runs the case at this run's adapter, EC level and seed. The
+    ``request.json`` panel renders the body :func:`_request_payload` composes - the
+    artefact's own content, its identity envelope merged over the request projection -
+    rather than the request alone, and both JSON panels are built from the in-memory model
+    through the canonical JSON formatter instead of read back from the files on disk, which
+    is what keeps this writer a pure function of the result it is handed. Each block carries
+    ``tabindex="-1"`` so a jump to it moves the keyboard focus as well as the viewport.
 
     Each JSON panel is marked ``dir="auto"``: the panels render payload text a target
     supplied, so a payload in a right-to-left script would otherwise reorder the JSON
@@ -870,7 +888,7 @@ def _render_details(
             blocks.append(f"<div><dt>{_esc(label)}</dt><dd>{_esc(value)}</dd></div>")
         blocks.append("</dl>")
         blocks.append(
-            f'<p class="command"><code>{_esc(_reproduce_command(case))}</code></p>'
+            f'<p class="command"><code>{_esc(_reproduce_command(case, run_result))}</code></p>'
         )
         blocks += _render_images(evidence_root, case)
         blocks.append("<h4>request.json</h4>")
@@ -1088,11 +1106,19 @@ def _render_footer(run_result: RunResult) -> list[str]:
     The guiding sentence follows the results this run recorded. A run with at least one
     result points the reader at the case's detail block and the rows of the table; a run
     that recorded none says there is no row to re-run, so the page never sends a reader
-    looking for a row that does not exist. The command, the seed contract and the note
-    about the two machine-readable files are the same on both, because they describe how
-    the product works rather than what this run happened to do.
+    looking for a row that does not exist. The command names this run's adapter, EC level and
+    run seed and leaves ``<CHECK-ID>`` as its only placeholder: an omitted ``--adapter`` or
+    ``--ec`` falls back to the configured default target and to EC level ``M``, and
+    ``--seed`` is the run seed, so a command naming none of them re-runs the configured
+    default target at the configured default seed instead of the run the results came from.
+    The command and the note about the two machine-readable files are the same on both
+    branches - they state this run's own parameters and the forms a machine reads - while the
+    guidance differs, because it describes what this run happened to record.
     """
-    command = "qrcheck run --checks <CHECK-ID> --seed <seed>"
+    command = (
+        f"qrcheck run --adapter {run_result.adapter} --ec {run_result.ec_level} "
+        f"--checks <CHECK-ID> --seed {run_result.seed}"
+    )
     if run_result.results:
         guidance = (
             "<p>Every row of the results table can be re-run on its own at the same seed: "
@@ -1108,9 +1134,9 @@ def _render_footer(run_result: RunResult) -> list[str]:
         "<h2>Reproducing a case</h2>",
         guidance,
         f'<p class="command"><code>{_esc(command)}</code></p>',
-        "<p>The recorded seed regenerates the same payloads and the same damaged images. "
-        "The <code>summary.json</code> and <code>junit.xml</code> written beside this file "
-        "carry the same results in the forms a machine reads.</p>",
+        "<p>The run seed shown in the header regenerates the same payloads and the same "
+        "damaged images. The <code>summary.json</code> and <code>junit.xml</code> written "
+        "beside this file carry the same results in the forms a machine reads.</p>",
         "</footer>",
     ]
 
@@ -1135,9 +1161,20 @@ def _detail_anchors(results: Sequence[CaseResult]) -> dict[int, str]:
     return anchors
 
 
-def _reproduce_command(case: CaseResult) -> str:
-    """Return the single command that re-runs ``case`` at its recorded seed."""
-    return f"qrcheck run --checks {case.check_id} --seed {case.seed}"
+def _reproduce_command(case: CaseResult, run_result: RunResult) -> str:
+    """Return the single command that re-runs ``case`` as this run recorded it.
+
+    The command carries the run's adapter, EC level and run seed beside the case's check ID,
+    because an omitted ``--adapter`` or ``--ec`` falls back to the configured default target
+    and to EC level ``M``, and ``--seed`` is the run seed, not the case's recorded one: a case
+    seed is a per-case derivation of the run seed, so passing it back re-derives every draw
+    from the wrong root and re-runs a different case than the page shows
+    (AAP §0.3.4, §0.5.2, §0.8.4).
+    """
+    return (
+        f"qrcheck run --adapter {run_result.adapter} --ec {run_result.ec_level} "
+        f"--checks {case.check_id} --seed {run_result.seed}"
+    )
 
 
 def _status_class(status: Status | str) -> str:

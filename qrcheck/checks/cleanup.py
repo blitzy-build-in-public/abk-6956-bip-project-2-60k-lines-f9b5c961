@@ -78,8 +78,9 @@ TEMP_PREFIX: Final[str] = "qrcheck-"
 EXPECTED_ENCODES: Final[Mapping[str, int]] = MappingProxyType({CHECK_ID: 0})
 
 # The platform file-descriptor directories, in discovery order: ``/proc/self/fd`` on Linux,
-# ``/dev/fd`` on macOS.  Neither existing makes the handle half unsupported on this host, reported
-# per case rather than as a skip of the whole check.
+# ``/dev/fd`` on macOS.  A host that exposes neither gets ``None`` from :func:`fd_directory`, and
+# that is what makes the handle half ``skipped``/``unsupported_platform`` per case while the
+# temporary-file half still asserts.
 _FD_DIRECTORIES: Final[tuple[Path, ...]] = (Path("/proc/self/fd"), Path("/dev/fd"))
 
 # The artefact token of each descriptor directory: which platform interface was enumerated, stated

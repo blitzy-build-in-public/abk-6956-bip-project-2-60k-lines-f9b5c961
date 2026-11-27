@@ -12,7 +12,9 @@ breaking the exit-code rule; the ten per-result fields and their vocabulary, wit
 ``reason`` ``null``; ``results[]`` ordered by ``(check_id, case_id)`` though the fixture is
 deliberately scrambled; ``evidence_dir`` ``null`` for a pass and a relative posix path otherwise,
 since an absolute one names the clone; the canonical text form (sorted keys at every depth,
-two-space indent, UTF-8, LF, one trailing newline, unserialisable values raising); the volatile
+two-space indent, UTF-8, LF, one trailing newline, unserialisable values raising, and a code point
+UTF-8 cannot encode replaced by U+FFFD so a target's lone surrogate is written instead of aborting
+the run that was reporting it); the volatile
 inventory of exactly ``started_at``, ``finished_at``, each ``results[].duration_ms`` and the
 measured leaves of each ``PF-*`` probe's ``decoded.metrics``, with the configuration-derived
 metrics still compared; and ``run_id``, read off a real run through the public
@@ -101,6 +103,14 @@ _SUMMARY_NAME: Final[str] = "summary.json"
 # ``ensure_ascii=False`` it appears as itself, and a writer that escaped it would turn the
 # ``emoji``, ``rtl`` and ``utf8-multibyte`` payloads into unreadable evidence.
 _NON_ASCII_PAYLOAD: Final[str] = "héllo 🎉 مرحبا"
+
+# The lone surrogate a target's JSON can carry: ``"\ud800"`` is a legal JSON escape that
+# ``json.loads`` materialises as one code point, and UTF-8 has no byte sequence for it. Spelled
+# through ``chr`` so this module's own source stays valid UTF-8 and holds no surrogate itself.
+_LONE_SURROGATE: Final[str] = chr(0xD800)
+
+# What both writers replace it with: U+FFFD, the replacement character, one code point for one.
+_REPLACEMENT_CHARACTER: Final[str] = chr(0xFFFD)
 
 # The fixture run's two timestamp pairs: fixed constants, never a clock reading, so two runs built
 # by these helpers differ only where the test wants them to.
@@ -694,6 +704,73 @@ def test_write_canonical_json_creates_a_missing_parent_directory(tmp_path: Path)
     payload = {"adapter": "reference", "seed": 1, "unbalanced": ["x", 2, None, True]}
     assert write_canonical_json(payload, path) == path
     assert path.read_text(encoding="utf-8") == dumps_canonical(payload) + "\n"
+
+
+# --- Text UTF-8 cannot encode (QASEC-01) ---
+
+
+def test_a_lone_surrogate_is_replaced_so_the_text_always_encodes() -> None:
+    """A target's lone surrogate becomes U+FFFD: the canonical text always encodes as UTF-8.
+
+    ``json.loads`` turns the JSON escape ``"\\ud800"`` into one code point, ``ensure_ascii=False``
+    writes it through, and UTF-8 has no byte sequence for it -- so encoding the canonical text used
+    to raise ``UnicodeEncodeError``. The formatter now replaces that one code point, which is the
+    guarantee every writer below it relies on.
+    """
+    payload = {"error_text": f"bad {_LONE_SURROGATE} surrogate"}
+    text = dumps_canonical(payload)
+
+    # The bare call that used to raise: the text the canonical formatter returns is always UTF-8.
+    assert text.encode("utf-8")
+    assert _LONE_SURROGATE not in text
+    # One code point replaces one code point, so a payload compared by length is not shortened,
+    # and the replacement is the only difference from the same payload carrying U+FFFD already.
+    assert text == dumps_canonical({"error_text": f"bad {_REPLACEMENT_CHARACTER} surrogate"})
+    assert len(text) == len(json.dumps(payload, sort_keys=True, indent=2, ensure_ascii=False))
+
+
+def test_a_payload_carrying_a_lone_surrogate_is_written_as_utf8(tmp_path: Path) -> None:
+    """The artefact exists, decodes as UTF-8 and holds U+FFFD where the target's surrogate stood."""
+    path = tmp_path / "decoded.json"
+    payload = {"error_text": f"bad {_LONE_SURROGATE} surrogate", "payload_len": 3}
+
+    assert write_canonical_json(payload, path) == path
+
+    data = _reread(path)
+    # Decoding is the assertion: a raw surrogate reaching the file fails here, and the behaviour
+    # this pins replaced it was no file at all.
+    text = data.decode("utf-8")
+    assert data.endswith(b"\n")
+    assert not data.endswith(b"\n\n")
+    assert b"\xef\xbf\xbd" in data, "the file must carry U+FFFD's own three UTF-8 bytes"
+    assert json.loads(text) == {
+        "error_text": f"bad {_REPLACEMENT_CHARACTER} surrogate",
+        "payload_len": 3,
+    }
+
+
+def test_a_summary_whose_decoded_value_carries_a_lone_surrogate_is_still_written(
+    make_case_result: Callable[..., CaseResult],
+    make_run_result: Callable[..., RunResult],
+    report_dir: Path,
+) -> None:
+    """A target-influenced surrogate costs the run no report: ``summary.json`` is written."""
+    case = make_case_result(
+        status=Status.FAILED,
+        decoded={"decoder_message": f"could not read {_LONE_SURROGATE}"},
+    )
+    run = make_run_result((case,))
+
+    path = write_summary(run, _summary_path(report_dir))
+
+    text = _reread(path).decode("utf-8")
+    payload = json.loads(text)
+    assert payload["results"][0]["decoded"]["decoder_message"] == (
+        f"could not read {_REPLACEMENT_CHARACTER}"
+    )
+    # Every other byte of the document is still the canonical form of what was written.
+    assert text == dumps_canonical(payload) + "\n"
+    assert _LONE_SURROGATE not in text
 
 
 # --- The volatile-field inventory of AAP §0.5.4 ---

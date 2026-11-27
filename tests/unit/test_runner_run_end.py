@@ -22,6 +22,14 @@ The entry is left by a case of another selected check, which is the only seam th
 the run's own window, and every run here is given a temporary directory of its own: a sibling clone
 leaving a ``qrcheck-*`` entry in the host's shared temporary directory would otherwise decide these
 results. The entry is removed after each test.
+
+The same file holds the other half of the runner's containment: ``_persist`` wraps every result this
+layer builds, and ``EvidenceStore.record`` documents ``ValueError``, ``TypeError`` and ``OSError``
+as its refusal modes -- a value it will not serialise, and a write that fails. The write fault is
+proven end to end through ``run`` in ``tests/unit/test_exit_codes.py``; the refusals a
+target-influenced value reaches are pinned here against the function itself, because each has to
+become one ``error`` result in the case's own place instead of an exception that aborts the walk
+(AAP §0.6.6 row 11, §0.14.1).
 """
 
 from __future__ import annotations
@@ -37,12 +45,13 @@ from typing import Any, Final
 
 import pytest
 
+import qrcheck.runner as runner_module
 from qrcheck.checks import cleanup as cleanup_module
 from qrcheck.checks import load_families, support
 from qrcheck.cli.exit import EXIT_FAILED, EXIT_OK
 from qrcheck.registry.check import REGISTRY, Case, CheckContract, RunContext
 from qrcheck.report import SUMMARY_FILENAME
-from qrcheck.report.model import CaseResult, Reason, Status
+from qrcheck.report.model import TRACEBACK_KEY, CaseResult, Reason, Status
 
 #: The registry module itself, reached through :func:`importlib.import_module` because the
 #: ``qrcheck.registry`` package binds ``check`` to the registration decorator, so the dotted import
@@ -81,6 +90,10 @@ FD_TOKENS: Final[frozenset[str]] = frozenset({"proc-self-fd", "dev-fd"})
 
 #: The two fields ``decoded`` uses to report the temporary-file windows of the run.
 WINDOW_FIELDS: Final[tuple[str, ...]] = ("temp_entries_before", "temp_entries_after")
+
+#: The seed the refusal tests record on their case: the committed default, so nothing here depends
+#: on a clock or a random source.
+SEED: Final[int] = 20240101
 
 
 # --------------------------------------------------------------------------- #
@@ -275,3 +288,82 @@ def test_the_artefact_states_both_windows_and_the_platform_token(
     assert entry["decoded"]["temp_prefix"] == cleanup_module.TEMP_PREFIX, (
         "the artefact names the prefix the observation filtered on"
     )
+
+
+# --------------------------------------------------------------------------- #
+# The evidence store's full refusal set, contained rather than escaping the walk
+# --------------------------------------------------------------------------- #
+
+
+class RefusingStore:
+    """A stand-in evidence store whose ``record`` raises the refusal it was built with.
+
+    The duck-typed port, not the real store: what is under test is the containment in the runner,
+    so the refusal is chosen by the test and no filesystem is involved.
+    """
+
+    def __init__(self, refusal: BaseException) -> None:
+        """Hold the refusal every call raises, and count the calls."""
+        self.refusal = refusal
+        self.calls = 0
+
+    def record(self, result: CaseResult) -> str | None:
+        """Refuse `result` the way the real store would, after recording that it was asked."""
+        del result
+        self.calls += 1
+        raise self.refusal
+
+
+@pytest.mark.parametrize(
+    "refusal",
+    (
+        ValueError("artefact request.json: payload holds a non-finite float (nan, inf or -inf)"),
+        TypeError("artefact decoded.json: Object of type bytes is not JSON serializable"),
+        UnicodeEncodeError("utf-8", "x\ud800y", 1, 2, "surrogates not allowed"),
+    ),
+    ids=("value-error", "type-error", "unicode-encode-error"),
+)
+def test_a_store_refusal_that_is_not_a_write_fault_is_contained(
+    refusal: BaseException,
+) -> None:
+    """A refusal the store documents becomes one ``error`` result, never an escaping exception.
+
+    ``EvidenceStore.record`` documents ``ValueError``, ``TypeError`` and ``OSError`` as its refusal
+    modes, and a value a target influenced is enough to reach the first two. Containing only
+    ``OSError`` let one of them escape from inside the handler that builds
+    the ``error`` result, which aborted the walk: no report, no evidence, exit 3, and every result
+    already accumulated discarded -- the opposite of what AAP §0.6.6 row 11 requires. The
+    ``UnicodeEncodeError`` case pins the subclass: a refusal of that shape is contained as the
+    ``ValueError`` it is and needs no arm of its own.
+    """
+    store = RefusingStore(refusal)
+    case = CaseResult(
+        check_id="RT-ROUNDTRIP",
+        case_id="corpus:url-000",
+        status=Status.FAILED,
+        reason=Reason.VALUE_MISMATCH,
+        duration_ms=1.5,
+        decoded={"payload_len": 31},
+        expected={"payload_len": 32},
+        seed=SEED,
+    )
+
+    result = runner_module._persist(store, case)
+
+    # Once, not twice: containing a refusal is not a retry (AAP §0.5.6).
+    assert store.calls == 1
+    # The case keeps the one result it is entitled to, under its own identity.
+    assert (result.check_id, result.case_id) == (case.check_id, case.case_id)
+    assert result.duration_ms == case.duration_ms
+    assert result.seed == case.seed
+    # The outcome the case had reached is replaced by the internal-error one, not duplicated.
+    assert result.status is Status.ERROR
+    assert result.reason is Reason.INTERNAL_ERROR
+    assert result.evidence_dir is None, "nothing was written, so no directory may be named"
+    assert result.expected == {"outcome": "evidence_recorded"}
+    # The fault and the outcome it displaced are both in the artefact, so a reader of
+    # ``summary.json`` can tell a lost failing case from a lost skipped one.
+    assert result.decoded["error_type"] == type(refusal).__name__
+    assert str(refusal) in result.decoded[TRACEBACK_KEY]
+    assert result.decoded["prevented_status"] == Status.FAILED.value
+    assert result.decoded["prevented_reason"] == Reason.VALUE_MISMATCH.value

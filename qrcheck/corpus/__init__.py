@@ -48,8 +48,9 @@ def __getattr__(name: str) -> Any:
     ``qrcheck.corpus`` stays free of every third-party module.
 
     Raises:
-    AttributeError: ``name`` is neither a public name nor one of the package's submodules. Nothing
-    else is raised for an unknown attribute, because callers probe surface with ``hasattr``.
+        AttributeError: ``name`` is neither a public name nor one of the package's submodules.
+            Nothing else is raised for an unknown attribute, because callers probe surface with
+            ``hasattr``.
     """
     module_name = _EXPORT_MODULES.get(name)
     if module_name is not None:

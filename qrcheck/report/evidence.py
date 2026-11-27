@@ -32,7 +32,8 @@ What is persisted is the caller's projection, never a re-derivation of it: ``req
 carries the ``GenerateRequest`` fields plus the case's resolved parameters (damage kind and
 thresholds, quiet-zone request, contrast request) and the ``out_of_contract`` marker
 ``qrcheck/checks/support.py`` sets for the ``IV-*`` probes, and ``decoded`` already carries
-``per_decoder`` (each outcome's ``status`` and ``polarity``), ``polarity_applied``, ``agreement``,
+``per_decoder`` (each outcome's ``status`` and ``polarity``), ``unavailable_decoders`` (the reason
+each decoder the run did not consult could not be), ``polarity_applied``, ``agreement``,
 the EC-level pair, ``version``, ``mask``, ``matrix_sha256`` and the check-specific measurements, or
 an error result's traceback. Both mappings are written verbatim: validating their shape here would
 turn a legitimate error result into a framework failure.
@@ -47,22 +48,36 @@ created with ``exist_ok=True``, the files are written directly, and no temporary
 moment for ``CL-ARTIFACTS`` to find. Every artefact name, every artefact's bytes and both JSON
 bodies are resolved before the case directory is created, so a malformed case raises with no
 evidence directory at all -- not even one holding ``request.json`` alone -- and the only exception
-that can follow the directory's creation is an :exc:`OSError`. ``symbol`` and ``repeat_symbol`` are
-duck-typed on ``image_bytes: bytes`` and ``output_format: str`` (the
+that can follow the directory's creation is an :exc:`OSError`. Nothing below ``report_dir`` is
+written through a link: the components this module composes -- the ``evidence`` root, the sanitized
+check-id directory and the failure-id directory -- and every artefact destination in it are
+verified not to be symlinks, and the case directory's real path is verified to lie inside the
+report root's, all before the case directory is created, so a pre-planted symlink is refused by
+name instead of followed (CWE-59) and no evidence byte can reach a path outside ``report_dir``.
+``report_dir`` itself is the operator's own path and is never inspected: a report root that is a
+symlink keeps working, and only what this store builds below it is checked. ``symbol`` and
+``repeat_symbol`` are duck-typed on ``image_bytes: bytes`` and ``output_format: str`` (the
 :class:`qrcheck.targets.base.GeneratedSymbol` shape, imported for type checking only), so the report
 package never depends on the adapter layer and a configuration-only process pulls in no Pillow,
 numpy or zxing.
 
-Failure modes, four, none of them retried and none logged (AAP §0.5.6). The first three are caller
-defects raised before anything is written: :exc:`ValueError` from this module or from
+Failure modes, three, none of them retried and none logged (AAP §0.5.6). Two are caller defects
+raised before anything is written: :exc:`ValueError` from this module or from
 :mod:`qrcheck.evidence.naming` for a malformed artefact request (an unknown symbol format, a non-PNG
 repetition, an undeclared damage kind) or from :func:`qrcheck.report.json_report.dumps_canonical`
-for a non-finite float (``nan``, ``inf``, ``-inf``), which JSON defines no token for;
+for a non-finite float (``nan``, ``inf``, ``-inf``), which JSON defines no token for; and
 :exc:`TypeError` for a value the canonical writer cannot serialise or a non-bytes-like
-``image_bytes``; and :exc:`UnicodeEncodeError` for a character UTF-8 cannot encode, such as the lone
-surrogate an HTTP target's JSON metadata can carry in. Each message names the offending value or the
-artefact at fault. The fourth is :exc:`OSError` (including :exc:`PermissionError`) propagated
-untouched, because ``qrcheck.cli.run`` turns an unwritable ``report_dir`` into exit 3.
+``image_bytes``. Each message names the offending value or the artefact at fault. Text UTF-8
+cannot encode is not one of them: the lone surrogate a target's JSON metadata can carry in is
+replaced with U+FFFD by the canonical formatter
+(:func:`qrcheck.report.json_report.make_utf8_encodable`), so it becomes a written artefact
+instead of costing the run the report that describes it (AAP §0.6.6 row 11). The third is
+:exc:`OSError`, raised two ways: before anything is created, when a component below
+``report_dir`` or an artefact destination is a symlink or the case directory's real path leaves
+the report root -- the refusal naming the path it declined to write -- and when the directory or
+an artefact cannot be written (:exc:`PermissionError` included). It is not converted, retried or
+logged: ``qrcheck.runner`` contains it as one ``error`` result for the case (AAP §0.6.6 row 11)
+and ``qrcheck.cli.run`` turns an unwritable ``report_dir`` into exit 3.
 """
 
 from __future__ import annotations
@@ -119,32 +134,77 @@ def _canonical_text(name: str, payload: Any) -> str:
     The serialisation belongs to :func:`qrcheck.report.json_report.dumps_canonical`, the product's
     only JSON formatter; this function adds the artefact name to the diagnostic, so a caller who
     persisted an unserialisable or non-finite value is told which file it was for. Raises
-    :exc:`TypeError` or :exc:`ValueError` from that writer, and :exc:`UnicodeEncodeError` for a
-    character UTF-8 cannot encode -- never converted into the ``ValueError``, because a lone
-    surrogate is not a serialisation defect.
+    :exc:`TypeError` or :exc:`ValueError` from that writer, and nothing else: the text returned
+    always encodes as UTF-8, because that formatter replaces every code point UTF-8 cannot encode --
+    the lone surrogate a target's JSON can carry -- with U+FFFD before it returns, which is what
+    lets record() create the case directory knowing neither write that follows can fail on encoding.
     """
     try:
-        text = dumps_canonical(payload)
+        return dumps_canonical(payload)
     except TypeError as exc:
         raise TypeError(f"artefact {name}: {exc}") from exc
     except ValueError as exc:
         raise ValueError(f"artefact {name}: {exc}") from exc
-    # Encoded here as well as in write_canonical_text, although the text is what is returned:
-    # proving it encodes is what lets record() create the case directory knowing neither write
-    # that follows can fail on encoding. It is encoded outside the handlers above because
-    # UnicodeEncodeError is a ValueError: catching it there would report an unencodable
-    # character as an unserialisable value.
-    text.encode("utf-8")
-    return text
+
+
+def _refuse_unsafe_case_dir(
+    report_dir: Path, case_dir: Path, artifact_names: Sequence[str]
+) -> None:
+    """Raise :exc:`OSError` unless ``case_dir`` and its artefacts are safe to write.
+
+    Two independent checks, both made before anything is created: a symlink planted in the report
+    tree would otherwise be followed and the artefact files would land outside it (CWE-59), which
+    sanitizing the path segments cannot prevent because the hazard is in the directory layout rather
+    than in an identifier. First, every component composed below ``report_dir`` -- the ``evidence``
+    root, the sanitized check-id directory, the failure-id directory -- and then every artefact
+    destination in ``case_dir`` is refused when it is a symlink, the message naming the full path of
+    the entry at fault so an operator can see what is in the way. Second, the case directory's real
+    path is compared with the report root's, which catches any resolution this module did not
+    compose itself: the case directory must be the report root or lie inside it.
+
+    ``report_dir`` itself is never inspected. It is the operator's own path, so a report root that
+    is a symlink keeps working, as does one reached through a symlinked ancestor; only what this
+    store builds below it is verified. Nothing here creates, removes or reads a file: the checks are
+    ``is_symlink`` and ``resolve``, so a refusal leaves the filesystem exactly as it was.
+
+    Raises:
+        OSError: A component below ``report_dir`` or an artefact destination is a symlink, or the
+            case directory's real path leaves the report root's. The message names the path that was
+            refused; it is an :exc:`OSError` because that is the store's documented write fault,
+            which ``qrcheck.runner`` contains as one ``error`` result per case (AAP §0.6.6 row 11).
+    """
+    current = report_dir
+    for part in case_dir.relative_to(report_dir).parts:
+        current = current / part
+        if current.is_symlink():
+            raise OSError(
+                f"refusing to write evidence into {current}: it is a symlink, so the write would "
+                f"follow it out of the report directory {report_dir}"
+            )
+    for name in artifact_names:
+        destination = case_dir / name
+        if destination.is_symlink():
+            raise OSError(
+                f"refusing to write evidence artefact {destination}: it is a symlink, so the write "
+                f"would replace the file it names instead of an artefact under {report_dir}"
+            )
+    resolved_root = report_dir.resolve()
+    resolved_case = case_dir.resolve()
+    if resolved_case != resolved_root and resolved_root not in resolved_case.parents:
+        raise OSError(
+            f"refusing to write evidence into {case_dir}: its real path leaves the report "
+            f"directory {report_dir}"
+        )
 
 
 class EvidenceStore:
     """Writes, and declines to write, the evidence of one run's cases.
 
     One instance per run, constructed with the run's ``report_dir`` exactly as configuration gave it
-    -- relative or absolute, never resolved here (AAP §0.5.5) -- and the constructor performs no
-    I/O, so a run that persists nothing leaves nothing behind on disk. The store is not a cache and
-    keeps no state beyond that directory: every decision is a pure function of the
+    -- relative or absolute, never rewritten to an absolute path (AAP §0.5.5), resolved only inside
+    :meth:`record` to compare it with the case directory's real path -- and the constructor performs
+    no I/O, so a run that persists nothing leaves nothing behind on disk. The store is not a cache
+    and keeps no state beyond that directory: every decision is a pure function of the
     :class:`qrcheck.report.model.CaseResult` and the artefacts supplied with it, which is what makes
     two runs of the same case produce the same directory and the same bytes.
     """
@@ -153,9 +213,10 @@ class EvidenceStore:
         """Record where the run's reports live; create nothing.
 
         Args:
-            report_dir: The run's report directory as configured. It is stored as given
-                and is never resolved, created or probed: the first write creates what it
-                needs, and an unwritable directory is reported by that write.
+            report_dir: The run's report directory as configured. It is stored as given and
+                never rewritten: this constructor creates, probes and resolves nothing, the
+                first write creates what it needs, and an unwritable directory is reported
+                by that write.
         """
         self.report_dir: Path = Path(report_dir)
 
@@ -207,8 +268,10 @@ class EvidenceStore:
         ``symbol.svg`` untouched, ``symbol-repeat.png`` when ``repeat_symbol`` is given,
         ``damage-<kind>-<seed>.png`` per ``damage_variants`` entry with ``case_result.seed`` in the
         name, and ``logo.png`` when ``logo`` is given. Nothing is created until every artefact is
-        ready, so a refused case leaves no directory behind, and the caller applies the return value
-        with ``dataclasses.replace``: the frozen result is never mutated.
+        ready, so a refused case leaves no directory behind, and nothing below ``report_dir`` is
+        written through a link: every component and every artefact destination is verified before
+        the case directory is created. The caller applies the return value with
+        ``dataclasses.replace``: the frozen result is never mutated.
 
         ``case_result``'s status decides whether anything is written, and its ``check_id``,
         ``case_id``, ``seed``, ``request`` and ``decoded`` decide what is. ``symbol`` and
@@ -224,9 +287,13 @@ class EvidenceStore:
         ``summary.json`` records -- or ``None`` for a passed case, never an absolute path. Raises
         :exc:`ValueError` for an unknown symbol format or repetition, an undeclared damage kind, or
         a non-finite float in a persisted mapping; :exc:`TypeError` for a non-bytes-like
-        ``image_bytes`` or an unserialisable value; :exc:`UnicodeEncodeError` for a character UTF-8
-        cannot encode; and :exc:`OSError` when the directory or an artefact cannot be written, the
-        only failure that follows the directory's creation.
+        ``image_bytes`` or an unserialisable value; and :exc:`OSError` either before anything is
+        created, when a component below ``report_dir`` or an artefact destination is a symlink or
+        the case directory's real path leaves the report root, or when the directory or an artefact
+        cannot be written -- the latter being the only failure that follows the directory's
+        creation. A character UTF-8 cannot encode is not a refusal: both persisted bodies are
+        written with it replaced by U+FFFD, so a target's lone surrogate yields evidence rather than
+        an exception.
         """
         if case_result.status is Status.PASSED:
             # The policy branch: a green case leaves the filesystem alone.
@@ -267,11 +334,17 @@ class EvidenceStore:
             "seed": case_result.seed,
         }
 
-        # Both bodies are serialised, and encoded, before the directory exists: a value
-        # the canonical writer cannot serialise, or a lone surrogate it cannot encode,
-        # must not leave a case directory holding request.json alone.
+        # Both bodies are serialised before the directory exists: a value the canonical writer
+        # cannot serialise must not leave a case directory holding request.json alone. Text UTF-8
+        # cannot encode is not such a value -- the formatter has already replaced it with U+FFFD.
         request_text = _canonical_text(REQUEST_JSON, request_payload)
         decoded_text = _canonical_text(DECODED_JSON, dict(case_result.decoded))
+
+        # The paths are inspected last, every artefact and both bodies already in hand: a
+        # refusal must leave no case directory behind, and the names verified here are exactly
+        # the closed set written below.
+        artifact_names = (REQUEST_JSON, DECODED_JSON, *(name for name, _ in binaries))
+        _refuse_unsafe_case_dir(self.report_dir, case_dir, artifact_names)
 
         # Deterministic overwrite: exist_ok keeps a second write of the same case from
         # failing, and every file is written directly rather than through a temporary file

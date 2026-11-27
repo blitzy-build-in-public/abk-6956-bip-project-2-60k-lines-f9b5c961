@@ -195,15 +195,6 @@ def run_suite(
 ) -> RunResult:
     """Execute one run and return its accumulated model.
 
-    Keyword Args:
-        fail_fast: Stop launching further ordinary checks once a check has produced a
-            ``failed`` or ``error`` result.  The in-flight check always completes all of its
-            cases, so the report never describes a check whose cases were cut off half-way.
-            The run-scoped check still runs, because it never invokes the target and its
-            subject is the finished run (:func:`_walk`, AAP §0.8.1).  Additive and
-            keyword-only because the CLI's ``--fail-fast`` option has to reach the runner
-            while the positional interface stays as specified.
-
     Args:
         config: The resolved configuration; it owns every threshold, the corpus path -- read
             only when this run's selection reads the corpus (:func:`_corpus_for_run`) -- the
@@ -216,6 +207,13 @@ def run_suite(
             recorded on every result and on the run, and passed to the checks on the context.
         seed: The run's seed.  Every derived seed and every reproducibility claim in the
             report is derived from it via :func:`qrcheck.config.seeding.derive_seed`.
+        fail_fast: Stop launching further ordinary checks once a check has produced a
+            ``failed`` or ``error`` result.  The in-flight check always completes all of its
+            cases, so the report never describes a check whose cases were cut off half-way.
+            The run-scoped check still runs, because it never invokes the target and its
+            subject is the finished run (:func:`_walk`, AAP §0.8.1).  Additive and
+            keyword-only because the CLI's ``--fail-fast`` option has to reach the runner
+            while the positional interface stays as specified.
 
     Returns:
         The finished :class:`~qrcheck.report.model.RunResult`, whose ``results`` are sorted by
@@ -234,10 +232,10 @@ def run_suite(
             :func:`qrcheck.registry.selection.select`), which is exit code 2 upstream.
         OSError: The previous run's evidence tree cannot be removed
             (:meth:`qrcheck.report.evidence.EvidenceStore.clear`), which happens before the walk
-            and before any result exists, and is exit code 3 upstream.  An evidence write once
-            the walk has begun raises here no more: :func:`_persist` contains it as an ``error``
-            result, because aborting would discard the results accumulated so far (AAP §0.6.6
-            row 11, §0.3.4).
+            and before any result exists, and is exit code 3 upstream.  An evidence write, or any
+            other refusal the store documents, once the walk has begun raises here no more:
+            :func:`_persist` contains it as an ``error`` result, because aborting would discard the
+            results accumulated so far (AAP §0.6.6 row 11, §0.3.4).
     """
     started_at = datetime.datetime.now(datetime.timezone.utc)
     # Idempotent: the family modules register themselves while they import, and calling this
@@ -770,9 +768,9 @@ def _target_loss_result(
     from a hung one without going back to ``qrcheck.toml``.
 
     Args:
-        check_id: The check that could not run, which is the identifier the result is filed
-            under: a per-check result keeps the registry-reachability gate honest, because
-            every result then names a registered check.
+        check_id: The check that could not run, which is the identifier the result is filed under:
+            a per-check result keeps the registry-reachability gate honest, because every result
+            then names a registered check.
         error: The error the target raised; it reaches here unchanged from the check layer.
         context: The run's context, read for the target name, the seed and the evidence store.
         duration_ms: How long the case took before the target was lost; ``0.0`` for a check
@@ -856,25 +854,29 @@ def _internal_error_result(
 
 
 def _persist(store: EvidenceStore, result: CaseResult) -> CaseResult:
-    """Persist `result` and return it, containing an evidence write fault as an error result.
+    """Persist `result` and return it, containing an evidence refusal as an error result.
 
     The containment AAP §0.6.6 row 11 requires of this layer, at the point where the fault
-    happens.  :class:`~qrcheck.report.evidence.EvidenceStore` raises ``OSError`` when a
-    non-passing result's case directory or one of its artefacts cannot be written -- a full
-    disk, a permission that changed under the run, a path component that became a file -- and
-    letting that escape would abort the walk with every result accumulated so far discarded,
-    so ``qrcheck.cli.run`` would report an empty stream over a run that had produced plenty.
-    Contained, the fault becomes one ``error`` result in its own case, the walk continues with
-    the next case, and the report the other results describe is still written -- or, when the
-    report directory itself is what failed, still streamed as JSON lines (AAP §0.3.4, §0.6.6
-    row 10), which is what §0.6.6 row 11's "the run continues, the process exits 3 at the end"
-    asks for.
+    happens.  :class:`~qrcheck.report.evidence.EvidenceStore` documents three refusal modes, and
+    every one of them is contained here rather than only the write fault: ``OSError`` when the case
+    directory or one of its artefacts cannot be written -- a full disk, a permission that changed
+    under the run, a path component that became a file, or a symlink in the way of it -- plus the
+    ``ValueError`` and ``TypeError`` of an artefact it will not serialise, with a
+    ``UnicodeEncodeError`` contained as the ``ValueError`` it is and needing no arm of its own.
+    Letting a refusal escape would abort the walk with every result accumulated so far discarded,
+    so ``qrcheck.cli.run`` would report an empty stream over a run that had produced plenty -- and
+    a value a target influenced is enough to reach one, which is exactly the case that must not
+    cost the run its report.  Contained, the fault becomes one ``error`` result in its own case,
+    the walk continues with the next case, and the report the other results describe is still
+    written -- or, when the report directory itself is what failed, still streamed as JSON lines
+    (AAP §0.3.4, §0.6.6 row 10), which is what §0.6.6 row 11's "the run continues, the process
+    exits 3 at the end" asks for.
 
     A containment and never a retry: the store is called exactly once per result whether it
     succeeds or fails, so no check's declared adapter-invocation count changes and no retry
     path appears (AAP §0.4.3, §0.5.6).  Every result this layer builds takes this path -- the
     two error builders and the pre-execution skips -- and a result a check built is persisted by
-    the check itself, inside its own case, where the same ``OSError`` reaches :func:`_run_check`
+    the check itself, inside its own case, where the same refusal reaches :func:`_run_check`
     as a case fault.
 
     Args:
@@ -888,16 +890,16 @@ def _persist(store: EvidenceStore, result: CaseResult) -> CaseResult:
     """
     try:
         return _with_evidence(store, result)
-    except OSError as error:
+    except (OSError, ValueError, TypeError) as error:
         return _evidence_fault_result(result, error, traceback.format_exc())
 
 
 def _evidence_fault_result(
     result: CaseResult,
-    error: OSError,
+    error: OSError | ValueError | TypeError,
     traceback_text: str,
 ) -> CaseResult:
-    """Return the ``error`` result that replaces `result` when its evidence cannot be written.
+    """Return the ``error`` result that replaces `result` when its evidence could not be written.
 
     The case keeps the one result it is entitled to rather than gaining a second: a run must
     never hold two results for one ``(check_id, case_id)`` pair, because that pair is the case's
@@ -912,7 +914,9 @@ def _evidence_fault_result(
 
     Args:
         result: The result whose evidence the store could not write.
-        error: The ``OSError`` the store raised, named in ``decoded["error_type"]``.
+        error: The refusal the store raised, one of the three types :func:`_persist` contains; its
+            type name reaches ``decoded["error_type"]``, so a reader can tell a write fault from a
+            value the store would not serialise.
         traceback_text: The traceback captured at the fault, stored under
             :data:`qrcheck.report.model.TRACEBACK_KEY` -- the one key the result model
             normalises, so no artefact records the directory the run happened in.
@@ -959,10 +963,15 @@ def _with_evidence(store: EvidenceStore, result: CaseResult) -> CaseResult:
         report directory.
 
     Raises:
-        OSError: The case directory cannot be created or written. Propagated to
-            :func:`_persist`, its only caller, which contains it as an ``error`` result so the
-            walk continues and the run's results still reach the report -- or the JSON-lines
-            stream an unwritable report directory falls back to (AAP §0.6.6 row 11, §0.3.4).
+        OSError: The case directory or one of its artefacts cannot be written.
+        ValueError: The store refuses the artefact -- an undeclared damage kind, an unknown symbol
+            format, or a value it will not serialise as canonical JSON.
+        TypeError: An image artefact is not bytes-like, or ``request``/``decoded`` holds a value
+            that is not JSON-serialisable.
+
+    All three propagate to :func:`_persist`, its only caller, which contains each of them as an
+    ``error`` result so the walk continues and the run's results still reach the report -- or the
+    JSON-lines stream an unwritable report directory falls back to (AAP §0.6.6 row 11, §0.3.4).
     """
     directory = store.record(result)
     if directory is None:
