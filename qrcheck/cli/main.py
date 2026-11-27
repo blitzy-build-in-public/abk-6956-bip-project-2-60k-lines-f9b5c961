@@ -18,8 +18,11 @@ in non-standalone mode (``standalone_mode=False``), which is what lets a command
 reach the caller, and it is also why the exceptions click would otherwise convert into a process
 status are mapped here: ``click.UsageError`` and ``click.ClickException`` return ``EXIT_CONFIG``
 after ``show()`` on stderr; ``click.Abort`` returns ``EXIT_INTERNAL`` after one ``Aborted!`` line;
-``click.exceptions.Exit`` returns the integer code the exception carries; ``SystemExit`` returns its
-integer code, else ``EXIT_INTERNAL``; ``ImportError`` or ``OSError`` returns ``EXIT_CONFIG`` when a
+``click.exceptions.Exit`` returns the integer code the exception carries; a ``SystemExit`` click
+raises itself returns ``EXIT_OK`` for a zero or absent code and ``EXIT_INTERNAL`` for any other,
+because the two ways click reaches that builtin -- a broken stdout pipe while echoing and a shell
+completion request -- are framework exits and never a check's verdict, while exit 1 is reserved for
+a check that failed; ``ImportError`` or ``OSError`` returns ``EXIT_CONFIG`` when a
 pinned runtime dependency cannot be imported, after that dependency's own diagnostic on stderr, and
 otherwise falls through to the last arm; and any other ``Exception`` returns ``EXIT_INTERNAL`` after
 the exception's type and message and ``traceback.format_exc()`` on stderr.
@@ -303,13 +306,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     # Defensive arms, in the order click itself resolves them.  Non-standalone mode turns both
     # into a return value rather than a process status, so neither normally escapes; should a
     # nested click path raise one, `main` still returns an integer instead of propagating it.
-    # `Exit.exit_code` is always an integer by click's own contract, while `SystemExit.code` may
-    # be a string or `None` when a caller passed one to the exit builtin, so only the latter
-    # needs a type test before it is returned as a status.
+    # `Exit.exit_code` is always an integer by click's own contract.  A `SystemExit` reaching
+    # here is one click raised itself: an `OSError` with `EPIPE` while echoing becomes
+    # `sys.exit(1)` whatever `standalone_mode` says, and a shell-completion request exits with
+    # its own code.  Neither can be a check's verdict, and exit 1 means a check failed -- a
+    # consumer that closes the pipe early (`qrcheck run | head -1`) must not read as a failing
+    # generator -- so a zero or absent code keeps the success click already decided (`--help`,
+    # a served completion) and every other code is a framework fault, i.e. `EXIT_INTERNAL`.
     except click.exceptions.Exit as exc:
         return exc.exit_code
     except SystemExit as exc:
-        return exc.code if isinstance(exc.code, int) else EXIT_INTERNAL
+        return EXIT_OK if exc.code in (0, None) else EXIT_INTERNAL
     # A pinned runtime dependency that cannot be imported is an environment fault, not a framework
     # one, and AAP §0.7.2 makes it exit 2 naming the distribution and ``requirements.lock``. The
     # arm sits before the last-resort net so a probe, not the exception's type, decides: the

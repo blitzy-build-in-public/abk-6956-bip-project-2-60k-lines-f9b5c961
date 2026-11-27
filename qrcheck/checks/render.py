@@ -209,8 +209,8 @@ _LOGO_FRACTION_DENOMINATOR: Final[int] = 3
 _LOGO_EC_LEVELS: Final[tuple[str, str]] = ("H", "L")
 
 # The six colour pairs ``RN-CONTRAST`` measures.  Case parameters, each measured at or above the
-# documented 7:1 floor and compared with the target's own declared ``contrast_floor``; written out
-# so a diff shows a changed palette.
+# configured floor the target declares in ``contrast_floor``; written out so a diff shows a
+# changed palette.
 _CONTRAST_PALETTES: Final[tuple[tuple[tuple[int, int, int], tuple[int, int, int]], ...]] = (
     ((0, 0, 0), (255, 255, 255)),
     ((32, 32, 32), (255, 255, 255)),

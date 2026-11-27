@@ -551,7 +551,7 @@ class HttpAdapter:
                 response_body = self._read_body(response)
             elapsed_ms = (time.perf_counter() - started) * 1000.0
             return self._interpret_response(response, response_body, request, elapsed_ms)
-        except (json.JSONDecodeError, binascii.Error, UnicodeDecodeError, LookupError) as exc:
+        except (json.JSONDecodeError, binascii.Error, UnicodeDecodeError) as exc:
             raise TargetContractError(
                 f"target {self.name!r} answered {self._config.method} {self._config.url} "
                 f"with a body the configured fields do not describe "
@@ -559,13 +559,11 @@ class HttpAdapter:
             ) from None
         except (TargetError, ConfigError, ValueError):
             # Already in the vocabulary, a configuration fault or a framework defect: re-wrapping
-            # would
-            # mislabel it. The decoding clause above precedes it because JSONDecodeError and
-            # binascii.Error
-            # are ValueErrors.
-            # re-wrapping would mislabel it. The decoding clause precedes it because JSONDecodeError
-            # and
-            # binascii.Error are ValueErrors.
+            # would mislabel it. The decoding clause above precedes this one because
+            # ``json.JSONDecodeError`` and ``binascii.Error`` are both ``ValueError`` subclasses.
+            # A ``KeyError`` or ``IndexError`` raised by framework code is deliberately left
+            # uncaught: it is a framework defect, so it must reach the runner as an ``error``
+            # result with its traceback rather than become a verdict about the target.
             raise
         except httpx.ConnectTimeout as exc:
             # A connect timeout means the endpoint never answered: unreachable, not slow.

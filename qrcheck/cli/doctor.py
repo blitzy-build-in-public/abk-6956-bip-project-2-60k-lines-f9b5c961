@@ -55,9 +55,9 @@ closed, or a ``report_dir`` that cannot be prepared.
 
 from __future__ import annotations
 
-import json
 import platform
 import sys
+import unicodedata
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -78,6 +78,7 @@ from qrcheck.dependencies import (
     import_problem,
     probe,
 )
+from qrcheck.report.json_report import dumps_canonical
 from qrcheck.targets import ADAPTER_TYPES
 from qrcheck.targets.base import (
     TargetContractError,
@@ -107,6 +108,13 @@ _CONFIG_KEYS: Final[tuple[str, ...]] = ("config", "config_path", "config_file")
 # Every diagnostic carries this prefix and goes to stderr, so a line on stdout is always
 # either the report object or the table, and a line on stderr is always something to act on.
 _DIAGNOSTIC_PREFIX: Final[str] = "qrcheck doctor: "
+
+# The Unicode general categories that make a terminal or a CI log act instead of print: the C0
+# and C1 controls and DEL (``Cc``), the invisible format characters including the bidi overrides
+# (``Cf``), a lone surrogate (``Cs``) and the line and paragraph separators (``Zl``, ``Zp``). A
+# character in one of these categories is escaped where a message is rendered; the note, and
+# therefore what the command carries, keeps the character a target supplied.
+_UNPRINTABLE_CATEGORIES: Final[frozenset[str]] = frozenset({"Cc", "Cf", "Cs", "Zl", "Zp"})
 
 # The probe request. It is a short ASCII payload at the framework's default geometry and
 # colours -- a request every conforming target must encode -- built through
@@ -631,7 +639,8 @@ def _probe_target(target: TargetConfig, name: str, notes: list[_Note]) -> _Probe
       checks that do need that capability are skipped by ``qrcheck/registry/resolve.py``;
     * ``TargetRejected`` means the target answered by refusing a request the framework
       considers valid, which keeps it reachable and still fails the gate. The rejection text is
-      carried **verbatim**, as the adapter contract requires;
+      carried **verbatim**, as the adapter contract requires, and is escaped only where it is
+      rendered for a terminal or a CI log;
     * ``TargetUnavailable``, ``TargetTimeout`` and ``TargetContractError`` mean no usable
       symbol arrived, so they are unreachable as well as blocking.
 
@@ -674,7 +683,9 @@ def _probe_target(target: TargetConfig, name: str, notes: list[_Note]) -> _Probe
         )
         outcome = replace(outcome, reachable=True)
     except TargetRejected as exc:
-        # str(exc) is exactly what the target said, and it is reported unchanged.
+        # str(exc) is exactly what the target said, and it is carried unchanged: AAP §0.3.4
+        # requires the rejection text verbatim. It is escaped only where it is rendered, by
+        # _printable in _finish and in _verdict_line.
         notes.append(_Note(str(exc), True))
         outcome = replace(outcome, reachable=True)
     except TargetUnavailable as exc:
@@ -760,6 +771,23 @@ def _close_adapter(adapter_obj: Adapter, name: str, notes: list[_Note]) -> bool:
 # ---------------------------------------------------------------------------
 
 
+def _printable(text: str) -> str:
+    """Return ``text`` with every non-printable character escaped for a terminal or CI log.
+
+    Printable text is returned unchanged. Every control, format, surrogate and line or paragraph
+    separator character is replaced by its ``\\xNN`` / ``\\uNNNN`` spelling, so no escape sequence
+    can act on a terminal or a CI log -- rewriting a log line, taking over a window title, or
+    reversing the text after a bidi override -- while the message still reads as the text a target
+    supplied. Nothing is dropped, so the rendering stays a faithful transcript of the note.
+    """
+    return "".join(
+        character
+        if unicodedata.category(character) not in _UNPRINTABLE_CATEGORIES
+        else character.encode("unicode_escape").decode("ascii")
+        for character in text
+    )
+
+
 def _finish(
     report: _DoctorReport,
     notes: Sequence[_Note],
@@ -770,12 +798,16 @@ def _finish(
 
     The report object is emitted on the failing paths too, because a CI consumer that receives
     nothing cannot tell an absent toolchain from a broken command. Diagnostics go to stderr
-    first, so a caller interleaving both streams sees the reasons before the verdict.
+    first, so a caller interleaving both streams sees the reasons before the verdict, and every
+    message is rendered through :func:`_printable`, because a target's own text is untrusted. The
+    JSON form comes from :func:`qrcheck.report.json_report.dumps_canonical`, the product's single
+    canonical formatter, so key order, separators and the non-finite-float policy have one owner
+    rather than one per command.
     """
     for note in notes:
-        click.echo(f"{_DIAGNOSTIC_PREFIX}{note.message}", err=True)
+        click.echo(f"{_DIAGNOSTIC_PREFIX}{_printable(note.message)}", err=True)
     if as_json:
-        click.echo(json.dumps(report.as_dict(), sort_keys=True, indent=2, ensure_ascii=False))
+        click.echo(dumps_canonical(report.as_dict()))
     else:
         for line in _table_lines(report, notes):
             click.echo(line)
@@ -829,12 +861,17 @@ def _rasterizer_line(status: Mapping[str, object] | None) -> str:
 
 
 def _verdict_line(notes: Sequence[_Note]) -> str:
-    """Render the verdict, naming the first blocking failure when there is one."""
+    """Render the verdict, naming the first blocking failure when there is one.
+
+    The named message is rendered through :func:`_printable` for the same reason the diagnostics
+    are: this line reaches a terminal or a CI log, and the message it quotes can be a target's own
+    text.
+    """
     for note in notes:
         if note.blocking:
-            return f"verdict: blocking failure: {note.message}"
+            return f"verdict: blocking failure: {_printable(note.message)}"
     if notes:
-        return f"verdict: ok with degradation: {notes[0].message}"
+        return f"verdict: ok with degradation: {_printable(notes[0].message)}"
     return "verdict: ok"
 
 

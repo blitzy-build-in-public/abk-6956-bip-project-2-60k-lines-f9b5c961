@@ -62,10 +62,11 @@ from qrcheck.report.model import (
 from qrcheck.runner import RunPrerequisiteError
 from qrcheck.targets.base import Capability
 
-#: The registry module itself, needed for its private writable store. Imported through
-#: :func:`importlib.import_module` rather than ``import qrcheck.registry.check as ...``
-#: because the package namespace binds ``check`` to the registration decorator, so the
-#: dotted form names a function and not this module.
+#: The registry module itself, needed for its private writable store. The package keeps
+#: ``qrcheck.registry.check`` bound to this module -- it re-exports no name that would shadow a
+#: submodule -- so the dotted form names this module too; it is fetched with
+#: :func:`importlib.import_module` because that is this file's explicit dynamic form for
+#: resolving a module object rather than binding a name at import time.
 _REGISTRY_MODULE: Final[Any] = importlib.import_module("qrcheck.registry.check")
 
 #: The three artefacts a completed run writes, from the one module that names them. A run
@@ -467,7 +468,7 @@ def test_main_answers_three_when_the_dependency_probe_itself_raises(
         raise ImportError("a pinned dependency is hidden")
 
     monkeypatch.setattr("qrcheck.dependencies.blocking_problem", raise_probe_fault)
-    entry = importlib.import_module("qrcheck.cli.main")  # the dotted form names the function
+    entry = importlib.import_module("qrcheck.cli.main")  # the dotted form names the module too
     monkeypatch.setattr(entry, "_register_commands", raise_import_error)
 
     code = main(["list"])
@@ -785,6 +786,85 @@ def test_exit_two_when_a_configuration_the_schema_accepts_cannot_build_an_adapte
 
     assert result.exit_code == EXIT_CONFIG
     assert offending_key in result.stderr
+    assert_no_report(report_dir)
+
+
+#: A ``cli`` target whose ``payload_arg`` carries a one-character typo of ``{payload_b64}``. The
+#: placeholder is outside the vocabulary the adapter substitutes, so the document is wrong on its
+#: own terms: before the schema refused it, loading succeeded and the adapter raised a bare
+#: ``ValueError`` at the first case, which the runner could only report as six ``internal_error``
+#: results under exit 3 with a full report written.
+UNKNOWN_PAYLOAD_PLACEHOLDER_DOCUMENT: Final[str] = (
+    'default_adapter = "local"\n'
+    "\n"
+    "[targets.local]\n"
+    'type = "cli"\n'
+    'command = ["qrcheck-no-such-target"]\n'
+    'payload_arg = "--payload-b64={payload_base64}"\n'
+    'output_arg = "--output={}"\n'
+    'returns = "file_path"\n'
+    'capabilities = ["png"]\n'
+)
+
+#: A ``cli`` target that puts a real placeholder in a ``command`` word. ``command`` is a literal
+#: argv, so the word would reach the target as the text ``{ec_level}``: the target rejects it and
+#: every case fails ``target_rejected``, for a fault the document alone decides.
+PLACEHOLDER_IN_COMMAND_DOCUMENT: Final[str] = (
+    'default_adapter = "local"\n'
+    "\n"
+    "[targets.local]\n"
+    'type = "cli"\n'
+    'command = ["qrcheck-no-such-target", "--ec", "{ec_level}"]\n'
+    'payload_arg = "--payload-b64={payload_b64}"\n'
+    'output_arg = "--output={}"\n'
+    'returns = "file_path"\n'
+    'capabilities = ["png"]\n'
+)
+
+
+@pytest.mark.parametrize(
+    ("document", "offending_key", "token"),
+    [
+        (
+            UNKNOWN_PAYLOAD_PLACEHOLDER_DOCUMENT,
+            "targets.local.payload_arg",
+            "{payload_base64}",
+        ),
+        (
+            PLACEHOLDER_IN_COMMAND_DOCUMENT,
+            "targets.local.command",
+            "{ec_level}",
+        ),
+    ],
+    ids=["unknown-payload-template-placeholder", "placeholder-in-a-command-word"],
+)
+def test_exit_two_for_a_cli_placeholder_the_adapter_cannot_fill(
+    invoke_cli: Callable[..., Any],
+    toml_config_file: Callable[..., Path],
+    report_dir: Path,
+    document: str,
+    offending_key: str,
+    token: str,
+) -> None:
+    """A ``cli`` template the adapter cannot fill is exit 2, decided from the file alone.
+
+    ``payload_arg`` and ``output_arg`` are templates over the eight placeholders a request carries
+    plus the bare ``{}``, and ``command`` is a literal argv no adapter renders -- so an unknown
+    placeholder in a template, and any placeholder at all in a command word, are faults the
+    document states by itself. Both documents below were accepted before the schema held them to
+    that vocabulary: the first surfaced as a bare ``ValueError`` from the adapter, which is exit 3
+    with ``internal_error`` results and a written report, and the second was spliced verbatim into
+    argv, so the target rejected it and every case failed. Exit code 2 is the code the contract
+    gives this class, so the diagnostic has to name the dotted key and the token, and no report may
+    be written for a run that never started.
+    """
+    config = toml_config_file(text=document)
+
+    result = invoke_cli("run", "--checks", "RT-ROUNDTRIP", config=config)
+
+    assert result.exit_code == EXIT_CONFIG
+    assert offending_key in result.stderr, result.stderr
+    assert token in result.stderr, result.stderr
     assert_no_report(report_dir)
 
 

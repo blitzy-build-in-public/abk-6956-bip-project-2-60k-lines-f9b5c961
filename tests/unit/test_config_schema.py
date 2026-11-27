@@ -195,7 +195,7 @@ _VALID_TARGET_TABLES: Final[Mapping[str, Mapping[str, Any]]] = MappingProxyType(
         "cli": MappingProxyType(
             {
                 "type": "cli",
-                "command": ["generate", "--payload", "{}", "-o", "symbol.png"],
+                "command": ["generate", "--ec", "M", "-o", "symbol.png"],
                 "payload_arg": "{}",
                 "output_arg": "-o",
                 "returns": "file_path",
@@ -838,8 +838,8 @@ def test_a_well_formed_callable_is_accepted(value: str) -> None:
 _RANGE_CASES: Final[tuple[tuple[str, Any, str], ...]] = tuple(
     sorted(
         (
-            ("seed", -1, "seed must be a non-negative integer"),
-            ("seed", -(2**63), "seed must be a non-negative integer"),
+            ("seed", -1, "must be a non-negative integer"),
+            ("seed", -(2**63), "must be a non-negative integer"),
             ("loc_limit", 0, "must be at least 1"),
             ("loc_limit", -5, "must be at least 1"),
             ("targets.target.timeout_s", 0, "must be greater than 0"),
@@ -926,6 +926,16 @@ def test_a_value_inside_its_range_is_accepted(dotted: str, value: Any) -> None:
     schema.validate(_document_for(dotted, value))
 
 
+def test_a_negative_seed_renders_the_contract_diagnostic_exactly() -> None:
+    """The reason states what is expected and :class:`schema.ConfigError` supplies the dotted key,
+    so the rendered diagnostic carries the key once -- ``seed: must be a non-negative integer`` --
+    exactly as every other rule does. A fragment that repeats the key would print it twice."""
+    with pytest.raises(schema.ConfigError) as excinfo:
+        schema.validate(_document_for("seed", -1))
+    assert excinfo.value.key == "seed", excinfo.value.key
+    assert str(excinfo.value) == "seed: must be a non-negative integer", str(excinfo.value)
+
+
 @pytest.mark.parametrize(
     "command, fragment",
     [
@@ -978,6 +988,94 @@ def test_an_argument_template_with_neither_a_placeholder_nor_a_flag_is_rejected(
 def test_an_argument_template_with_a_placeholder_or_a_flag_is_accepted(value: str) -> None:
     """Both documented template shapes are accepted."""
     schema.validate(_target_document("cli", payload_arg=value, output_arg=value))
+
+
+# The argument templates: the same one vocabulary, refused at load
+#
+# ``payload_arg`` and ``output_arg`` are templates over the placeholders a request carries, while
+# ``command`` is a literal argv. Both facts are decided when the document is read, so a typo is the
+# exit-2 configuration fault that names its key rather than an adapter ``ValueError`` raised once
+# checks are already running.
+
+#: Every placeholder an argument template may carry: the bare ``{}`` and one token per field of
+#: ``models.TEMPLATE_FIELDS``, built from that one declaration so a field added there is covered.
+_ARG_TEMPLATE_PLACEHOLDERS: Final[tuple[str, ...]] = tuple(
+    f"{{{field}}}" for field in sorted(models.TEMPLATE_FIELDS)
+)
+
+
+@pytest.mark.parametrize(
+    "placeholder",
+    ["{}", *_ARG_TEMPLATE_PLACEHOLDERS],
+    ids=["bare", *sorted(models.TEMPLATE_FIELDS)],
+)
+def test_every_placeholder_of_the_one_vocabulary_is_accepted_in_an_argument_template(
+    placeholder: str,
+) -> None:
+    """A flag template may interpolate the bare ``{}`` or any of the eight named placeholders."""
+    schema.validate(
+        _target_document(
+            "cli", payload_arg=f"--payload={placeholder}", output_arg=f"--out={placeholder}"
+        )
+    )
+
+
+@pytest.mark.parametrize("key", ["payload_arg", "output_arg"], ids=["payload-arg", "output-arg"])
+@pytest.mark.parametrize("token", ["{payload_base64}", "{payload}"], ids=["near-miss", "unknown"])
+def test_an_unknown_placeholder_in_an_argument_template_is_rejected(key: str, token: str) -> None:
+    """A token outside the vocabulary is refused at load, naming the key and the token: the CLI
+    adapter substitutes only the eight fields and the bare ``{}``, so anything else would reach it
+    as a ``ValueError`` after checks had started, and the run would report an internal error with a
+    written report instead of this diagnostic. The message names the allowed vocabulary once and
+    takes its key from :class:`schema.ConfigError`, so the dotted path appears exactly once."""
+    with pytest.raises(schema.ConfigError) as excinfo:
+        schema.validate(_target_document("cli", **{key: f"--argument={token}"}))
+
+    dotted = f"targets.{_TARGET_NAME}.{key}"
+    assert excinfo.value.key == dotted, excinfo.value.key
+    message = str(excinfo.value)
+    assert token in message, message
+    for allowed in ("{}", *_ARG_TEMPLATE_PLACEHOLDERS):
+        assert allowed in message, message
+    assert message.count(dotted) == 1, message
+
+
+@pytest.mark.parametrize(
+    ("command", "index", "token"),
+    [
+        (["generate", "--ec", "{ec_level}"], 2, "{ec_level}"),
+        (["generate", "{payload_b64}"], 1, "{payload_b64}"),
+        (["generate", "{}"], 1, "{}"),
+    ],
+    ids=["known-name", "known-name-alone", "bare"],
+)
+def test_a_command_word_that_carries_a_placeholder_is_rejected(
+    command: list[str], index: int, token: str
+) -> None:
+    """``command`` is a literal argv, so a word carrying any placeholder -- a known name or the
+    bare ``{}`` -- would reach the target as its own braces, which no adapter renders. It is
+    refused by index and token, and the message says where a placeholder does belong."""
+    with pytest.raises(schema.ConfigError) as excinfo:
+        schema.validate(_target_document("cli", command=command))
+
+    dotted = f"targets.{_TARGET_NAME}.command"
+    assert excinfo.value.key == dotted, excinfo.value.key
+    message = str(excinfo.value)
+    assert f"argument {index}" in message, message
+    assert f"'{token}'" in message, message
+    assert "payload_arg" in message and "output_arg" in message, message
+    assert message.count(dotted) == 1, message
+
+
+@pytest.mark.parametrize(
+    "word",
+    ['--config={"a":1}', "--spec={size:d}", "{not-a-placeholder}", "--name=}"],
+    ids=["json-object", "format-spec", "hyphenated", "stray-brace"],
+)
+def test_a_command_word_whose_braces_are_not_placeholder_shaped_is_accepted(word: str) -> None:
+    """Only a brace-delimited name of ``[A-Za-z0-9_]`` is a placeholder; every other brace sequence
+    is literal text a real command line carries, so it stays accepted."""
+    schema.validate(_target_document("cli", command=["generate", word]))
 
 
 def test_an_unknown_metadata_field_is_rejected() -> None:

@@ -10,9 +10,11 @@ that does not decode, an empty body) all arrive as
 :class:`~qrcheck.targets.base.TargetContractError`, never as the ``OSError`` or
 ``binascii.Error`` underneath; a response's shape comes only from configuration, ``_body`` being
 the one sentinel the adapter may know (AAP §0.3.4), whose mechanical half is the AST deny-list
-over ``qrcheck/targets/http.py``; and a subprocess is argv-only -- ``str`` words, ``shell=False``
-and the configured ``timeout_s`` handed to ``subprocess.run`` (AAP §0.3.2, NFR-7), because a
-missing timeout would let a hung target hang the whole run.
+over ``qrcheck/targets/http.py``; and a subprocess is argv-only -- ``str`` words, ``shell=False``,
+the configured ``timeout_s`` handed to ``subprocess.run`` and both of the child's streams captured
+through the adapter's own bounded pipes rather than ``capture_output`` (AAP §0.3.2, NFR-7), because
+a missing timeout would let a hung target hang the whole run and an unbounded capture would let a
+chatty one exhaust the runner.
 
 Deliberately not asserted: the ``declared_*`` fields are the target's own claim, so what is
 pinned is that they carry what the configured path holds and stay ``None`` when nothing is
@@ -24,6 +26,7 @@ from __future__ import annotations
 import ast
 import base64
 import json
+import os
 import re
 import subprocess
 import sys
@@ -249,22 +252,28 @@ def _install_fake_process(
     write_at: Callable[[list[str]], str] | None = None,
 ) -> list[tuple[list[str], dict[str, Any]]]:
     """Replace ``subprocess.run`` in the ``cli`` adapter with a recorder: no child starts, the
-    vector and keywords are captured, and a zero-status ``CompletedProcess`` comes back."""
+    vector and keywords are captured, and `stdout` is written into the pipe the adapter handed over
+    as the child's stdout -- the adapter reads it back through its own bounded capture, so a fake
+    that returned the bytes on a ``CompletedProcess`` would prove nothing."""
     calls: list[tuple[list[str], dict[str, Any]]] = []
 
     def fake_run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
         calls.append((argv, kwargs))
         if write_at is not None:
             Path(write_at(argv)).write_bytes(written)
-        return subprocess.CompletedProcess(argv, 0, stdout, b"")
+        os.write(kwargs["stdout"], stdout)
+        os.write(kwargs["stderr"], b"")
+        return subprocess.CompletedProcess(argv, 0)
 
     monkeypatch.setattr(cli_module.subprocess, "run", fake_run)
     return calls
 
 
 def _assert_argv_only(calls: list[tuple[list[str], dict[str, Any]]]) -> list[str]:
-    """Assert the one recorded invocation is argv-only and return its vector -- the three properties
-    AAP §0.3.2 and NFR-7 require: a list of text words, no shell, and the configured timeout."""
+    """Assert the one recorded invocation is argv-only and return its vector -- the properties
+    AAP §0.3.2 and NFR-7 require (a list of text words, no shell, the configured timeout) together
+    with the bound this module's own capture enforces in place of ``capture_output`` (both streams
+    are the adapter's descriptors, never ``subprocess.PIPE``)."""
     assert len(calls) == 1, f"expected exactly one invocation, recorded {len(calls)}"
     argv, kwargs = calls[0]
     assert isinstance(argv, list), f"argv must be a list, not {type(argv).__name__}"
@@ -274,7 +283,19 @@ def _assert_argv_only(calls: list[tuple[list[str], dict[str, Any]]]) -> list[str
     assert kwargs["timeout"] == _TIMEOUT_S, (
         f"the configured timeout_s must reach subprocess.run; got {kwargs['timeout']!r}"
     )
-    assert kwargs["capture_output"] is True, "the adapter must capture the child's output"
+    assert "capture_output" not in kwargs, (
+        "the adapter must bound the child's streams through its own pipes rather than capturing "
+        "them unbounded"
+    )
+    for stream in ("stdout", "stderr"):
+        descriptor = kwargs[stream]
+        assert isinstance(descriptor, int), (
+            f"the child's {stream} must be the adapter's own pipe descriptor; got {descriptor!r}"
+        )
+        assert descriptor not in (subprocess.PIPE, subprocess.DEVNULL, subprocess.STDOUT), (
+            f"the child's {stream} must be the adapter's own bounded pipe, not the "
+            f"{descriptor!r} sentinel"
+        )
     return argv
 
 
@@ -1073,4 +1094,73 @@ def test_the_http_module_names_no_endpoint_outside_loopback() -> None:
         f"qrcheck/targets/http.py must name no endpoint outside {sorted(LOOPBACK_HOSTS)}; "
         f"the offenders are: {_format_offenders(offenders)}"
     )
+
+
+# The artefact read is bounded: a path the target names cannot hang or exhaust the runner
+
+
+def test_an_artefact_above_the_read_ceiling_is_refused_unread(tmp_path: Path) -> None:
+    """A path artefact above ``_MAX_ARTEFACT_BYTES`` is refused, naming the ceiling it passed: a
+    target pointing at a multi-gigabyte file would otherwise be read into this process' memory."""
+    artefact = tmp_path / "symbol.png"
+    with artefact.open("wb") as stream:
+        stream.truncate(base_module._MAX_ARTEFACT_BYTES + 1)
+
+    with pytest.raises(TargetContractError) as raised:
+        decode_returned_image(artefact, "bytes_path")
+
+    message = str(raised.value)
+    assert str(base_module._MAX_ARTEFACT_BYTES) in message
+    assert str(artefact) in message
+
+
+def test_a_path_that_is_not_a_regular_file_is_refused_without_opening_it(tmp_path: Path) -> None:
+    """A FIFO, a device or a directory is refused before any open, so a target naming ``/dev/zero``
+    or a FIFO it never fills cannot block the read past ``timeout_s``; this test returning at all
+    is the proof, because opening the FIFO here would wait for a writer that never comes."""
+    fifo = tmp_path / "symbol.png"
+    os.mkfifo(fifo)
+
+    with pytest.raises(TargetContractError) as raised:
+        decode_returned_image(str(fifo), "bytes_path")
+
+    assert "not a regular file" in str(raised.value)
+    assert str(fifo) in str(raised.value)
+
+
+def test_an_artefact_that_grows_past_the_ceiling_while_read_is_refused(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A file whose size is legal when it is stat'ed but exceeds the ceiling while it is read is
+    refused on the bytes actually read: the stat is the cheap gate, the capped read the bound."""
+    artefact = tmp_path / "symbol.png"
+    with artefact.open("wb") as stream:
+        stream.truncate(base_module._MAX_ARTEFACT_BYTES + 1)
+    real_stat = Path.stat
+
+    def understated(path: Path, *, follow_symlinks: bool = True) -> os.stat_result:
+        found = real_stat(path, follow_symlinks=follow_symlinks)
+        return os.stat_result(
+            (
+                found.st_mode,
+                found.st_ino,
+                found.st_dev,
+                found.st_nlink,
+                found.st_uid,
+                found.st_gid,
+                len(_PNG_BYTES),
+                found.st_atime,
+                found.st_mtime,
+                found.st_ctime,
+            )
+        )
+
+    monkeypatch.setattr(Path, "stat", understated)
+
+    with pytest.raises(TargetContractError) as raised:
+        decode_returned_image(artefact, "file_path")
+
+    message = str(raised.value)
+    assert "grew past" in message
+    assert str(base_module._MAX_ARTEFACT_BYTES) in message
 

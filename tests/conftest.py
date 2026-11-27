@@ -4,10 +4,10 @@ No module under ``tests/unit/`` or ``tests/integration/`` re-implements a report
 configuration record, a stub adapter, a decoded result or the offline guard, and no retry,
 re-run, quarantine or skip hook exists here: a retry must surface as the declared
 adapter-invocation count plus one, which is what the counting stub exists to make visible.
-:func:`config_factory` builds a configuration in memory from the schema's declared defaults,
-so no test reads or mutates the committed ``qrcheck.toml``; :func:`mask_volatile` masks
-exactly the three volatile fields of the result model; and the autouse
-:func:`no_outbound_network` guard makes any outbound connect fail."""
+:func:`config_factory` builds a configuration in memory that mirrors the committed
+``qrcheck.toml``, so a retune of that document is honoured by every test and none of them mutates
+the file; :func:`mask_volatile` masks exactly the three volatile fields of the result model; and
+the autouse :func:`no_outbound_network` guard makes any outbound connect fail."""
 
 from __future__ import annotations
 
@@ -19,7 +19,9 @@ import ipaddress
 import json
 import socket
 import sys
+import tomllib
 from collections.abc import Callable, Mapping, Sequence
+from functools import lru_cache
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Final
@@ -135,31 +137,94 @@ _CHECKS_PACKAGE: Final[str] = "qrcheck.checks"
 _DECODE_ATTRIBUTE: Final[str] = "decode_symbol"
 
 
-# Configuration defaults, read from the one declaration
+# Configuration values, read from the one document
+#
+# The committed ``qrcheck.toml`` is the source of every configuration value a fixture hands out,
+# and the schema's declared default fills only a key that document omits, so a retune of the file
+# reaches every test instead of leaving the unit tier asserting the fallback (AAP §0.6.2).
+
+
+@lru_cache(maxsize=None)
+def _committed_document() -> Mapping[str, Any]:
+    """Return the committed ``qrcheck.toml``, parsed, validated and read-only, once per process.
+
+    Validated through :func:`qrcheck.config.schema.validate`, so a committed document the product
+    would refuse fails here with the product's own :class:`~qrcheck.config.schema.ConfigError`
+    naming the offending key rather than with a record constructor's ``TypeError``. Every table is
+    frozen, so no test can mutate the copy later tests read.
+    """
+    with (_REPO_ROOT / _CONFIG_FILE_NAME).open("rb") as handle:
+        raw = tomllib.load(handle)
+    schema.validate(raw)
+    return _read_only(raw)
+
+
+def _read_only(value: Any) -> Any:
+    """Return `value` with every table replaced by a read-only proxy and every array a tuple."""
+    if isinstance(value, Mapping):
+        return MappingProxyType({key: _read_only(item) for key, item in value.items()})
+    if isinstance(value, list):
+        return tuple(_read_only(item) for item in value)
+    return value
+
+
+def _committed_table(group: str) -> Mapping[str, Any]:
+    """Return the committed document's table at `group`'s dotted path, or an empty table."""
+    table: Any = _committed_document()
+    for part in group.split(".") if group else ():
+        table = table.get(part) if isinstance(table, Mapping) else None
+    return table if isinstance(table, Mapping) else {}
 
 
 def _schema_default(group: str, key: str) -> Any:
-    """Return one configuration key's declared default, read from ``schema.py`` (AAP §0.12)."""
+    """Return one key's declared default: the fallback for a document that omits it
+    (AAP §0.6.2)."""
     return schema.SCHEMA[group][key].default
 
 
-def _group_defaults(group: str) -> dict[str, Any]:
-    """Return every declared default of one schema group, keyed by the configuration key."""
-    return {key: spec.default for key, spec in schema.SCHEMA[group].items()}
+def _value(group: str, key: str) -> Any:
+    """Return one configuration value: the committed document's, else the declared default.
+
+    A number key is cast to the type the schema declares for it, as
+    :func:`qrcheck.config.load.load_config` casts it, because TOML spells ``30`` and ``30.0``
+    alike for a ``number``.
+    """
+    spec = schema.SCHEMA[group][key]
+    table = _committed_table(group)
+    value = table[key] if key in table else _schema_default(group, key)
+    if float in spec.kinds:
+        return float(value)
+    if spec.kinds == (int,):
+        return int(value)
+    return value
+
+
+def _group_values(group: str) -> dict[str, Any]:
+    """Return every value one schema group declares, keyed by the configuration key."""
+    return {key: _value(group, key) for key in schema.SCHEMA[group]}
+
+
+#: The two built-in self-check targets a configuration declares (AAP §0.4), in ``sorted()`` order
+#: so iteration over the mapping they build is reproducible (AAP §0.5.3).
+_SELF_CHECK_TARGETS: Final[tuple[str, ...]] = ("defective", "reference")
+
+#: The numeric ``[targets.<name>]`` keys a built-in target takes from the committed document; a key
+#: its table omits is left to the record's own ``models.DEFAULT_*`` default (AAP §0.6.2).
+_TARGET_NUMERIC_KEYS: Final[tuple[str, ...]] = ("timeout_s", "contrast_floor")
 
 
 def _default_targets() -> Mapping[str, models.TargetConfig]:
-    """Return the two built-in self-check targets, neither declaring ``capabilities``."""
-    common = {
-        "timeout_s": float(_schema_default("targets.*", "timeout_s")),
-        "contrast_floor": float(_schema_default("targets.*", "contrast_floor")),
-    }
-    return MappingProxyType(
-        {
-            "defective": models.TargetConfig(name="defective", type="defective", **common),
-            "reference": models.TargetConfig(name="reference", type="reference", **common),
-        }
-    )
+    """Return the two built-in self-check targets as the committed document declares them.
+
+    ``type`` is the target's own name, which is how the adapter factory pairs it, and neither
+    built-in target declares ``capabilities``.
+    """
+    targets: dict[str, models.TargetConfig] = {}
+    for name in _SELF_CHECK_TARGETS:
+        table = _committed_table(f"targets.{name}")
+        declared = {key: float(table[key]) for key in _TARGET_NUMERIC_KEYS if key in table}
+        targets[name] = models.TargetConfig(name=name, type=name, **declared)
+    return MappingProxyType(targets)
 
 
 def _toml_scalar(value: object) -> str:
@@ -172,9 +237,10 @@ def _toml_scalar(value: object) -> str:
 
 
 def _minimal_config_text(**overrides: Any) -> str:
-    """Build the smallest document that loads and validates, with paths relative to it."""
+    """Build the smallest document that loads and validates, carrying the committed top-level
+    values and paths relative to the document itself."""
     values: dict[str, Any] = {
-        key: _schema_default("", key)
+        key: _value("", key)
         for key in ("default_adapter", "report_dir", "seed", "corpus_path", "loc_limit")
     }
     values.update(overrides)
@@ -512,7 +578,7 @@ def make_case_result(**overrides: Any) -> CaseResult:
         "decoded": {},
         "expected": None,
         "evidence_dir": None,
-        "seed": int(_schema_default("", "seed")),
+        "seed": int(_value("", "seed")),
     }
     if status is not Status.PASSED:
         fields["reason"] = Reason.VALUE_MISMATCH
@@ -524,7 +590,7 @@ def make_run_result(results: Sequence[CaseResult] = (), **overrides: Any) -> Run
     """Return a valid :class:`~qrcheck.report.model.RunResult` over `results`, by content hash."""
     ordered = tuple(results)
     adapter = str(overrides.get("adapter", "reference"))
-    seed = int(overrides.get("seed", _schema_default("", "seed")))
+    seed = int(overrides.get("seed", _value("", "seed")))
     ec_level = str(overrides.get("ec_level", "M"))
     fields: dict[str, Any] = {
         "run_id": _content_hash(
@@ -583,7 +649,13 @@ _LOOPBACK_HOSTNAMES: Final[frozenset[str]] = frozenset({"localhost"})
 
 
 def _is_loopback_destination(address: object) -> bool:
-    """Return whether a socket address names loopback; anything unreadable is refused."""
+    """Return whether a socket address names loopback, judging only a tuple address.
+
+    ``AF_INET``/``AF_INET6`` addresses are always tuples, so every outbound connection is judged
+    and a tuple whose host is not a loopback literal is refused. An address that is not a tuple --
+    a local ``AF_UNIX`` path -- and an empty tuple are permitted, because no socket carrying one
+    leaves the machine.
+    """
     if not isinstance(address, tuple) or not address:
         return True
     host = address[0]
@@ -600,12 +672,6 @@ def _is_loopback_destination(address: object) -> bool:
         return ipaddress.ip_address(text).is_loopback
     except ValueError:
         return False
-
-    return grid
-
-
-
-# The offline guard (autouse)
 
 
 @pytest.fixture(autouse=True)
@@ -641,27 +707,32 @@ def no_outbound_network(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.fixture
 def report_dir(tmp_path: Path) -> Path:
     """Return a fresh, writable report root unique to the test, with no ``evidence/`` subtree."""
-    path = tmp_path / str(_schema_default("", "report_dir"))
+    path = tmp_path / str(_value("", "report_dir"))
     path.mkdir(parents=True, exist_ok=True)
     return path
 
 
 @pytest.fixture
 def config_factory(tmp_path: Path, report_dir: Path) -> Callable[..., models.Config]:
-    """Return a callable building a fully populated configuration in memory, from the schema."""
+    """Return a callable building the configuration the committed ``qrcheck.toml`` declares.
+
+    Every value is that document's, and a key it omits takes the schema's declared default, so a
+    retune of the committed file reaches every test (AAP §0.6.2). The report directory is the
+    per-test one and the corpus path is resolved against the repository root.
+    """
     config_path = (tmp_path / _CONFIG_FILE_NAME).resolve()
-    corpus_path = (_REPO_ROOT / str(_schema_default("", "corpus_path"))).resolve()
+    corpus_path = (_REPO_ROOT / str(_value("", "corpus_path"))).resolve()
     defaults: dict[str, Any] = {
         "path": config_path,
-        "default_adapter": str(_schema_default("", "default_adapter")),
+        "default_adapter": str(_value("", "default_adapter")),
         "report_dir": Path(report_dir),
         "corpus_path": corpus_path,
-        "seed": int(_schema_default("", "seed")),
-        "loc_limit": int(_schema_default("", "loc_limit")),
+        "seed": int(_value("", "seed")),
+        "loc_limit": int(_value("", "loc_limit")),
         "targets": _default_targets(),
-        "render": models.RenderConfig(**_group_defaults("render")),
-        "performance": models.PerformanceLimits(**_group_defaults("checks.performance")),
-        "damage": models.DamageLimits(**_group_defaults("checks.damage")),
+        "render": models.RenderConfig(**_group_values("render")),
+        "performance": models.PerformanceLimits(**_group_values("checks.performance")),
+        "damage": models.DamageLimits(**_group_values("checks.damage")),
     }
 
     def build(**overrides: Any) -> models.Config:
@@ -684,7 +755,7 @@ def config(config_factory: Callable[..., models.Config]) -> models.Config:
 @pytest.fixture
 def toml_config_file(tmp_path: Path) -> Callable[..., Path]:
     """Return a writer that puts a minimal valid configuration document under ``tmp_path``."""
-    corpus_relative = Path(str(_schema_default("", "corpus_path")))
+    corpus_relative = Path(str(_value("", "corpus_path")))
 
     def write(
         text: str | None = None,
@@ -786,14 +857,14 @@ def real_decode() -> Callable[..., DecodeResult]:
 @pytest.fixture(scope="session")
 def committed_corpus() -> tuple[CorpusRecord, ...]:
     """Return the committed corpus in ``id`` order, read through ``qrcheck.corpus.io``."""
-    path = _REPO_ROOT / str(_schema_default("", "corpus_path"))
+    path = _REPO_ROOT / str(_value("", "corpus_path"))
     return tuple(sorted(load_corpus(path), key=lambda record: record.id))
 
 
 @pytest.fixture(scope="session")
 def built_corpus() -> tuple[CorpusRecord, ...]:
-    """Return the corpus the builder produces in memory from the default seed."""
-    seed = int(_schema_default("", "seed"))
+    """Return the corpus the builder produces in memory from the configured seed."""
+    seed = int(_value("", "seed"))
     return tuple(sorted(build_corpus(seed), key=lambda record: record.id))
 
 

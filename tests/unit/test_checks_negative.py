@@ -8,8 +8,18 @@ injected, which must pass, so a negative round is attributable to the injected d
 the harness.
 
 The decoders are stubs because a negative case must *put* a specific defect in front of a check,
-and a real decoder cannot be asked for one. :data:`EXPECTED_INVOCATIONS` declares the
-``generate`` calls each check makes for ``n`` cases and the observed count is asserted **equal**
+and a real decoder cannot be asked for one -- with one exception. The round carrying AAP §0.4.4's
+ninth named defect, an encode that returns non-image bytes, lifts the stub
+(:attr:`NegativeRound.real_decode`): the artefact *is* the defect, so ``RT-ROUNDTRIP`` is handed
+``bytes`` no image library can open through the real decode entry, and the framework's own mapping
+for unusable bytes is what the round asserts. ``RN-SVG`` is stood in for the same way at its own
+seam: the rasterizer belongs to the CI e2e job alone (AAP §0.6.4 installs the tool there and in no
+other job), so the render family's probe and rasterizer are stubbed here while
+:func:`qrcheck.checks.render.discover_svg_rasterizer` keeps its real order, its real ``attempted``
+list and its real ``none`` branch.
+
+:data:`EXPECTED_INVOCATIONS` declares the ``generate`` calls each check makes for ``n`` cases under
+the round's resolved ``[checks.performance]`` limits, and the observed count is asserted **equal**
 to it, so a retry registers as the declared count plus one; each check drives a documented prefix
 of its own ascending case order (:attr:`NegativeSpec.case_limit`). The decode half is asserted
 the same way: the ``decode_symbol`` calls a performance case makes are held **equal** to the
@@ -43,6 +53,7 @@ from qrcheck.checks import FAMILY_MODULE_OBJECTS, load_families
 from qrcheck.checks import cleanup as cleanup_family
 from qrcheck.checks import damage as damage_family
 from qrcheck.checks import performance as performance_family
+from qrcheck.checks import render as render_family
 from qrcheck.config import models
 from qrcheck.decode.base import DecodeResult
 from qrcheck.evidence import mux
@@ -89,10 +100,16 @@ _DAMAGE_KINDS_PER_RECORD: Final[int] = 7
 # parameter, not a threshold: no check reads it.
 _RECORDS_PER_CHECK: Final[int] = 2
 
-# The name of the temporary entry the ``CL-ARTIFACTS`` negative round leaves in the system
-# temporary directory.  It carries the product-wide ``qrcheck-`` prefix the check scans for,
-# which is what makes it a leak rather than stray test debris.
+# The name of the temporary entry the ``CL-ARTIFACTS`` negative round leaves behind.  It carries
+# the product-wide ``qrcheck-`` prefix the check scans for, which is what makes it a leak rather
+# than stray test debris; the harness points the temporary directory at a directory the test owns,
+# so the entry is never written where the whole host can see it.
 _LEAK_NAME: Final[str] = f"{cleanup_family.TEMP_PREFIX}negative-case-leak"
+
+# The name the driven target reports as ``ctx.adapter.name``: ``tests/conftest.py``'s
+# ``StubAdapter`` defaults it, and a check looks a target's ``[targets.<name>]`` table up by that
+# name, so a round that overrides a target setting declares the table under this name.
+_STUB_TARGET_NAME: Final[str] = "stub"
 
 # The two tables under test: the negative rounds and the controls
 
@@ -110,6 +127,10 @@ class NegativeRound:
     symbol_defect: str | None = None
     adapter_error: str | None = None
     adapter_symbol: str | None = None
+    # The one round that lifts this module's decode stub: it hands the check the real decode
+    # entry, so the framework's own mapping for unusable bytes is the thing under test rather
+    # than a defect scripted in front of the check (AAP §0.4.4, the ninth named defect).
+    real_decode: bool = False
     config: Mapping[str, Any] = dataclasses.field(
         default_factory=lambda: MappingProxyType({})
     )
@@ -150,40 +171,44 @@ def _control(
 
 # The declared adapter-invocation contract, one entry per check (AAP §0.4.3, §0.5.6)
 
-# The performance defaults, read from the configuration model rather than typed: PF-ENCODE
-# asks the target for one symbol ``warmup + encode_samples`` times, and that number must be the
-# declaration ``qrcheck/config/schema.py`` and the family module both read, not a copy of it.
-_PERFORMANCE_DEFAULTS: Final[models.PerformanceLimits] = models.PerformanceLimits()
+# Each helper takes the round's resolved ``[checks.performance]`` limits: the same object
+# ``PF-ENCODE`` copies its warm-up and sample counts into the result's ``expected`` from, so one
+# configuration source feeds both the declaration here and the count the check reports. A retune
+# of a sample count moves both, and neither number is a copy of the other.
 
 
-def _per_case(cases: int) -> int:
+def _per_case(cases: int, limits: models.PerformanceLimits) -> int:
     """Return the invocation count of a check that encodes once per case."""
+    del limits
     return cases
 
 
-def _twice_per_case(cases: int) -> int:
+def _twice_per_case(cases: int, limits: models.PerformanceLimits) -> int:
     """Return the count of a check that requests each case's symbol twice and compares them."""
+    del limits
     return 2 * cases
 
 
-def _per_damage_record(cases: int) -> int:
+def _per_damage_record(cases: int, limits: models.PerformanceLimits) -> int:
     """Return the count of ``DM-RESILIENCE``: one encode per record, shared across its kinds."""
+    del limits
     return cases // _DAMAGE_KINDS_PER_RECORD
 
 
-def _never(cases: int) -> int:
+def _never(cases: int, limits: models.PerformanceLimits) -> int:
     """Return the count of a check that never asks the target for anything."""
-    del cases
+    del cases, limits
     return 0
 
 
-def _encode_probe(cases: int) -> int:
-    """Return the count of ``PF-ENCODE``: its warm-up plus its measured samples, once."""
+def _encode_probe(cases: int, limits: models.PerformanceLimits) -> int:
+    """Return the count of ``PF-ENCODE``: the round's resolved warm-up plus its resolved
+    measured samples, once -- the limits the check also reports in the result's ``expected``."""
     del cases
-    return _PERFORMANCE_DEFAULTS.warmup + _PERFORMANCE_DEFAULTS.encode_samples
+    return limits.warmup + limits.encode_samples
 
 
-EXPECTED_INVOCATIONS: Final[dict[str, Callable[[int], int]]] = {
+EXPECTED_INVOCATIONS: Final[dict[str, Callable[[int, models.PerformanceLimits], int]]] = {
     "CL-ARTIFACTS": _never,
     "DM-RESILIENCE": _per_damage_record,
     "DM-SEEDED": _never,
@@ -221,6 +246,13 @@ NEGATIVE_CASES: Final[dict[str, NegativeSpec]] = {
                 reason=Reason.VALUE_MISMATCH,
                 case_limit=2,
                 decode_defect="payload-last-byte-changed",
+            ),
+            NegativeRound(
+                label="the target's encode returns bytes that no image library can open",
+                reason=Reason.VALUE_MISMATCH,
+                case_limit=1,
+                adapter_symbol="non-image",
+                real_decode=True,
             ),
         ),
     ),
@@ -345,6 +377,31 @@ NEGATIVE_CASES: Final[dict[str, NegativeSpec]] = {
                 case_limit=2,
                 decode_defect="payload-last-byte-changed",
             ),
+            NegativeRound(
+                label=(
+                    "the rendered palette is one step lighter than the pair requested, so the "
+                    "palette assertion must fail"
+                ),
+                reason=Reason.VALUE_MISMATCH,
+                case_limit=1,
+                symbol_defect="lightened-dark-palette",
+            ),
+            NegativeRound(
+                label=(
+                    "the declared contrast floor is unreachable, so the ratio assertion must fail"
+                ),
+                reason=Reason.VALUE_MISMATCH,
+                case_limit=1,
+                config={
+                    "targets": {
+                        _STUB_TARGET_NAME: models.TargetConfig(
+                            name=_STUB_TARGET_NAME,
+                            type="reference",
+                            contrast_floor=sys.float_info.max,
+                        )
+                    }
+                },
+            ),
         ),
     ),
     "RN-SVG": NegativeSpec(
@@ -363,6 +420,15 @@ NEGATIVE_CASES: Final[dict[str, NegativeSpec]] = {
                 case_limit=2,
                 config={"render": models.RenderConfig(svg_rasterizer="none")},
             ),
+            NegativeRound(
+                label=(
+                    "the vector canvas carries a quiet zone the request did not ask for, so the "
+                    "module pitch is not integral"
+                ),
+                reason=Reason.VALUE_MISMATCH,
+                case_limit=1,
+                symbol_defect="svg-canvas-not-module-multiple",
+            ),
         ),
     ),
     "RN-LOGO": NegativeSpec(
@@ -373,6 +439,15 @@ NEGATIVE_CASES: Final[dict[str, NegativeSpec]] = {
                 reason=Reason.VALUE_MISMATCH,
                 case_limit=1,
                 decode_defect="payload-last-byte-changed",
+            ),
+            NegativeRound(
+                label=(
+                    "the declared overlay is never composited, so the overlay-applied assertion "
+                    "must fail"
+                ),
+                reason=Reason.VALUE_MISMATCH,
+                case_limit=1,
+                symbol_defect="logo-not-composited",
             ),
         ),
     ),
@@ -414,7 +489,8 @@ NEGATIVE_CASES: Final[dict[str, NegativeSpec]] = {
         ),
         rounds=(
             NegativeRound(
-                label="the target crashes instead of declaring the empty payload rejected",
+                label="the target answers an empty payload with an unusable response "
+                "instead of a declared rejection",
                 reason=Reason.CONTRACT_ERROR,
                 case_limit=1,
                 adapter_error="contract-error",
@@ -460,6 +536,23 @@ NEGATIVE_CASES: Final[dict[str, NegativeSpec]] = {
                 case_limit=2,
                 symbol_defect="changing-mask",
             ),
+            NegativeRound(
+                label=(
+                    "only the mask differs between two calls, so the mask comparison must fail"
+                ),
+                reason=Reason.VALUE_MISMATCH,
+                case_limit=1,
+                decode_defect="mask-changed-on-repeat",
+            ),
+            NegativeRound(
+                label=(
+                    "only the sampled matrix differs between two calls, so the matrix comparison "
+                    "must fail"
+                ),
+                reason=Reason.VALUE_MISMATCH,
+                case_limit=1,
+                decode_defect="matrix-changed-on-repeat",
+            ),
         ),
     ),
     "PF-ENCODE": NegativeSpec(
@@ -474,6 +567,14 @@ NEGATIVE_CASES: Final[dict[str, NegativeSpec]] = {
                         min_symbols_per_minute=sys.float_info.max
                     )
                 },
+            ),
+            NegativeRound(
+                label=(
+                    "the configured encode p95 floor is unreachable, so the p95 assertion must fail"
+                ),
+                reason=Reason.VALUE_MISMATCH,
+                case_limit=1,
+                config={"performance": models.PerformanceLimits(encode_p95_ms=sys.float_info.min)},
             ),
         ),
     ),
@@ -500,7 +601,6 @@ NEGATIVE_CASES: Final[dict[str, NegativeSpec]] = {
         ),
     ),
 }
-
 
 
 # The conforming stubs: a renderer that honours a request, a decoder that echoes one
@@ -658,8 +758,10 @@ _DECODE_DEFECT_NAMES: Final[tuple[str, ...]] = (
     "ec-both-wrong",
     "ec-format-disagrees",
     "grid-not-sampled",
+    "mask-changed-on-repeat",
     "mask-not-read",
     "mask-out-of-range",
+    "matrix-changed-on-repeat",
     "matrix-differs",
     "payload-last-byte-changed",
     "payload-truncated-by-one",
@@ -670,7 +772,10 @@ _DECODE_DEFECT_NAMES: Final[tuple[str, ...]] = (
 
 _SYMBOL_DEFECT_NAMES: Final[tuple[str, ...]] = (
     "changing-mask",
+    "lightened-dark-palette",
+    "logo-not-composited",
     "short-quiet-zone",
+    "svg-canvas-not-module-multiple",
     "wrong-module-size",
 )
 
@@ -700,6 +805,22 @@ def _other_level(ec_level: str) -> str:
         if candidate != ec_level:
             return candidate
     return "M"
+
+
+# The fixed step, in grey levels per channel, by which the palette defect lightens the darker of a
+# requested pair.  One step and no more: the measured ratio of every declared palette stays above
+# the 7:1 floor at it, so the round proves the palette assertion alone rather than the ratio one as
+# well (AAP §0.4.4).
+_PALETTE_LIGHTEN_STEP: Final[int] = 24
+
+
+def _lightened(colour: Sequence[int]) -> tuple[int, int, int]:
+    """Return `colour` moved one fixed step lighter, each channel clamped at full intensity."""
+    return (
+        min(255, int(colour[0]) + _PALETTE_LIGHTEN_STEP),
+        min(255, int(colour[1]) + _PALETTE_LIGHTEN_STEP),
+        min(255, int(colour[2]) + _PALETTE_LIGHTEN_STEP),
+    )
 
 
 def _decode_defect(name: str) -> DecodeDefect:
@@ -750,6 +871,33 @@ def _decode_defect(name: str) -> DecodeDefect:
             )
 
         return undetected_after_first
+    if name == "mask-changed-on-repeat":
+        mask_state = {"calls": 0}
+
+        def mask_changed_on_repeat(request: GenerateRequest, result: DecodeResult) -> DecodeResult:
+            """Echo the first decode of a run and change only the mask of every later one, leaving
+            the matrix and the payload as the first call reported them."""
+            mask_state["calls"] += 1
+            if mask_state["calls"] == 1:
+                return result
+            changed = 0 if result.mask is None else (int(result.mask) + 1) % 8
+            return _replace(result, mask=changed)
+
+        return mask_changed_on_repeat
+    if name == "matrix-changed-on-repeat":
+        matrix_state = {"calls": 0}
+
+        def matrix_changed_on_repeat(
+            request: GenerateRequest, result: DecodeResult
+        ) -> DecodeResult:
+            """Echo the first decode of a run and change only the matrix of every later one,
+            leaving the mask and the payload as the first call reported them."""
+            matrix_state["calls"] += 1
+            if matrix_state["calls"] == 1:
+                return result
+            return _replace(result, matrix=numpy.zeros_like(result.matrix), matrix_sha256=None)
+
+        return matrix_changed_on_repeat
     raise KeyError(
         f"no decode defect is declared under {name!r}; this module declares "
         f"{sorted(_DECODE_DEFECT_NAMES)}"
@@ -770,6 +918,39 @@ def _symbol_defect(name: str) -> SymbolDefect:
         requested = _DEFAULT_SCALE_PX if request.module_size_px is None else request.module_size_px
         return _render_with(request, scale=requested + 2)
 
+    def canvas_not_module_multiple(
+        request: GenerateRequest, symbol: GeneratedSymbol
+    ) -> GeneratedSymbol:
+        """Draw one module of margin where the request asked for none, so the canvas is
+        ``(modules + 2) * scale`` while the decoded version implies ``modules`` across."""
+        del symbol
+        return _render_with(request, border=1)
+
+    def lightened_dark_palette(
+        request: GenerateRequest, symbol: GeneratedSymbol
+    ) -> GeneratedSymbol:
+        """Draw the symbol with the darker of the two requested colours one step lighter, so the
+        measured palette is not the requested one and the pair stays above the floor.
+
+        The channel sum orders the two colours, the same key ``_measure_colours`` clusters the
+        rendered pixels by, so "the darker one" means the same thing here and in the check. A swap
+        of the pair would not do: the check compares the two measured colours as a set, which a swap
+        leaves unchanged."""
+        del symbol
+        foreground = tuple(request.foreground_rgb)
+        background = tuple(request.background_rgb)
+        if sum(foreground) <= sum(background):
+            return _render(dataclasses.replace(request, foreground_rgb=_lightened(foreground)))
+        return _render(dataclasses.replace(request, background_rgb=_lightened(background)))
+
+    def logo_not_composited(
+        request: GenerateRequest, symbol: GeneratedSymbol
+    ) -> GeneratedSymbol:
+        """Draw the plain symbol the request asks for and ignore the overlay it names, so a declared
+        ``logo_overlay`` capability has no behaviour behind it."""
+        del symbol
+        return _render(dataclasses.replace(request, logo_overlay_path=None))
+
     def changing_mask_factory() -> SymbolDefect:
         """Return a defect whose mask differs on every call of the identical request."""
         state = {"calls": 0}
@@ -789,13 +970,18 @@ def _symbol_defect(name: str) -> SymbolDefect:
         return short_quiet_zone
     if name == "wrong-module-size":
         return wrong_module_size
+    if name == "svg-canvas-not-module-multiple":
+        return canvas_not_module_multiple
+    if name == "lightened-dark-palette":
+        return lightened_dark_palette
+    if name == "logo-not-composited":
+        return logo_not_composited
     if name == "changing-mask":
         return changing_mask_factory()
     raise KeyError(
         f"no artefact defect is declared under {name!r}; this module declares "
         f"{sorted(_SYMBOL_DEFECT_NAMES)}"
     )
-
 
 
 # The adapter behaviours a round may name: a declared rejection, a crash, canned bytes
@@ -816,8 +1002,16 @@ ADAPTER_ERRORS: Final[dict[str, Callable[[], BaseException]]] = {
 # of the probe.  The checks that use it read the artefact's length and format and never open it.
 _CANNED_ARTEFACT: Final[bytes] = b"\x89PNG\r\n\x1a\nqrcheck-negative-canned"
 
+# The bytes a round hands a decode-backed check instead of a rendered symbol: plain text, with no
+# image signature in it at all, so no decoder pipeline can open it.  Deliberately unlike
+# ``_CANNED_ARTEFACT`` above, which carries a PNG signature and is only ever measured, never
+# opened -- this artefact is opened, by the real decode entry, which is how AAP §0.4.4's ninth
+# named defect ("an encode that returns non-image bytes") is proved to reach a check that fails.
+_NON_IMAGE_ARTEFACT: Final[bytes] = b"qrcheck negative case: not an image in any format\n"
+
 ADAPTER_SYMBOLS: Final[dict[str, Callable[[], GeneratedSymbol]]] = {
     "canned": lambda: GeneratedSymbol(image_bytes=_CANNED_ARTEFACT, output_format="png"),
+    "non-image": lambda: GeneratedSymbol(image_bytes=_NON_IMAGE_ARTEFACT, output_format="png"),
 }
 
 
@@ -859,7 +1053,9 @@ _TAMPERED_VARIANT: Final[bytes] = b"qrcheck negative tampered variant"
 @contextlib.contextmanager
 def _leak_temp_entry(preparation: _Preparation) -> Iterator[None]:
     """Leave one framework-prefixed entry in the temporary directory, then remove it after
-    ``CL-ARTIFACTS`` snapshotted it -- the only window where the check's own view is under test."""
+    ``CL-ARTIFACTS`` snapshotted it -- the only window where the check's own view is under test.
+    The harness points the temporary directory at a directory this test owns, so the entry is
+    never written where another process running the same suite could race on it."""
     del preparation
     leaked = Path(tempfile.gettempdir()) / _LEAK_NAME
     if leaked.exists():
@@ -875,12 +1071,28 @@ def _leak_temp_entry(preparation: _Preparation) -> Iterator[None]:
 @contextlib.contextmanager
 def _tamper_recorded_variant(preparation: _Preparation) -> Iterator[None]:
     """Replace every recorded variant with bytes no seed can derive: record and damage kind are
-    read off the ``corpus:<record-id>@<kind>`` cases (AAP §0.3.4), never transcribed."""
+    read off the ``corpus:<record-id>@<kind>`` cases (AAP §0.3.4), never transcribed.
+
+    The variant memo is module-global, so the original bytes of every key tampered with are
+    snapshotted first, one entry per ``(record_id, kind)``, and put back in a ``finally``: the
+    helper leaves no tampered state behind for a later round to observe. A key the prerequisite
+    round recorded nothing for is not a recorded variant and is left untouched rather than
+    invented, so a seeded round whose prerequisite recorded nothing fails on its own subject
+    instead of passing on state made up here."""
+    originals: dict[tuple[str, str], bytes] = {}
     for case in preparation.prerequisite_cases:
         record_part, _, kind = case.case_id.partition("@")
         record_id = record_part.split(":", 1)[1]
-        damage_family.remember_variant(record_id, kind, _TAMPERED_VARIANT)
-    yield
+        recorded = damage_family.recall_variant(record_id, kind)
+        if recorded is not None:
+            originals[(record_id, kind)] = recorded
+    try:
+        for record_id, kind in originals:
+            damage_family.remember_variant(record_id, kind, _TAMPERED_VARIANT)
+        yield
+    finally:
+        for (record_id, kind), recorded in originals.items():
+            damage_family.remember_variant(record_id, kind, recorded)
 
 
 PREPARATIONS: Final[dict[str, Callable[[_Preparation], Iterator[None]]]] = {
@@ -992,9 +1204,20 @@ def _drive_round(
     # The dotted form, because ``monkeypatch.setattr`` reads a bare string as a whole import
     # path: it resolves the module itself and remembers the previous value, so the patcher's
     # own installation is restored when this test ends.
-    harness.monkeypatch.setattr(
-        "qrcheck.decode.decode_symbol", _decode_stub(harness, round_spec, decode_calls)
+    #
+    # The stub exists because a negative case must put a specific defect in front of a check and
+    # a real decoder cannot be asked for one.  That reason does not hold for a round whose
+    # artefact *is* the defect -- bytes no image library can open -- so that round restores the
+    # real decode entry instead, and the framework's own mapping for unusable bytes becomes what
+    # the check is observed to report (AAP §0.4.4, the ninth named defect).  No constant result
+    # is installed for it either: the stub sets one only because a canned artefact describes no
+    # symbol at all; every other round counts its decodes at the one seam it runs through.
+    decode_entry = (
+        harness.patcher.real
+        if round_spec.real_decode
+        else _decode_stub(harness, round_spec, decode_calls)
     )
+    harness.monkeypatch.setattr("qrcheck.decode.decode_symbol", decode_entry)
     contract = get_check(check_id)
     enumerated = tuple(contract.cases(ctx))
     selected = enumerated[: round_spec.case_limit]
@@ -1043,6 +1266,61 @@ def _drive(check_id: str, harness: _Harness) -> _CheckRun:
     )
 
 
+# The SVG rasterizer the unit tier stands in for
+#
+# ``RN-SVG`` rasterizes through whatever ``discover_svg_rasterizer`` finds on the host, and the tool
+# belongs to the CI e2e job alone (AAP §0.6.4 installs ``librsvg2-bin`` there and in no other job),
+# so this module answers that seam with a stub: the real tool's fidelity is the e2e tier's proof,
+# and the subject here is the check's own arithmetic and the discovery order it reports.  The name
+# is one the product's own order lists, so discovery still walks ``SVG_RASTERIZER_AUTO_ORDER`` and
+# still stops at the first candidate its probe accepts.
+_STUB_RASTERIZER: Final[str] = "rsvg-convert"
+
+# The side, in pixels, of the image the stub rasterizer answers with: stub geometry, not a
+# threshold any check reads.
+_STUB_RASTER_SIDE_PX: Final[int] = 8
+
+
+def _stub_raster_png() -> bytes:
+    """Return a small, genuinely valid PNG for the stub rasterizer to answer every SVG with.
+
+    Nothing here decodes these bytes: the decode entry in front of a case is stubbed, so what an
+    image *contains* is never this module's subject.  They are a real image rather than an empty
+    artefact so the stub hands a check a PNG, exactly as the rasterizer it stands in for does.
+    """
+    buffer = io.BytesIO()
+    Image.new("RGB", (_STUB_RASTER_SIDE_PX, _STUB_RASTER_SIDE_PX), "white").save(
+        buffer, format="PNG"
+    )
+    return buffer.getvalue()
+
+
+_STUB_RASTER: Final[bytes] = _stub_raster_png()
+
+
+@pytest.fixture(autouse=True)
+def stub_svg_rasterizer(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Answer the render family's rasterizer seam, so no case here needs a tool from the host.
+
+    Only the two seams are replaced.  ``discover_svg_rasterizer`` keeps its real probe order, its
+    real ``attempted`` list and its real ``"none"`` branch -- which answers before any probe runs,
+    so the module's skip round still skips -- and ``rasterize_svg`` answers a PNG instead of driving
+    third-party code.  The unit tier is the fast, fully-mocked layer AAP §0.6.4 defines, and the
+    real tool remains the e2e tier's proof.
+    """
+
+    def probe(name: str) -> bool:
+        """Report the one rasterizer this module's stub provides."""
+        return name == _STUB_RASTERIZER
+
+    def rasterize(svg_bytes: bytes, status: Any) -> bytes:
+        """Answer every vector artefact with the stub's valid PNG."""
+        del svg_bytes, status
+        return _STUB_RASTER
+
+    monkeypatch.setattr(render_family, "_probe_rasterizer", probe)
+    monkeypatch.setattr(render_family, "rasterize_svg", rasterize)
+
 
 # Fixtures
 
@@ -1056,9 +1334,17 @@ def harness(
     make_decode_result: Callable[..., DecodeResult],
     counting_adapter: Any,
     committed_corpus: Sequence[Any],
+    tmp_path: Path,
 ) -> _Harness:
     """Return the fixtures one driven round needs, over a two-record corpus: two records so a check
     that cycles a request parameter over its sample is driven through more than the first choice."""
+    # ``_leak_temp_entry`` writes the framework-prefixed entry ``CL-ARTIFACTS`` scans for, so the
+    # temporary directory has to be one this test owns: the check takes its baseline at case
+    # enumeration and its scan at execution, and both must observe this directory rather than the
+    # one the whole host shares, where a neighbour's run could race on the same name.
+    scratch = tmp_path / "tmp"
+    scratch.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(tempfile, "tempdir", str(scratch))
     return _Harness(
         config_factory=config_factory,
         make_run_context=make_run_context,
@@ -1138,6 +1424,14 @@ def _assert_round_resolves(check_id: str, round_spec: NegativeRound) -> None:
         assert round_spec.adapter_error in ADAPTER_ERRORS, round_spec.adapter_error
     if round_spec.adapter_symbol is not None:
         assert round_spec.adapter_symbol in ADAPTER_SYMBOLS, round_spec.adapter_symbol
+    if round_spec.real_decode:
+        # The declared shape of a real-decode round: the artefact is what the check is handed,
+        # so the defect reaches it through an adapter symbol rather than a scripted decode
+        # result, which would need the stub this round lifts.
+        assert round_spec.adapter_symbol is not None, (
+            f"{where}: a real-decode round must name an adapter_symbol, because the artefact is "
+            "the only defect it can put in front of the check"
+        )
     if round_spec.prepare is not None:
         assert round_spec.prepare in PREPARATIONS, round_spec.prepare
     if round_spec.prerequisite is not None:
@@ -1192,7 +1486,11 @@ def test_adapter_invocations_match_the_declared_count(check_id: str, harness: _H
         # A skipped round never reaches the target: the skip is decided before any I/O, which is
         # exactly what ``RN-SVG`` does when no rasterizer was discovered, so its declared count
         # for that round is zero rather than one per case.
-        declared = 0 if outcome.round.status is Status.SKIPPED else expected(outcome.cases)
+        declared = (
+            0
+            if outcome.round.status is Status.SKIPPED
+            else expected(outcome.cases, outcome.config.performance)
+        )
         assert outcome.invocations == declared, (
             f"{check_id} / {outcome.round.label!r}: {outcome.cases} case(s) invoked the target "
             f"{outcome.invocations} time(s); the contract declares {declared}"
@@ -1218,7 +1516,7 @@ def test_declared_invocations_match_the_family_tables(
     full_ctx = harness.make_run_context(corpus=tuple(committed_corpus))
     for check_id in CHECK_IDS:
         cases = len(tuple(get_check(check_id).cases(full_ctx)))
-        computed = EXPECTED_INVOCATIONS[check_id](cases)
+        computed = EXPECTED_INVOCATIONS[check_id](cases, full_ctx.config.performance)
         assert computed == family_counts[check_id], (
             f"{check_id}: {cases} case(s) over the committed corpus imply {computed} "
             f"invocation(s), but the family module declares {family_counts[check_id]}"
@@ -1227,6 +1525,28 @@ def test_declared_invocations_match_the_family_tables(
         "the case matrix of AAP §0.8.1 declares 1,287 encodes for one full run; the family "
         f"modules declare {sum(family_counts.values())}"
     )
+
+
+@pytest.mark.parametrize("check_id", sorted(EXPECTED_INVOCATIONS), ids=lambda value: value)
+def test_the_declared_count_follows_the_resolved_limits(check_id: str) -> None:
+    """The declared count follows the round's resolved configuration, one source for both
+    assertions: ``PF-ENCODE`` declares the retuned ``warmup + encode_samples`` its result's
+    ``expected`` reports too, while every other check's count is the same under those limits as
+    under the schema defaults."""
+    retuned = models.PerformanceLimits(warmup=1, encode_samples=4)
+    cases = _DAMAGE_KINDS_PER_RECORD
+    declared = EXPECTED_INVOCATIONS[check_id](cases, retuned)
+    if check_id == "PF-ENCODE":
+        assert declared == retuned.warmup + retuned.encode_samples, (
+            f"PF-ENCODE: {cases} case(s) declared {declared} invocation(s) under the retuned "
+            f"limits {retuned!r}; the declaration must follow them"
+        )
+        assert declared == 5, f"one warm-up plus four samples is five, not {declared}"
+    else:
+        assert declared == EXPECTED_INVOCATIONS[check_id](cases, models.PerformanceLimits()), (
+            f"{check_id}: {cases} case(s) declared {declared} invocation(s) under retuned "
+            f"performance limits; this check's count must not read them"
+        )
 
 
 def test_decode_invocations_match_the_declared_count(harness: _Harness) -> None:

@@ -11,9 +11,13 @@ metacharacters reach the target byte for byte (AAP §0.3.2's argv-only control);
 rejection is ``TargetRejected`` with the target's own text while a non-zero exit that
 declares nothing is ``TargetContractError``; a target outliving ``timeout_s`` is
 ``TargetTimeout``; an unspawnable command is ``TargetUnavailable``; a bounded run drives
-every ``otp`` record through the pipeline; and an stdout-based ``returns`` is a contract
-error on this example. No duration is asserted (AAP §0.5.5), the module carries no ``e2e``
-marker, and a missing example script fails rather than skips (AAP §0.4.3)."""
+every ``otp`` record through the pipeline; an stdout-based ``returns`` is a contract
+error on this example; and a child that streams to stdout or to stderr without end is cut
+off at the adapter's documented byte bound and refused as ``TargetContractError``. No
+duration is compared with a product threshold (AAP §0.5.5) -- the two capture-bound cases
+only measure that the call returned far inside their own configured ``timeout_s``, which is
+what proves the child was cut off at the bound and not killed at the ceiling -- the module
+carries no ``e2e`` marker, and a missing example script fails rather than skips (AAP §0.4.3)."""
 
 from __future__ import annotations
 
@@ -21,6 +25,7 @@ import contextlib
 import json
 import subprocess
 import sys
+import time
 from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
 from typing import Any, Final
@@ -30,8 +35,9 @@ import pytest
 from qrcheck.config.load import load_config
 from qrcheck.corpus.capacity import minimal_version
 from qrcheck.decode import decode_symbol
-from qrcheck.targets import ADAPTER_TYPES
+from qrcheck.targets import ADAPTER_TYPES, cli as cli_module
 from qrcheck.targets.base import (
+    HEX_PREFIX_LIMIT,
     Adapter,
     GenerateRequest,
     TargetContractError,
@@ -90,6 +96,24 @@ _CONTRACT_PAYLOAD: Final[bytes] = b"qrcheck-cli-contract-error"
 _TIMEOUT_PAYLOAD: Final[bytes] = b"qrcheck-cli-timeout"
 _UNAVAILABLE_PAYLOAD: Final[bytes] = b"qrcheck-cli-unavailable"
 _BASE64_PAYLOAD: Final[bytes] = b"qrcheck-cli-base64"
+_STREAM_BOUND_PAYLOAD: Final[bytes] = b"qrcheck-cli-stream-bound"
+
+# The ``timeout_s`` the two capture-bound cases configure. A harness value, not a product
+# threshold: it only has to sit far above the fraction of a second the byte bound needs, so that a
+# child cut off at the bound and a child killed at this ceiling cannot be confused.
+_STREAM_BOUND_TIMEOUT_S: Final[float] = 20.0
+
+# A child that writes to one stream without end, one pipe buffer at a time, so it passes any bound
+# in a few writes. Neither the payload nor the artefact path matters to it: the adapter refuses the
+# call on the bytes it captured, before it reads anything the child produced.
+_ENDLESS_STDOUT_CHILD: Final[str] = (
+    "import sys\n"
+    "chunk = 'x' * 65536\n"
+    "while True:\n"
+    "    sys.stdout.write(chunk)\n"
+    "    sys.stdout.flush()\n"
+)
+_ENDLESS_STDERR_CHILD: Final[str] = _ENDLESS_STDOUT_CHILD.replace("sys.stdout", "sys.stderr")
 
 
 def _table(base: Mapping[str, Any], **overrides: Any) -> dict[str, Any]:
@@ -346,3 +370,54 @@ def test_stdout_based_returns_is_a_contract_error_on_this_example(
     message = str(contract.value)
     assert "base64" in message
     assert "empty artefact" in message
+
+
+# The capture bound: one stream of the child cannot grow this process without limit
+
+
+@pytest.mark.parametrize(
+    ("stream", "child"),
+    [("stdout", _ENDLESS_STDOUT_CHILD), ("stderr", _ENDLESS_STDERR_CHILD)],
+)
+def test_an_endless_stream_is_refused_at_the_capture_bound(
+    cli_target: Any,
+    write_config: Callable[..., Path],
+    tmp_path: Path,
+    stream: str,
+    child: str,
+) -> None:
+    """A child that writes to `stream` without end is cut off at the documented byte bound and
+    refused as a ``TargetContractError`` naming that stream and the bound it passed.
+
+    ``_STREAM_BOUND_TIMEOUT_S`` is a harness value, not a product threshold: it is this case's own
+    ``timeout_s``, and a child that had to be killed at that ceiling would consume the whole of it.
+    Returning far inside it is what proves the child was cut off at the bound instead.
+    """
+    table = _table(
+        cli_target.target_config,
+        command=[sys.executable, "-c", child],
+        payload_arg="{}",
+        returns="raw_bytes",
+        timeout_s=_STREAM_BOUND_TIMEOUT_S,
+    )
+    request = build_request(_STREAM_BOUND_PAYLOAD, "M")
+
+    started = time.perf_counter()
+    with _open_adapter(write_config, tmp_path, table) as adapter:
+        with pytest.raises(TargetContractError) as contract:
+            adapter.generate(request)
+    elapsed_s = time.perf_counter() - started
+
+    message = str(contract.value)
+    assert stream in message, f"the diagnostic must name the over-bound stream: {message!r}"
+    assert str(cli_module._MAX_CAPTURED_STREAM_BYTES) in message, (
+        f"the diagnostic must name the byte bound the stream passed: {message!r}"
+    )
+    assert len(contract.value.body_prefix) == HEX_PREFIX_LIMIT, (
+        "the over-bound stream's first bytes must travel as evidence; got "
+        f"{len(contract.value.body_prefix)} bytes"
+    )
+    assert elapsed_s < _STREAM_BOUND_TIMEOUT_S / 2, (
+        "the child must be cut off at the capture bound rather than killed at "
+        f"timeout_s = {_STREAM_BOUND_TIMEOUT_S:g} s; the call took {elapsed_s:.3f} s"
+    )

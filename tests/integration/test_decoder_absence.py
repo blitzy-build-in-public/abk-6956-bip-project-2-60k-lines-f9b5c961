@@ -147,6 +147,20 @@ TARGET_INDEPENDENT_CHECK: Final[str] = "CL-ARTIFACTS"
 SVG_CHECK: Final[str] = "RN-SVG"
 RASTERIZER_TOKEN: Final[str] = "svg-rasterizer"
 
+#: The discovery order AAP §0.3.4 fixes for ``[render] svg_rasterizer = "auto"``: the importable
+#: ``cairosvg`` first, then the four command-line rasterizers on ``PATH``, which AAP §0.7.2
+#: requires ``RN-SVG``'s ``missing_dependency`` skip to record. Spelled as a literal on purpose,
+#: so the gate below pins the documented order instead of reading back the constant it exists to
+#: check; AAP §0.12's single-declaration rule governs configurable thresholds, and this is a
+#: contract value of AAP §0.3.4 rather than one of those.
+SVG_RASTERIZER_DISCOVERY_ORDER: Final[tuple[str, ...]] = (
+    "cairosvg",
+    "rsvg-convert",
+    "resvg",
+    "magick",
+    "convert",
+)
+
 #: The two built-in targets by the names the configuration declares.
 REFERENCE_TARGET: Final[str] = "reference"
 DEFECTIVE_TARGET: Final[str] = "defective"
@@ -875,8 +889,15 @@ def test_rn_svg_skips_with_the_discovery_order_it_attempted(
 
     AAP §0.3.5 and §0.7.2: the rasterizer degrades to ``skipped``/``missing_dependency`` with the
     discovery order it attempted, and AAP §0.3.4 requires evidence for the skip. Breaks if the
-    order stops reaching the result or the degradation becomes a failure, an error or a pass.
+    product's ``auto`` order departs from the one AAP §0.3.4 fixes, if the order stops reaching the
+    result, or if the degradation becomes a failure, an error or a pass.
     """
+    documented_order = list(SVG_RASTERIZER_DISCOVERY_ORDER)
+    assert list(SVG_RASTERIZER_AUTO_ORDER) == documented_order, (
+        f"the product's ``auto`` discovery order is {list(SVG_RASTERIZER_AUTO_ORDER)}, not the "
+        f"{documented_order} AAP §0.3.4 fixes; a reordering or a dropped candidate changes the "
+        f"order every report states it attempted"
+    )
     rasterizer_absent(monkeypatch)
     space = workspace(
         write_config, tmp_path, target=REFERENCE_TARGET, render={"svg_rasterizer": "auto"}
@@ -900,10 +921,9 @@ def test_rn_svg_skips_with_the_discovery_order_it_attempted(
     assert entry["status"] == STATUS_SKIPPED, entry["status"]
     assert entry["reason"] == REASON_MISSING_DEPENDENCY, entry["reason"]
     assert entry["expected"] == {"missing": [RASTERIZER_TOKEN]}, entry["expected"]
-    attempted = list(SVG_RASTERIZER_AUTO_ORDER)
-    assert entry["decoded"] == {"attempted": attempted}, (
-        f"the skip's decoded payload is {entry['decoded']!r}; AAP §0.3.5 requires the discovery "
-        f"order it attempted, which discovery walks as {attempted}"
+    assert entry["decoded"] == {"attempted": documented_order}, (
+        f"the skip's decoded payload is {entry['decoded']!r}; AAP §0.3.5 and §0.7.2 require the "
+        f"discovery order it attempted, which AAP §0.3.4 fixes as {documented_order}"
     )
 
     evidence_dir = entry["evidence_dir"]

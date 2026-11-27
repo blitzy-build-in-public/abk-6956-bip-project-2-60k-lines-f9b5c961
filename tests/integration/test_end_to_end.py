@@ -20,6 +20,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections import Counter
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
@@ -68,6 +69,11 @@ _COUNT_KEYS: Final[frozenset[str]] = frozenset({"passed", "failed", "skipped", "
 
 # The statuses that fail the gate; a `skipped` is deliberately not one, being counted separately.
 _FAILED_OR_ERROR: Final[frozenset[str]] = frozenset({"failed", "error"})
+
+# The one child element each status writes in `junit.xml`, and none for a pass (§0.3.4 shape).
+_STATUS_ELEMENT: Final[Mapping[str, str | None]] = MappingProxyType(
+    {"error": "error", "failed": "failure", "passed": None, "skipped": "skipped"}
+)
 
 # The nine check identifiers a `--adapter defective` run must fail, as a literal (§0.4.2).
 _EXPECTED_DEFECTIVE_IDS: Final[frozenset[str]] = frozenset(
@@ -368,7 +374,8 @@ def test_every_root_carries_the_three_artefacts_and_they_parse(
     run_sequence: Mapping[str, SuiteRun],
 ) -> None:
     """Every run leaves a parseable ``summary.json``,
-    ``junit.xml`` and ``index.html``, with the JUnit tallies agreeing with the summary."""
+    ``junit.xml`` and ``index.html``, with the JUnit tallies agreeing with the summary and one
+    ``testcase`` per result carrying exactly that result's status element."""
     for label in sorted(run_sequence):
         run = run_sequence[label]
         root = run.report_root
@@ -418,6 +425,43 @@ def test_every_root_carries_the_three_artefacts_and_they_parse(
                 f"cannot disagree"
             )
 
+        results = summary["results"]
+        testcases = [child for child in suite if child.tag == "testcase"]
+        assert len(testcases) == len(results), (
+            f"the {label} run's {_JUNIT_NAME} carries {len(testcases)} testcase element(s) "
+            f"for the {len(results)} result(s) {_SUMMARY_NAME} records; the aggregate "
+            f"attributes are a tally the writer computed itself and cannot stand in for one "
+            f"element per result (AAP §0.6.1 #6)"
+        )
+
+        statuses = [str(result["status"]) for result in results]
+        unknown = sorted(set(statuses) - set(_STATUS_ELEMENT))
+        assert unknown == [], (
+            f"the {label} run's {_SUMMARY_NAME} reports the undocumented status(es) {unknown}; "
+            f"a case reaches exactly one of {sorted(_STATUS_ELEMENT)}"
+        )
+        expected_children: Counter[str] = Counter(
+            element
+            for element in (_STATUS_ELEMENT[status] for status in statuses)
+            if element is not None
+        )
+        observed_children: Counter[str] = Counter(
+            child.tag for testcase in testcases for child in testcase
+        )
+        assert observed_children == expected_children, (
+            f"the {label} run's {_JUNIT_NAME} carries the status child elements "
+            f"{dict(sorted(observed_children.items()))} while the {len(results)} results of "
+            f"{_SUMMARY_NAME} imply {dict(sorted(expected_children.items()))}; a dropped "
+            f"element and an invented one both break the JUnit shape AAP §0.3.4 documents"
+        )
+        crowded = sorted(
+            testcase.get("name") or "<unnamed>" for testcase in testcases if len(testcase) > 1
+        )
+        assert crowded == [], (
+            f"the {label} run's {_JUNIT_NAME} gives {crowded} more than one status child "
+            f"element; a case has exactly one outcome (AAP §0.3.4)"
+        )
+
         html_path = root / _HTML_NAME
         assert html_path.is_file(), f"the {label} run wrote no {_HTML_NAME} in {root}"
         page = html_path.read_text(encoding="utf-8")
@@ -434,8 +478,9 @@ def test_every_root_carries_the_three_artefacts_and_they_parse(
 
 def test_expected_sets_hold_across_the_sequence(run_sequence: Mapping[str, SuiteRun]) -> None:
     """``reference`` fails nothing and ``defective`` fails exactly the
-    nine declared checks, as set **equality** (AAP §0.4.2), with no ``error`` status and the
-    documented exit codes."""
+    nine declared checks, as set **equality** (AAP §0.4.2), with no ``error`` status, the
+    documented exit codes, and at least one result in every run -- since a run that reported
+    nothing would satisfy an empty expectation."""
     assert SELF_CHECK_TARGETS[_DEFECTIVE_TARGET] == _EXPECTED_DEFECTIVE_IDS, (
         f"the product's declared defective set {sorted(SELF_CHECK_TARGETS[_DEFECTIVE_TARGET])} "
         f"differs from the nine identifiers AAP §0.4.2 fixes: {sorted(_EXPECTED_DEFECTIVE_IDS)}"
@@ -455,6 +500,12 @@ def test_expected_sets_hold_across_the_sequence(run_sequence: Mapping[str, Suite
     for label in sorted(run_sequence):
         run = run_sequence[label]
         expected = expectations[label]
+        assert run.results, (
+            f"{_describe(run)} reported no results at all, so comparing its failing set "
+            f"against the expected {sorted(expected)} would hold on a run that produced "
+            f"nothing and this gate would then prove nothing; a run of the sequence must "
+            f"report at least one result"
+        )
         actual = run.failing_check_ids
         assert actual == expected, (
             f"{_describe(run)} failed or errored {sorted(actual)}, expected "

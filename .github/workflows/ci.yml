@@ -24,7 +24,13 @@ jobs:
       - name: Install pinned dependencies from the hash locks
         run: |
           python -m pip install --require-hashes -r requirements.lock
-          python -m pip install --require-hashes -r requirements-dev.lock
+          # requirements-dev.lock pins pip and setuptools in its --allow-unsafe block for the
+          # lock-regeneration environment only. Installing them here would replace the runner's
+          # own pip and setuptools before the editable install, so drop those two stanzas and
+          # install every other pin and hash exactly as the lock declares them.
+          awk '/^(pip|setuptools)==/ { skip = 1; next } skip && /^[[:space:]]/ { next } { skip = 0; print }' \
+            requirements-dev.lock > "$RUNNER_TEMP/requirements-dev.ci.lock"
+          python -m pip install --require-hashes -r "$RUNNER_TEMP/requirements-dev.ci.lock"
 
       - name: Install the project (editable, no build isolation, no dependency resolution)
         run: python -m pip install --no-build-isolation --no-deps -e .
@@ -35,13 +41,18 @@ jobs:
       - name: Unit gate (85 % coverage floor)
         run: |
           mkdir -p reports
-          pytest -m "not e2e" --junitxml=reports/pytest-unit.xml --cov=qrcheck --cov-fail-under=85
+          pytest -m "not e2e" --strict-markers --junitxml=reports/pytest-unit.xml --cov=qrcheck --cov-fail-under=85
 
       - name: Per-package coverage floor 90 % (config, registry, report)
-        run: coverage report --include='qrcheck/config/*,qrcheck/registry/*,qrcheck/report/*' --fail-under=90
+        run: |
+          # Each package is floored on its own, so one below 90 % cannot be carried
+          # over the floor by the other two.
+          coverage report --include='qrcheck/config/*' --fail-under=90
+          coverage report --include='qrcheck/registry/*' --fail-under=90
+          coverage report --include='qrcheck/report/*' --fail-under=90
 
-      - name: "Line-ceiling gate: qrcheck loc --limit 60000"
-        run: qrcheck loc --limit 60000
+      - name: "Line-ceiling gate: qrcheck loc (ceiling from qrcheck.toml loc_limit)"
+        run: qrcheck loc
 
   e2e:
     name: End-to-end proof
@@ -60,7 +71,13 @@ jobs:
       - name: Install pinned dependencies from the hash locks
         run: |
           python -m pip install --require-hashes -r requirements.lock
-          python -m pip install --require-hashes -r requirements-dev.lock
+          # requirements-dev.lock pins pip and setuptools in its --allow-unsafe block for the
+          # lock-regeneration environment only. Installing them here would replace the runner's
+          # own pip and setuptools before the editable install, so drop those two stanzas and
+          # install every other pin and hash exactly as the lock declares them.
+          awk '/^(pip|setuptools)==/ { skip = 1; next } skip && /^[[:space:]]/ { next } { skip = 0; print }' \
+            requirements-dev.lock > "$RUNNER_TEMP/requirements-dev.ci.lock"
+          python -m pip install --require-hashes -r "$RUNNER_TEMP/requirements-dev.ci.lock"
 
       - name: Install the project (editable, no build isolation, no dependency resolution)
         run: python -m pip install --no-build-isolation --no-deps -e .
@@ -74,13 +91,24 @@ jobs:
           qrcheck corpus build --seed 20240101 --out "$RUNNER_TEMP/corpus-regenerated.jsonl"
           diff -u corpus/default.jsonl "$RUNNER_TEMP/corpus-regenerated.jsonl"
 
+      # The report roots are produced under the basetemp deliberately, outside the worktree,
+      # because the tier asserts that nothing is written into the repository's reports/; only
+      # this junit xml lands there. The evidence upload below therefore reads the basetemp.
       - name: "End-to-end proof (marker: e2e)"
-        run: pytest -m e2e --basetemp="$RUNNER_TEMP/pytest-e2e" --junitxml=reports/pytest-e2e.xml
+        run: pytest -m e2e --strict-markers --basetemp="$RUNNER_TEMP/pytest-e2e" --junitxml=reports/pytest-e2e.xml
 
-      - name: Upload reports
+      - name: Upload the pytest run reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: qrcheck-reports
           path: reports/
-          if-no-files-found: warn
+          if-no-files-found: error
+
+      - name: Upload the end-to-end evidence tree
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qrcheck-e2e-evidence
+          path: ${{ runner.temp }}/pytest-e2e/
+          if-no-files-found: error

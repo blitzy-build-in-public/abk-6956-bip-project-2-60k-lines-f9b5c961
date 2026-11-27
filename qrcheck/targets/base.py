@@ -27,6 +27,7 @@ import base64
 import binascii
 import enum
 import os
+import stat
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -101,6 +102,13 @@ _BYTE_ORDER_MARK: Final[bytes] = b"\xef\xbb\xbf"
 # How far into a body an SVG or XML marker is searched for, because renderer output may open
 # with a BOM, whitespace, an XML declaration or a doctype.
 _SVG_SNIFF_BYTES: Final[int] = 512
+
+# The most this reader takes from one artefact path. A ``bytes_path`` is a path the target chose
+# and a ``file_path`` one it was handed, so a target is untrusted (AAP §0.1.3) and the read is
+# bounded rather than the path trusted: a named device, a FIFO nobody fills or a multi-gigabyte
+# file must become a contract error instead of a hung or exhausted runner. The bound is the same
+# 16 MiB the http adapter reads from one response, because no legitimate artefact comes near it.
+_MAX_ARTEFACT_BYTES: Final[int] = 16 * 1024 * 1024
 
 # Which sniffed formats satisfy which requested format. JPEG is not a request format, but a
 # target answering a ``png`` request with JPEG bytes must be reported as a mismatch rather than
@@ -685,7 +693,10 @@ def _path_bytes(
     quotes and which is never a resolved absolute path.
 
     Raises:
-    TargetContractError: `value` is not a path, is an empty path, or cannot be read.
+    TargetContractError: `value` is not a path, is an empty path, or cannot be read; the path is
+    not a regular file the target wrote, so it is never opened; the artefact is larger than
+    :data:`_MAX_ARTEFACT_BYTES`, so it is refused rather than read; or it grew past that ceiling
+    while it was being read.
     """
     if isinstance(value, Path):
         given = value
@@ -710,12 +721,33 @@ def _path_bytes(
 
     resolved = given if base_dir is None or given.is_absolute() else base_dir / given
     try:
-        return resolved.read_bytes(), shown
+        stat_result = resolved.stat()
+        if not stat.S_ISREG(stat_result.st_mode):
+            raise TargetContractError(
+                f"returns = {returns!r}: the artefact at {shown!r} is not a regular file the "
+                "target wrote, so the framework does not open it"
+            )
+        if stat_result.st_size > _MAX_ARTEFACT_BYTES:
+            raise TargetContractError(
+                f"returns = {returns!r}: the artefact at {shown!r} is {stat_result.st_size} "
+                f"bytes, above the {_MAX_ARTEFACT_BYTES} bytes this framework reads from one "
+                "artefact, so it is refused rather than read"
+            )
+        with resolved.open("rb") as stream:
+            data = stream.read(_MAX_ARTEFACT_BYTES + 1)
     except OSError as exc:
         reason = exc.strerror or exc.__class__.__name__
         raise TargetContractError(
             f"returns = {returns!r}: cannot read the artefact at {shown!r} ({reason})"
         ) from None
+
+    if len(data) > _MAX_ARTEFACT_BYTES:
+        raise TargetContractError(
+            f"returns = {returns!r}: the artefact at {shown!r} grew past the "
+            f"{_MAX_ARTEFACT_BYTES} bytes this framework reads from one artefact while it was "
+            f"read: {len(data)} bytes had arrived when the read was stopped"
+        )
+    return data, shown
 
 
 def resolve_dotted_path(data: object, path: str) -> object:

@@ -100,7 +100,7 @@ The determinism rule that follows concerns the volatile fields the schema requir
 
 | Budget | Declared once in | Read by |
 |--------|------------------|---------|
-| At most 60,000 tracked physical lines | top-level `loc_limit`, default `60000` | `qrcheck loc --limit 60000` in the CI `unit` job; the same number lands in `summary.json` `loc_count` |
+| At most 60,000 tracked physical lines | top-level `loc_limit`, default `60000` | `qrcheck loc` in the CI `unit` job, which reads that key instead of passing `--limit`, so retuning the key moves the gate; the same number lands in `summary.json` `loc_count` |
 | Contrast ratio at least 7 : 1 | per-target `contrast_floor`, default `7.0` | `RN-CONTRAST` asserts at or above it; `IV-BAD-OPTION` reads it to build a request below it |
 | Logo overlay at most 15 % of symbol area | `[checks.damage] logo_area_fraction`, default `0.15` | `RN-LOGO` |
 | Occlusion at most the decoded EC capacity minus a margin | `[checks.damage] occlusion_margin`, default `0.05` | `DM-RESILIENCE`, `DM-SEEDED` |

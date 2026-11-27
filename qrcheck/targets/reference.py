@@ -67,59 +67,6 @@ _MAX_CHANNEL: Final[int] = 255
 # The two artefact kinds segno renders for us, and the segno `kind` name of each.
 _RENDER_KINDS: Final[tuple[str, ...]] = ("png", "svg")
 
-# WCAG 2.1 sRGB relative-luminance constants. A channel is linearised piecewise -- a
-# straight division below the knee, a gamma expansion above it -- and the luminance is
-# the weighted sum, which is what makes the ratio below order-independent and therefore
-# equally lawful for an inverted (light-on-dark) request.
-_SRGB_KNEE: Final[float] = 0.03928
-_SRGB_SLOPE: Final[float] = 12.92
-_SRGB_OFFSET: Final[float] = 0.055
-_SRGB_SCALE: Final[float] = 1.055
-_SRGB_GAMMA: Final[float] = 2.4
-_LUMINANCE_WEIGHTS: Final[tuple[float, float, float]] = (0.2126, 0.7152, 0.0722)
-
-# The additive term of the WCAG formula, so two identical colours give exactly 1.0.
-_CONTRAST_OFFSET: Final[float] = 0.05
-
-
-def _linear_channel(channel: int) -> float:
-    """Return one 0..255 sRGB channel as a linearised luminance component.
-
-    ``channel`` has already been validated as an integer in 0..255 by the caller, so this function
-    raises nothing.
-    """
-    value = channel / 255.0
-    if value <= _SRGB_KNEE:
-        return value / _SRGB_SLOPE
-    return ((value + _SRGB_OFFSET) / _SRGB_SCALE) ** _SRGB_GAMMA
-
-
-def _relative_luminance(colour: tuple[int, int, int]) -> float:
-    """Return the WCAG 2.1 relative luminance of a three-channel ``0..255`` colour.
-
-    The result is in 0.0..1.0, black at 0.0 and white at 1.0, and raises nothing for a validated
-    colour.
-    """
-    red, green, blue = (_linear_channel(channel) for channel in colour)
-    weight_red, weight_green, weight_blue = _LUMINANCE_WEIGHTS
-    return weight_red * red + weight_green * green + weight_blue * blue
-
-
-def _contrast_ratio(
-    foreground: tuple[int, int, int],
-    background: tuple[int, int, int],
-) -> float:
-    """Return the WCAG 2.1 contrast ratio between two ``0..255`` colours, from 1.0 up.
-
-    The lighter colour is placed over the darker one, so the ratio is order-independent and an
-    inverted request is measured exactly as a normal one is: ``(lighter + 0.05) / (darker + 0.05)``,
-    spanning 1.0 (identical colours) to 21.0 (black on white).
-    """
-    first = _relative_luminance(foreground)
-    second = _relative_luminance(background)
-    lighter, darker = (first, second) if first >= second else (second, first)
-    return (lighter + _CONTRAST_OFFSET) / (darker + _CONTRAST_OFFSET)
-
 
 def _colour_hex(colour: tuple[int, int, int]) -> str:
     """Return a validated ``0..255`` colour as the ``#rrggbb`` string segno renders.
@@ -339,13 +286,24 @@ class ReferenceAdapter:
     def _check_contrast(self, request: GenerateRequest) -> None:
         """Refuse a colour pair whose contrast is below the target's declared floor.
 
-        The ratio is the WCAG 2.1 relative-luminance ratio, order-independent, so an inverted
-        request is measured like a normal one, and the floor is the configured ``contrast_floor``.
+        The ratio is :func:`qrcheck.decode.consensus.contrast_ratio`, the product's one
+        implementation of the WCAG 2.1 relative-luminance ratio: ``RN-CONTRAST`` measures with it
+        and ``IV-BAD-OPTION`` relies on this rejection, so the number this adapter refuses at and
+        the number a report records cannot drift apart. It is reached at the point of use because
+        that module loads ``numpy`` and ``Pillow``, and importing this package must not start an
+        image stack. Being a WCAG ratio it is order-independent, so an inverted request is measured
+        like a normal one, and the floor is the configured ``contrast_floor``.
+
+        Both colours are already three validated integers in 0..255 by the time this runs, since
+        :meth:`_validate_shape` checked them, so the ratio function's own ``ValueError`` guard
+        cannot fire on this path.
 
         Raises:
         TargetRejected: The measured ratio is below the floor; both values are reported.
         """
-        ratio = _contrast_ratio(request.foreground_rgb, request.background_rgb)
+        from qrcheck.decode.consensus import contrast_ratio
+
+        ratio = contrast_ratio(request.foreground_rgb, request.background_rgb)
         if ratio < self._contrast_floor:
             raise TargetRejected(
                 f"contrast ratio {ratio:.1f} is below the declared floor "

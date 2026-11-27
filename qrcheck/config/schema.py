@@ -24,6 +24,7 @@ from __future__ import annotations
 import datetime
 import json
 import math
+import re
 import string
 import urllib.parse
 from collections.abc import Callable, Mapping
@@ -280,9 +281,10 @@ def _check_path(value: str) -> str | None:
 
 
 def _check_seed(value: int) -> str | None:
-    """Require a non-negative run seed; the message is fixed by the contract."""
+    """Require a non-negative run seed; the reason alone, because :class:`ConfigError` prints the
+    dotted key ``seed`` ahead of it."""
     if value < 0:
-        return "seed must be a non-negative integer"
+        return "must be a non-negative integer"
     return None
 
 
@@ -321,8 +323,46 @@ def _check_callable(value: str) -> str | None:
     return None
 
 
+# A placeholder token as both argument templates spell it: a brace-delimited name of the same
+# character set ``qrcheck.targets.cli`` substitutes, so the vocabulary refused here and the
+# vocabulary substituted there are one. The bare "{}" carries the empty name; a brace sequence of
+# another shape (a JSON object such as {"a":1}, or a format spec such as {size:d}) carries no name
+# and is literal text.
+_ARG_TOKEN_PATTERN: Final[re.Pattern[str]] = re.compile(r"\{([A-Za-z0-9_]*)\}")
+
+
+def _arg_placeholders(text: str) -> list[str]:
+    """Return the name of every placeholder ``text`` carries, in the order it carries them."""
+    return _ARG_TOKEN_PATTERN.findall(text)
+
+
+def _first_unknown_placeholder(text: str) -> str | None:
+    """Return the first placeholder of ``text`` that no adapter substitutes, spelled as written.
+
+    The bare ``{}`` -- an empty name -- is the value itself, and the eight names are read from
+    :data:`qrcheck.config.models.TEMPLATE_FIELDS`, the one vocabulary both configurable transports
+    fill, so this rule cannot drift from what they substitute.
+    """
+    for name in _arg_placeholders(text):
+        if name and name not in models.TEMPLATE_FIELDS:
+            return "{" + name + "}"
+    return None
+
+
+def _placeholder_vocabulary() -> tuple[str, ...]:
+    """Name what a template may carry: the bare ``{}``, then the eight fields in sorted order."""
+    return ("{}", *(f"{{{field}}}" for field in sorted(models.TEMPLATE_FIELDS)))
+
+
 def _check_command(value: list) -> str | None:
-    """Require a non-empty argv list of non-empty strings."""
+    """Require a non-empty argv list of non-empty strings, none of them a template.
+
+    ``command`` is a literal argv: its words reach the process exactly as written, in every
+    adapter path, so a placeholder-shaped token in one would arrive at the target as its own
+    braces rather than be substituted. ``payload_arg`` and ``output_arg`` are the two argument
+    templates, so a placeholder belongs there and one found here is refused by index and token. A
+    brace sequence of another shape (``--config={"a":1}``) is ordinary literal text.
+    """
     if not value:
         return "must list at least one argument"
     for index, member in enumerate(value):
@@ -330,18 +370,35 @@ def _check_command(value: list) -> str | None:
             return f"argument {index} must be a string, got {_kind(member)}"
         if not member:
             return f"argument {index} must not be an empty string"
+        placeholders = _arg_placeholders(member)
+        if placeholders:
+            return (
+                f"argument {index} carries the placeholder "
+                f"'{{{placeholders[0]}}}'; command words are passed literally and never "
+                "rendered, so a placeholder belongs in payload_arg or output_arg"
+            )
     return None
 
 
 def _check_arg_template(value: str) -> str | None:
-    """Require an argument template that carries a payload or names a flag.
+    """Require an argument template whose placeholders come from the one vocabulary.
 
-    The rule is the contract's own: a template either contains ``{}`` for the value or starts with
-    ``-`` and is passed as a flag. The substitution itself belongs to the CLI adapter.
+    The shape rule is the contract's own: a template either contains ``{}`` for the value or starts
+    with ``-`` and is passed as a flag. Every placeholder-shaped token it carries must then name
+    the bare ``{}`` or one of :data:`qrcheck.config.models.TEMPLATE_FIELDS`, because the CLI
+    adapter substitutes exactly those tokens -- so a typo is this module's exit-2 configuration
+    fault, naming the key and the token, rather than a ``ValueError`` raised once checks are
+    already running. The substitution itself belongs to the adapter.
     """
-    if "{}" in value or value.startswith("-"):
-        return None
-    return f"must contain '{{}}' or start with '-', got {value!r}"
+    if "{}" not in value and not value.startswith("-"):
+        return f"must contain '{{}}' or start with '-', got {value!r}"
+    unknown = _first_unknown_placeholder(value)
+    if unknown is not None:
+        return (
+            f"carries the unknown placeholder '{unknown}'; "
+            f"allowed: {', '.join(_placeholder_vocabulary())}"
+        )
+    return None
 
 
 def _check_str_map(value: Mapping[str, str]) -> str | None:

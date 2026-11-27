@@ -6,6 +6,11 @@ shell is interposed: the argument vector is a list handed to ``subprocess.run(ar
 timeout=...)``, so a payload carrying ``;`` or ``$(...)`` stays one literal argv word, and the
 timeout kills the child.
 
+Both of the child's output streams are captured through the documented byte bound
+(:data:`_MAX_CAPTURED_STREAM_BYTES`): a target that writes more than that to its stdout or stderr
+is refused with ``TargetContractError``, because the output of an untrusted target may not grow
+this process past a number no legitimate artefact approaches.
+
 ``payload_arg`` is either a placeholder template (``{}`` as strict UTF-8 text, ``{payload_b64}``,
 ``{payload_utf8}``, ``{ec_level}``, ``{format}``, ``{size}``, ``{margin}``, ``{fg}``, ``{bg}``) or a
 bare ``-``-prefixed flag passed as one argv word with the raw payload on the child's stdin. No
@@ -23,22 +28,26 @@ rejection and a fabricated one would make them vacuous.
 from __future__ import annotations
 
 import base64
+import contextlib
 import json
+import os
 import re
 import shutil
 import subprocess
 import tempfile
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final, cast
 
-from qrcheck.config.models import RETURNS_KINDS, CLITarget, ReturnsKind
+from qrcheck.config.models import RETURNS_KINDS, TEMPLATE_FIELDS, CLITarget, ReturnsKind
 from qrcheck.targets.base import (
     OUTPUT_FORMATS,
     Capability,
     GenerateRequest,
     GeneratedSymbol,
+    HEX_PREFIX_LIMIT,
     TargetContractError,
     TargetRejected,
     TargetTimeout,
@@ -69,34 +78,22 @@ _TEMP_ARTEFACT_STEM: Final[str] = "symbol"
 _TOKEN_PATTERN: Final[re.Pattern[str]] = re.compile(r"\{([A-Za-z0-9_]*)\}")
 
 # The vocabulary that pattern accepts, in diagnostic order: the bare "{}" followed by the eight
-# named placeholders of the HTTP adapter's ``request_template``, which both transports share. One
-# list has two readers -- the ``ValueError`` for an unknown placeholder and the
-# ``TargetUnsupported``
-# for a request no template can carry -- so the two cannot drift apart.
-# bare "{}" -- the payload, or the artefact path in ``output_arg`` -- followed by
-# the eight named placeholders of the HTTP adapter's ``request_template``, which
-# the two transports share so one mental model covers both. One list has two
-# readers, the ``ValueError`` for an unknown placeholder and the
-# ``TargetUnsupported`` for a request no template can carry, so the two can never
-# drift apart.
+# named placeholders of the HTTP adapter's ``request_template``, which both transports share so one
+# mental model covers them both. It is derived from ``models.TEMPLATE_FIELDS`` rather than restated,
+# so no list can disappear from one transport while it stays in the other. It has two readers: the
+# configuration schema refuses an unknown placeholder at load time -- exit 2, naming the key and the
+# token -- and this adapter keeps its own ``ValueError`` for the belt-and-braces case of a target
+# record built without the loader, exactly as the HTTP adapter keeps its own.
 _TEMPLATE_TOKENS: Final[tuple[str, ...]] = (
     "{}",
-    "{payload_b64}",
-    "{payload_utf8}",
-    "{ec_level}",
-    "{format}",
-    "{size}",
-    "{margin}",
-    "{fg}",
-    "{bg}",
+    *(f"{{{field}}}" for field in TEMPLATE_FIELDS),
 )
 
-# Request fields no placeholder can convey, with the capability governing each:
-# ``command`` words are spliced literally, so a request pinning one is refused before any I/O.
-# with the capability that governs each. The words of ``command`` are spliced
-# literally and the vocabulary above has no version, mask or logo token, so a
-# request that pins one is refused before any I/O rather than run without it --
-# the decision ``qrcheck/targets/http.py`` already makes for its request template.
+# Request fields no placeholder can convey, with the capability that governs each. The words of
+# ``command`` are spliced literally and the vocabulary above has no version, mask or logo token --
+# the schema refuses a placeholder in a ``command`` word outright -- so a request that pins one is
+# refused before any I/O rather than run without it, the decision ``qrcheck/targets/http.py``
+# already makes for its request template.
 _INEXPRESSIBLE_FIELDS: Final[tuple[tuple[str, Capability], ...]] = (
     ("version", Capability.version_pin),
     ("mask", Capability.mask_pin),
@@ -111,6 +108,21 @@ REJECTION_JSON_FIELD: Final[str] = "error"
 
 # How much of a failed target's captured output a contract-error message keeps.
 DIAGNOSTIC_TAIL_CHARS: Final[int] = 2000
+
+# The most this adapter keeps from either stream of the child it runs. A cli target is untrusted
+# (AAP §0.1.3: it "may return garbage, lie about metadata, hang or crash"), so a stream that passes
+# this bound is a contract error rather than unbounded growth in the runner's memory. The number is
+# the 16 MiB the http adapter reads from one response, because no legitimate artefact -- a PNG or
+# an SVG of a Model 2 symbol -- approaches either.
+_MAX_CAPTURED_STREAM_BYTES: Final[int] = 16 * 1024 * 1024
+
+# How many bytes one read from a captured stream asks for: one pipe buffer, so a flood costs a
+# bounded number of reads rather than one call per byte.
+_READ_CHUNK_BYTES: Final[int] = 64 * 1024
+
+# How long a capture waits for its drain thread once the child has exited: the wait is for the
+# bytes already in the pipe, never for the child, so a well-behaved child finishes far inside it.
+_DRAIN_JOIN_TIMEOUT_S: Final[float] = 5.0
 
 # stdout carries the artefact itself for these return kinds, so a metadata_map
 # cannot also read the target's metadata from it.
@@ -136,6 +148,125 @@ class _Invocation:
     stdin_payload: bytes | None
     artefact_path: Path | None
     temp_dir: Path | None
+
+
+class _BoundedStreamCapture:
+    """Capture at most :data:`_MAX_CAPTURED_STREAM_BYTES` of one output stream of a child process.
+
+    One instance owns one ``os.pipe()`` and one daemon thread. ``subprocess.run`` is handed
+    :attr:`write_fd` as its ``stdout=`` or ``stderr=``, so the child writes straight into the pipe,
+    and the thread reads the other end until the child closes it, keeping at most the documented
+    bound. A stream that passes the bound sets :attr:`overflowed` and closes its read end, so the
+    child's next write fails instead of this process buffering output it will never use.
+
+    :meth:`finish` releases this process's ends of the pipe once the child has exited, and is safe
+    to call more than once, so every path -- success, timeout, spawn failure -- can call it without
+    knowing which one it is on.
+    """
+
+    def __init__(self, name: str) -> None:
+        """Create the pipe and start draining it.
+
+        Args:
+        name: ``"stdout"`` or ``"stderr"``, the stream this object holds, for diagnostics.
+
+        Raises:
+        OSError: The pipe itself could not be created.
+        RuntimeError: The drain thread could not be started.
+        """
+        self._name: str = name
+        self._buffer: bytearray = bytearray()
+        self._received: int = 0
+        self._overflowed: bool = False
+        self._read_fd: int = -1
+        self._write_fd: int = -1
+        self._read_fd, self._write_fd = os.pipe()
+        self._thread: threading.Thread = threading.Thread(
+            target=self._drain,
+            name=f"qrcheck-capture-{name}",
+            daemon=True,
+        )
+        try:
+            self._thread.start()
+        except RuntimeError:
+            self._close_read_fd()
+            self._close_write_fd()
+            raise
+
+    @property
+    def write_fd(self) -> int:
+        """Return the descriptor to hand ``subprocess.run`` as this stream's destination."""
+        return self._write_fd
+
+    @property
+    def name(self) -> str:
+        """Return the stream's name, ``"stdout"`` or ``"stderr"``."""
+        return self._name
+
+    @property
+    def bytes(self) -> bytes:
+        """Return the bytes captured from this stream, at most the documented bound of them."""
+        return bytes(self._buffer)
+
+    @property
+    def received(self) -> int:
+        """Return how many bytes arrived on this stream, the over-bound ones included."""
+        return self._received
+
+    @property
+    def overflowed(self) -> bool:
+        """Return whether this stream delivered more than the documented bound."""
+        return self._overflowed
+
+    def finish(self) -> None:
+        """Release this process's ends of the pipe once the child has exited.
+
+        The write end is closed first, so a drain thread still reading sees end-of-file and returns;
+        the thread is then joined for :data:`_DRAIN_JOIN_TIMEOUT_S`. The read end is closed only
+        once the thread has ended, because closing a descriptor another thread may still be reading
+        is not safe, and a thread still blocked there is left with its descriptor and its daemon
+        status. Idempotent: a second call finds the descriptors already closed.
+        """
+        self._close_write_fd()
+        self._thread.join(_DRAIN_JOIN_TIMEOUT_S)
+        if not self._thread.is_alive():
+            self._close_read_fd()
+
+    def _drain(self) -> None:
+        """Read this stream until the child closes it or the bound is passed."""
+        while True:
+            try:
+                chunk = os.read(self._read_fd, _READ_CHUNK_BYTES)
+            except OSError:
+                # A read end closed on the over-bound path, or a descriptor the kernel refused:
+                # either way nothing more can be read from this stream.
+                return
+            if not chunk:
+                return
+            self._received += len(chunk)
+            room = _MAX_CAPTURED_STREAM_BYTES - len(self._buffer)
+            if room > 0:
+                self._buffer += chunk[:room]
+            if self._received > _MAX_CAPTURED_STREAM_BYTES:
+                self._overflowed = True
+                self._close_read_fd()
+                return
+
+    def _close_read_fd(self) -> None:
+        """Close the read end once, if it is still open."""
+        read_fd, self._read_fd = self._read_fd, -1
+        if read_fd < 0:
+            return
+        with contextlib.suppress(OSError):
+            os.close(read_fd)
+
+    def _close_write_fd(self) -> None:
+        """Close this process's copy of the write end once, if it is still open."""
+        write_fd, self._write_fd = self._write_fd, -1
+        if write_fd < 0:
+            return
+        with contextlib.suppress(OSError):
+            os.close(write_fd)
 
 
 class CliAdapter:
@@ -182,43 +313,19 @@ class CliAdapter:
 
         Raises:
         TargetUnsupported: An undeclared capability, or a pin or overlay no template carries.
-        TargetUnavailable: The program could not be spawned.
+        TargetUnavailable: The program could not be spawned, or the scratch directory its
+        artefact needs could not be created.
         TargetTimeout: The target outlived ``timeout_s`` and was killed.
         TargetRejected: The target declared a client-side rejection.
-        TargetContractError: It exited without a usable artefact or a declared rejection.
+        TargetContractError: It exited without a usable artefact or a declared rejection, or wrote
+        more than the documented byte bound to one of its streams.
         ValueError: An unknown placeholder, or a payload the template cannot take.
         """
         require_capabilities(self, _required_capabilities(request))
         self._reject_inexpressible(request)
         invocation = self._build_invocation(request)
         try:
-            started = time.perf_counter()
-            try:
-                completed = subprocess.run(
-                    list(invocation.argv),
-                    shell=False,
-                    stdin=subprocess.DEVNULL if invocation.stdin_payload is None else None,
-                    input=invocation.stdin_payload,
-                    capture_output=True,
-                    text=False,
-                    timeout=self._timeout_s,
-                    check=False,
-                    env=None,
-                )
-            except subprocess.TimeoutExpired:
-                raise TargetTimeout(
-                    f"target {self.name!r} ({invocation.argv[0]!r}) did not answer within "
-                    f"timeout_s = {self._timeout_s:g} s and was terminated"
-                ) from None
-            except OSError as exc:
-                # Only a spawn failure reaches here: subprocess.run raises OSError
-                # from execvp alone, before any pipe is read.
-                reason = exc.strerror or exc.__class__.__name__
-                raise TargetUnavailable(
-                    f"target {self.name!r} could not be spawned: {invocation.argv[0]!r} "
-                    f"failed ({reason}); check targets.{self.name}.command"
-                ) from None
-            elapsed_ms = (time.perf_counter() - started) * 1000.0
+            completed, elapsed_ms = self._run(invocation)
             if completed.returncode != 0:
                 self._raise_for_failure(completed)
             image_bytes = self._read_artefact(completed, invocation.artefact_path, request)
@@ -236,6 +343,122 @@ class CliAdapter:
             declared_mode=_declared_text(metadata.get("mode")),
             elapsed_ms=elapsed_ms,
         )
+
+    def _run(self, invocation: _Invocation) -> tuple[subprocess.CompletedProcess[bytes], float]:
+        """Spawn the child once and capture a bounded prefix of each of its two output streams.
+
+        The child is run as it always was -- one argv list, no shell, the configured ``timeout_s``,
+        no inherited environment -- but its stdout and stderr are the two bounded pipes of
+        :class:`_BoundedStreamCapture` rather than ``capture_output``, so no volume of output can
+        grow this process past :data:`_MAX_CAPTURED_STREAM_BYTES` however much of ``timeout_s`` is
+        left. Both pipes are released on every path, before any error is converted.
+
+        Args:
+        invocation: The command line, stdin bytes and artefact path one ``generate`` call runs.
+
+        Returns:
+        The completed process, rebuilt over the bytes captured from both streams, and the duration
+        of the spawn in milliseconds measured as soon as the child exited.
+
+        Raises:
+        TargetTimeout: The child outlived ``timeout_s`` and was killed; the message names the
+        configured timeout.
+        TargetUnavailable: The child could not be spawned, or no pipe could be created for its
+        output.
+        TargetContractError: One of the child's streams passed the documented byte bound, which
+        makes its output unusable whatever else happened -- an over-bound stream outranks a
+        timeout.
+        """
+        stdout_capture, stderr_capture = self._open_captures()
+        started = time.perf_counter()
+        try:
+            try:
+                completed = subprocess.run(
+                    list(invocation.argv),
+                    shell=False,
+                    stdin=subprocess.DEVNULL if invocation.stdin_payload is None else None,
+                    input=invocation.stdin_payload,
+                    stdout=stdout_capture.write_fd,
+                    stderr=stderr_capture.write_fd,
+                    text=False,
+                    timeout=self._timeout_s,
+                    check=False,
+                    env=None,
+                )
+            finally:
+                elapsed_ms = (time.perf_counter() - started) * 1000.0
+                stdout_capture.finish()
+                stderr_capture.finish()
+        except subprocess.TimeoutExpired:
+            self._raise_for_overflowed_stream(stdout_capture, stderr_capture)
+            raise TargetTimeout(
+                f"target {self.name!r} ({invocation.argv[0]!r}) did not answer within "
+                f"timeout_s = {self._timeout_s:g} s and was terminated"
+            ) from None
+        except OSError as exc:
+            # Only a spawn failure reaches here: subprocess.run raises OSError from execvp
+            # alone, before any pipe is read.
+            self._raise_for_overflowed_stream(stdout_capture, stderr_capture)
+            reason = exc.strerror or exc.__class__.__name__
+            raise TargetUnavailable(
+                f"target {self.name!r} could not be spawned: {invocation.argv[0]!r} "
+                f"failed ({reason}); check targets.{self.name}.command"
+            ) from None
+        self._raise_for_overflowed_stream(stdout_capture, stderr_capture)
+        return (
+            subprocess.CompletedProcess(
+                completed.args,
+                completed.returncode,
+                stdout_capture.bytes,
+                stderr_capture.bytes,
+            ),
+            elapsed_ms,
+        )
+
+    def _open_captures(self) -> tuple[_BoundedStreamCapture, _BoundedStreamCapture]:
+        """Return one bounded capture per output stream of the child about to be spawned.
+
+        Opening them is part of spawning: with nowhere to write, the child is not run at all, which
+        is the same trigger as any other spawn failure.
+
+        Raises:
+        TargetUnavailable: A pipe or a drain thread could not be created, so the target was not run.
+        """
+        captures: list[_BoundedStreamCapture] = []
+        try:
+            captures.append(_BoundedStreamCapture("stdout"))
+            captures.append(_BoundedStreamCapture("stderr"))
+        except (OSError, RuntimeError) as exc:
+            for capture in captures:
+                capture.finish()
+            raise TargetUnavailable(
+                f"target {self.name!r} could not be spawned: its output could not be captured "
+                f"({exc}); check targets.{self.name}.command"
+            ) from None
+        return captures[0], captures[1]
+
+    def _raise_for_overflowed_stream(self, *captures: _BoundedStreamCapture) -> None:
+        """Refuse a child stream that passed the documented byte bound.
+
+        Args:
+        captures: The two captures of the child that just exited, in stream order.
+
+        Raises:
+        TargetContractError: One stream delivered more than :data:`_MAX_CAPTURED_STREAM_BYTES`. The
+        message names the stream, the bound and how much arrived, and the first
+        :data:`~qrcheck.targets.base.HEX_PREFIX_LIMIT` bytes travel on ``body_prefix`` -- the same
+        evidence shape a non-image body carries (AAP §0.6.6 row 8).
+        """
+        for capture in captures:
+            if not capture.overflowed:
+                continue
+            raise TargetContractError(
+                f"target {self.name!r} wrote more than the "
+                f"{_MAX_CAPTURED_STREAM_BYTES}-byte bound to its {capture.name} "
+                f"({capture.received} bytes arrived), so its output is unusable; the stream was "
+                "closed at the bound",
+                body_prefix=capture.bytes[:HEX_PREFIX_LIMIT],
+            )
 
     def _reject_inexpressible(self, request: GenerateRequest) -> None:
         """Refuse a request neither configured argument template can convey.
@@ -264,6 +487,8 @@ class CliAdapter:
         Raises:
         ValueError: ``payload_arg`` is neither a template nor a flag, or ``output_arg`` names no
         path.
+        TargetUnavailable: No scratch directory for the artefact could be created, so the target
+        was not run.
         TargetContractError: The payload cannot be interpolated as UTF-8 text.
         """
         words, stdin_payload = self._payload_argument(request)
@@ -276,7 +501,14 @@ class CliAdapter:
                 f"targets.{self.name}.output_arg = {template!r} names no artefact path: it "
                 "must carry a placeholder such as '{}'"
             )
-        temp_dir = Path(tempfile.mkdtemp(prefix=TEMP_DIR_PREFIX))
+        try:
+            temp_dir = Path(tempfile.mkdtemp(prefix=TEMP_DIR_PREFIX))
+        except OSError as exc:
+            reason = exc.strerror or exc.__class__.__name__
+            raise TargetUnavailable(
+                f"target {self.name!r} was not run: no scratch directory for its artefact "
+                f"could be created ({reason}); check targets.{self.name}.command"
+            ) from None
         try:
             artefact_path = temp_dir / f"{_TEMP_ARTEFACT_STEM}.{request.output_format}"
             argv.append(self._render(template, request, "output_arg", path=artefact_path))

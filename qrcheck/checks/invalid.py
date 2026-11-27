@@ -106,10 +106,10 @@ _OVERCAPACITY_FILLER: Final[bytes] = b"qrcheck-overcapacity-probe:"
 
 # The background the below-floor contrast probe measures against, and the grey ladder it walks from
 # darkest to lightest.  Ladder order is lightness order, so the ratio against white strictly
-# decreases and the first entry below the declared floor is the darkest admissible probe.  ``0x88``
-# is first because it is the ≈3.5:1 pair AAP §0.8.1 tabulates, chosen whenever the target
-# declares the documented 7.0 floor; white on white, ratio 1.0, is below any floor the schema
-# accepts.
+# decreases and the first entry below the declared ``contrast_floor`` is the darkest admissible
+# probe.  ``0x88`` is first because it is the ≈3.5:1 pair AAP §0.8.1 tabulates, chosen whenever
+# the target declares the configured default floor; white on white, ratio 1.0, is below any floor
+# the schema accepts.
 _CONTRAST_BACKGROUND_RGB: Final[tuple[int, int, int]] = (0xFF, 0xFF, 0xFF)
 _CONTRAST_GREY_LADDER: Final[tuple[int, ...]] = (
     0x88,
@@ -347,9 +347,9 @@ def _contrast_request(ctx: RunContext) -> _Requested:
 
     The floor is the target's **declared** ``contrast_floor``, read from the resolved configuration
     for the target under test -- never a literal here, because a threshold has one home (AAP
-    §0.6.2). AAP §0.8.1's request is a grey on white measuring ≈3.5:1 against the documented 7.0
-    floor; a target that declares a tighter floor gets a lighter grey that is still genuinely below
-    it, and the measured ratio is recorded so the premise is auditable from the report alone.
+    §0.6.2). AAP §0.8.1's request is a grey on white measuring ≈3.5:1 against the configured
+    floor; a target that declares a tighter floor gets a lighter grey that is still genuinely
+    below it, and the measured ratio is recorded so the premise is auditable from the report alone.
     """
     floor = _declared_contrast_floor(ctx)
     foreground = _below_floor_foreground(floor)
@@ -695,9 +695,9 @@ def _declared_contrast_floor(ctx: RunContext) -> float:
 def _below_floor_foreground(floor: float) -> tuple[int, int, int]:
     """Return the darkest grey from the fixed ladder whose ratio sits below `floor`.
 
-    The ladder runs from ``0x88`` -- AAP §0.8.1's ≈3.5:1 pair, chosen whenever the target
-    declares the documented 7.0 floor -- towards white, so a target declaring a tighter floor still
-    receives a request genuinely below it.
+    The ladder runs from ``0x88`` -- AAP §0.8.1's ≈3.5:1 pair, chosen whenever the target's
+    ``contrast_floor`` is the configured default -- towards white, so a target declaring a tighter
+    floor still receives a request genuinely below it.
 
     Raises:
         ValueError: No ladder entry measures below `floor`, which can only happen for a floor at or

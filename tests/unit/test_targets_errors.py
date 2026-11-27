@@ -22,7 +22,10 @@ from __future__ import annotations
 
 import base64
 import dataclasses
+import errno
 import json
+import math
+import os
 import socket
 import subprocess
 from collections.abc import Callable
@@ -34,8 +37,10 @@ import pytest
 
 from qrcheck.config import models
 from qrcheck.corpus.capacity import max_payload_bytes
+from qrcheck.decode import consensus
 from qrcheck.targets import cli as cli_module
 from qrcheck.targets import http as http_module
+from qrcheck.targets import reference as reference_module
 from qrcheck.targets.base import (
     HEX_PREFIX_LIMIT,
     Capability,
@@ -226,14 +231,22 @@ def _patch_spawn(
     monkeypatch: pytest.MonkeyPatch,
     outcome: subprocess.CompletedProcess[bytes] | BaseException,
 ) -> list[tuple[str, ...]]:
-    """Replace ``subprocess.run`` with a recorder that answers `outcome`."""
+    """Replace ``subprocess.run`` with a recorder that answers `outcome`.
+
+    A completed record's two streams are written into the pipes the adapter handed over, because the
+    adapter reads the child's output back through its own bounded captures rather than through
+    ``capture_output``; an exception is raised exactly as it stands, so a spawn failure and a
+    timeout are still the library's own.
+    """
     invocations: list[tuple[str, ...]] = []
 
     def fake_run(argv: Any, **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
         invocations.append(tuple(argv))
         if isinstance(outcome, BaseException):
             raise outcome
-        return outcome
+        os.write(kwargs["stdout"], outcome.stdout or b"")
+        os.write(kwargs["stderr"], outcome.stderr or b"")
+        return subprocess.CompletedProcess(argv, outcome.returncode)
 
     monkeypatch.setattr(cli_module.subprocess, "run", fake_run)
     return invocations
@@ -381,6 +394,93 @@ def test_cli_adapter_non_executable_file_is_unavailable(tmp_path: Path) -> None:
     )
 
 
+def test_cli_adapter_scratch_directory_failure_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A request whose artefact needs a scratch directory cannot run when ``mkdtemp`` fails: the
+    ``OSError`` a full, exhausted or read-only filesystem raises is the same trigger as any other
+    spawn failure, so it arrives as ``TargetUnavailable`` naming the configured command, with no
+    process spawned and nothing created that the cleanup would have had to remove."""
+
+    def failing_mkdtemp(*args: Any, **kwargs: Any) -> str:
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr(cli_module.tempfile, "mkdtemp", failing_mkdtemp)
+    invocations = _patch_spawn(
+        monkeypatch,
+        AssertionError("the adapter spawned a process it had no scratch directory for"),
+    )
+    adapter = CliAdapter(
+        _cli_target(command=("qrcheck-fake-target",), output_arg="--output={}"),
+        name="probe-cli",
+    )
+
+    with pytest.raises(TargetUnavailable) as raised:
+        adapter.generate(_legal_request())
+
+    message = str(raised.value)
+    assert "targets.probe-cli.command" in message, (
+        f"the diagnostic must name the configured command: {message!r}"
+    )
+    assert "No space left on device" in message, (
+        f"the diagnostic must carry the filesystem's own reason: {message!r}"
+    )
+    assert not isinstance(raised.value, OSError), (
+        "the mkdtemp OSError must be converted, never allowed to escape as itself"
+    )
+    assert raised.value.__cause__ is None, (
+        f"the conversion must not chain the OSError: got cause {raised.value.__cause__!r}"
+    )
+    assert invocations == [], (
+        f"a target cannot run without the scratch directory it writes into; got {invocations!r}"
+    )
+
+
+def test_cli_adapter_capture_pipe_failure_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A pipe the adapter cannot create is the spawn failure it is: the captured streams are what
+    the child is spawned with, so an exhausted descriptor table means the target was not run.
+
+    The conversion has to happen at the capture, not at ``subprocess.run``: an ``OSError`` raised
+    while opening the pipe would otherwise escape the closed five-error vocabulary as a framework
+    fault, which is the defect this adapter's error taxonomy forbids.
+    """
+
+    def failing_pipe() -> tuple[int, int]:
+        raise OSError(errno.EMFILE, "Too many open files")
+
+    monkeypatch.setattr(cli_module.os, "pipe", failing_pipe)
+    invocations = _patch_spawn(
+        monkeypatch,
+        AssertionError("the adapter spawned a process it had no capture pipe for"),
+    )
+    adapter = CliAdapter(
+        _cli_target(command=("qrcheck-fake-target",), output_arg="--output={}"),
+        name="probe-cli",
+    )
+
+    with pytest.raises(TargetUnavailable) as raised:
+        adapter.generate(_legal_request())
+
+    message = str(raised.value)
+    assert "targets.probe-cli.command" in message, (
+        f"the diagnostic must name the configured command: {message!r}"
+    )
+    assert "Too many open files" in message, (
+        f"the diagnostic must carry the operating system's own reason: {message!r}"
+    )
+    assert not isinstance(raised.value, OSError), (
+        "the pipe OSError must be converted, never allowed to escape as itself"
+    )
+    assert raised.value.__cause__ is None, (
+        f"the conversion must not chain the OSError: got cause {raised.value.__cause__!r}"
+    )
+    assert invocations == [], (
+        f"a child cannot be spawned without the streams it writes into; got {invocations!r}"
+    )
+
+
 def test_http_adapter_refused_loopback_connection_is_unavailable() -> None:
     """A closed loopback port refuses the connection, which is the HTTP trigger."""
     adapter = HttpAdapter(_http_target(url=_closed_loopback_url()), name="probe-http")
@@ -484,6 +584,71 @@ def test_http_adapter_connect_timeout_is_unavailable_not_a_timeout(
     assert "accepted no connection" in str(raised.value), (
         "the TargetUnavailable diagnostic must say the connection was never accepted: "
         f"{str(raised.value)!r}"
+    )
+
+
+# A framework fault is not a target verdict -- a ``KeyError`` or ``IndexError`` raised by
+# framework code reaches the runner as itself (AAP §0.3.4 "Error taxonomy", §0.6.6 row 11)
+
+
+def test_http_adapter_framework_index_error_surfaces_unwrapped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An ``IndexError`` from framework code inside ``generate`` escapes as itself, so a framework
+    indexing fault is never reported as the target's contract failure."""
+
+    def faulting_lookup(data: object, path: str) -> object:
+        raise IndexError("framework lookup fault")
+
+    monkeypatch.setattr(http_module, "resolve_dotted_path", faulting_lookup)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        encoded = base64.b64encode(_NON_IMAGE_BODY).decode("ascii")
+        return httpx.Response(200, json={"image": encoded})
+
+    _patch_http_client(monkeypatch, handler)
+    adapter = HttpAdapter(_http_target(url=f"http://{_LOOPBACK_HOST}:1/"), name="probe-http")
+
+    with pytest.raises(IndexError) as raised:
+        adapter.generate(_legal_request())
+
+    assert not isinstance(raised.value, TargetContractError), (
+        "an IndexError from framework code is a framework defect, not a verdict about the "
+        "target"
+    )
+    assert str(raised.value) == "framework lookup fault", (
+        "the framework's own IndexError must arrive unmodified rather than wrapped in an "
+        f"adapter error: {str(raised.value)!r}"
+    )
+
+
+def test_http_adapter_framework_key_error_surfaces_unwrapped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A ``KeyError`` from framework code outside the localised dotted-path conversion escapes as
+    itself, so a framework indexing fault is never reported as the target's contract failure."""
+
+    def faulting_image_gate(data: bytes, output_format: str) -> bytes:
+        raise KeyError("framework artefact gate fault")
+
+    monkeypatch.setattr(http_module, "ensure_image_bytes", faulting_image_gate)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        encoded = base64.b64encode(_NON_IMAGE_BODY).decode("ascii")
+        return httpx.Response(200, json={"image": encoded})
+
+    _patch_http_client(monkeypatch, handler)
+    adapter = HttpAdapter(_http_target(url=f"http://{_LOOPBACK_HOST}:1/"), name="probe-http")
+
+    with pytest.raises(KeyError) as raised:
+        adapter.generate(_legal_request())
+
+    assert not isinstance(raised.value, TargetContractError), (
+        "a KeyError from framework code is a framework defect, not a verdict about the target"
+    )
+    assert "framework artefact gate fault" in str(raised.value), (
+        "the framework's own KeyError must arrive unmodified rather than wrapped in an adapter "
+        f"error: {str(raised.value)!r}"
     )
 
 
@@ -1056,5 +1221,76 @@ def test_reference_adapter_below_floor_contrast_is_rejected(
     )
     assert f"{_PROBE_CONTRAST_FLOOR:.1f}" in message, (
         f"the diagnostic must quote the configured floor: {message!r}"
+    )
+
+
+def test_reference_adapter_rejects_at_the_ratio_the_product_measures(
+    config_factory: Callable[..., models.Config],
+) -> None:
+    """The rejection floor is the ratio ``qrcheck.decode.consensus.contrast_ratio`` measures.
+
+    That function is the product's one implementation of the WCAG 2.1 ratio -- ``RN-CONTRAST``
+    asserts with it and ``IV-BAD-OPTION`` relies on the rejection built on it -- so a floor bound to
+    exactly the ratio it returns must accept the request, and one bound a single ulp above must
+    refuse it with the documented message. A second copy of the formula inside the target would put
+    this colour pair on the wrong side of one of those two bounds.
+    """
+    foreground, background = (0x88, 0x88, 0x88), (255, 255, 255)
+    measured = consensus.contrast_ratio(foreground, background)
+    request = build_request(
+        _UNUSUAL_TEXT.encode("utf-8"),
+        foreground_rgb=foreground,
+        background_rgb=background,
+    )
+
+    at_the_floor = _reference_adapter(config_factory(), contrast_floor=measured)
+    symbol = at_the_floor.generate(request)
+    assert symbol.image_bytes, (
+        "a ratio equal to a floor of its own value must encode: the contract refuses a ratio "
+        "below the floor, never one at it"
+    )
+
+    just_above = math.nextafter(measured, math.inf)
+    above_the_floor = _reference_adapter(config_factory(), contrast_floor=just_above)
+    with pytest.raises(TargetRejected) as raised:
+        above_the_floor.generate(request)
+
+    assert str(raised.value) == (
+        f"contrast ratio {measured:.1f} is below the declared floor {just_above:.1f}"
+    ), (
+        "the rejection message is public API (AAP §0.8.1, the IV-BAD-OPTION (d) row): "
+        f"{str(raised.value)!r}"
+    )
+
+
+@pytest.mark.parametrize(
+    "name",
+    (
+        "_contrast_ratio",
+        "_relative_luminance",
+        "_linear_channel",
+        "_SRGB_KNEE",
+        "_SRGB_SLOPE",
+        "_SRGB_OFFSET",
+        "_SRGB_SCALE",
+        "_SRGB_GAMMA",
+        "_LUMINANCE_WEIGHTS",
+        "_CONTRAST_OFFSET",
+    ),
+)
+def test_reference_adapter_holds_no_second_copy_of_the_contrast_formula(name: str) -> None:
+    """cc121-F02: the WCAG ratio has one owner, so this module must not re-derive it.
+
+    The ``_SRGB_*`` constants and the ``_linear_channel``/``_relative_luminance``/
+    ``_contrast_ratio`` helpers this module used to carry were a second implementation: they agreed
+    with :mod:`qrcheck.decode.consensus` only because both copied the same numbers, so retuning
+    either side would silently decouple the floor ``IV-BAD-OPTION`` measures from the floor this
+    target rejects at. The target reaches the one implementation at the point of use instead, which
+    :func:`test_reference_adapter_rejects_at_the_ratio_the_product_measures` pins from the other
+    side.
+    """
+    assert not hasattr(reference_module, name), (
+        f"qrcheck.targets.reference must not define {name}: a second copy of the WCAG ratio "
+        "decouples the floor IV-BAD-OPTION measures from the floor this target rejects at"
     )
 

@@ -182,7 +182,7 @@ requirements.*    the two compile inputs and their two hash locks
 
 | Budget | Declared once in | Read by |
 |--------|------------------|---------|
-| At most 60,000 tracked physical lines | `loc_limit` | `qrcheck loc --limit 60000` in CI, which exits 0 only strictly under the ceiling |
+| At most 60,000 tracked physical lines | `loc_limit` | `qrcheck loc` in CI, which takes the ceiling from `loc_limit` rather than restating it, and exits 0 only strictly under it |
 | Encode p95 ≤ 250 ms | `[checks.performance] encode_p95_ms` | `PF-ENCODE` |
 | Decode p95 ≤ 400 ms for a 500×500 PNG | `[checks.performance] decode_p95_ms` and `decode_image_px` | `PF-DECODE` |
 | ≥ 120 symbols per minute | `[checks.performance] min_symbols_per_minute` | `PF-ENCODE` |

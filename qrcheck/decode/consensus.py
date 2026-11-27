@@ -107,7 +107,7 @@ __all__ = [
 
 # WCAG 2.x relative luminance: the channel value is linearised at the 0.03928
 # knee and the three channels are weighted for human perception. These are the
-# numbers behind ``contrast_floor`` (default 7.0) and the ~3.5:1 request that
+# numbers behind the ``contrast_floor`` target key and the ~3.5:1 request that
 # ``IV-BAD-OPTION`` expects a target to reject.
 _LINEARISATION_KNEE: Final = 0.03928
 _LINEARISATION_DIVISOR: Final = 12.92
@@ -220,13 +220,13 @@ def relative_luminance(rgb: tuple[int, int, int]) -> float:
     weighted ``0.2126 R + 0.7152 G + 0.0722 B``. Black is ``0.0`` and white is
     ``1.0``.
 
-    This is the definition behind the ``contrast_floor`` target key (default
-    ``7.0``) and the ~``3.5:1`` request ``IV-BAD-OPTION`` builds against a
-    declared floor: :func:`contrast_ratio` is the ratio those two numbers are
-    measured in, and it is built on this function. ``qrcheck/decode/matrix.py``
-    reduces colour with the ITU-R BT.601 luma weights instead, which is a
-    *different* quantity used only for thresholding pixels -- the two must not be
-    substituted for one another.
+    This is the definition behind the ``contrast_floor`` target key and the
+    ~``3.5:1`` request ``IV-BAD-OPTION`` builds against a declared floor:
+    :func:`contrast_ratio` is the ratio those two numbers are measured in, and it
+    is built on this function. ``qrcheck/decode/matrix.py`` reduces colour with
+    the ITU-R BT.601 luma weights instead, which is a *different* quantity used
+    only for thresholding pixels -- the two must not be substituted for one
+    another.
 
     Args:
         rgb: Three ``0-255`` integers.

@@ -11,9 +11,13 @@ hold the modules the plan's tree fixes.
 
 The AST rather than a text search: a comment, a docstring or a log line naming an adapter is not
 a dependency, while a relative ``from ..targets.cli import ...`` is one a text search misses. A
-module name computed at run time stays invisible to any static scan, though a literal adapter
-module name passed to ``importlib.import_module`` or ``__import__`` is caught
-(:func:`_adapter_references`).
+literal adapter module name passed to ``importlib.import_module`` or ``__import__`` is caught
+anywhere in the package (:func:`_adapter_references`), and inside ``qrcheck/checks/**`` an import
+hook may name its module only by a literal or by a name provably inside ``qrcheck.checks``
+(:func:`_computed_imports`) -- the one dynamic import that layer has a use for, loading its own
+nine family modules -- so the computed spelling that defeats a literal scan meets this one. The
+rule judges a call to a hook by name; a hook bound to an alias and called through it stays
+outside it, and holding that would need the scan to run the code it reads.
 """
 
 from __future__ import annotations
@@ -210,7 +214,6 @@ def _literal_scan(root: Path) -> tuple[_Reference, ...]:
     return tuple(sorted(found))
 
 
-
 def _within(path: str, scope: str) -> bool:
     """Report whether a repository-relative path sits in ``scope`` or a subdirectory of it."""
     return path == scope or path.startswith(f"{scope}/")
@@ -272,6 +275,91 @@ def _names_an_adapter(module: str) -> bool:
     return any(
         module == adapter or module.startswith(f"{adapter}.") for adapter in _ADAPTER_MODULES
     )
+
+
+def _hook_of(node: ast.AST) -> str:
+    """Return the import hook a call target names, or ``""`` when it names none.
+
+    A hook reached by attribute (``importlib.import_module``) and one resolved by
+    ``getattr(importlib, "import_module")`` are the same dynamic import in two spellings, so both
+    answer with the hook's own name.
+    """
+    if isinstance(node, ast.Name):
+        return node.id if node.id in _IMPORT_HOOKS else ""
+    if isinstance(node, ast.Attribute):
+        return node.attr if node.attr in _IMPORT_HOOKS else ""
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "getattr":
+        if len(node.args) > 1 and isinstance(node.args[1], ast.Constant):
+            resolved = node.args[1].value
+            if isinstance(resolved, str) and resolved in _IMPORT_HOOKS:
+                return resolved
+    return ""
+
+
+def _module_argument(call: ast.Call) -> ast.AST | None:
+    """Return the expression a dynamic import takes its module name from, or ``None``."""
+    if call.args:
+        return call.args[0]
+    for keyword in call.keywords:
+        if keyword.arg == "name":
+            return keyword.value
+    return None
+
+
+def _rooted_in_the_check_package(node: ast.AST | None) -> bool:
+    """Report whether a module-name expression provably names a module inside ``qrcheck.checks``.
+
+    Two forms can be proved without running the code: ``__name__``, which is ``qrcheck.checks`` in
+    every module of the subtree, and a literal that is that package or a name inside it. A
+    concatenation or an f-string is rooted by its leftmost operand, and an empty literal decides
+    nothing, so ``"" + name`` and ``f"{name}.render"`` are both unproven.
+    """
+    if isinstance(node, ast.Name):
+        return node.id == "__name__"
+    if isinstance(node, ast.Constant):
+        return isinstance(node.value, str) and _reaches_the_check_layer(node.value)
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        return _rooted_in_the_check_package(node.left)
+    if isinstance(node, ast.JoinedStr):
+        for part in node.values:
+            if isinstance(part, ast.Constant) and isinstance(part.value, str):
+                if not part.value:
+                    continue
+                return _reaches_the_check_layer(part.value)
+            if isinstance(part, ast.FormattedValue):
+                return _rooted_in_the_check_package(part.value)
+            return False
+    return False
+
+
+def _computed_imports(root: Path, scope: str) -> list[tuple[str, int, str]]:
+    """Return every unproven dynamic import under ``root`` inside ``scope``, sorted.
+
+    Each entry is ``path``, ``lineno`` and the import hook the statement reaches, one per
+    statement. A call taking a literal module name is judged by :func:`_literal_references`
+    instead, and a name rooted in the check package is the layer's own modules, so neither is
+    reported: what remains is a module name no reading of the code can prove.
+    """
+    chosen: dict[tuple[str, int], str] = {}
+    for relative, tree in _sources(root):
+        if not _within(relative, scope):
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            hook = _hook_of(node.func)
+            if not hook:
+                continue
+            argument = _module_argument(node)
+            if isinstance(argument, ast.Constant) and isinstance(argument.value, str):
+                continue
+            if _rooted_in_the_check_package(argument):
+                continue
+            key = (relative, node.lineno)
+            best = chosen.get(key)
+            if best is None or hook < best:
+                chosen[key] = hook
+    return sorted((path, lineno, hook) for (path, lineno), hook in chosen.items())
 
 
 def test_checks_layer_reaches_only_the_adapter_port() -> None:
@@ -361,6 +449,28 @@ def test_adapters_import_siblings_only_where_declared() -> None:
     )
 
 
+def test_the_check_layer_imports_no_module_by_a_computed_name() -> None:
+    """No check module imports a module whose name it cannot show to be inside the check package.
+
+    AAP §0.3.4 requires the scan to fail on a literal import of one of the five adapters, and
+    :func:`_literal_references` holds that. A name assembled at run time defeats a literal rule,
+    because the adapter's name never appears: ``importlib.import_module("qrcheck.targets." +
+    name)``, ``__import__(module_name)`` and ``getattr(importlib, "import_module")(name)`` each
+    reach an adapter while every literal assertion still passes. This rule constrains the form
+    instead of the argument, which is the only way it survives an edit: every import hook under
+    ``qrcheck/checks/**`` must take its module name from a literal or from a name provably inside
+    ``qrcheck.checks``, which is all that layer loads -- its own nine family modules -- so
+    reaching an adapter by a computed name now costs an edit to this gate as well.
+    """
+    violations = _computed_imports(_PRODUCT_ROOT, scope=_CHECKS_SCOPE)
+    assert not violations, (
+        "Check modules may import only a literal module name or one provably inside "
+        "qrcheck.checks, so no computed name reaches an adapter (AAP §0.3.4 extension "
+        "boundary). Offenders, as path:lineno:hook:\n"
+        f"{_format(violations)}"
+    )
+
+
 def _control_tree(tmp_path: Path) -> Path:
     """Write a miniature package of synthetic offenders and return its directory."""
     package = tmp_path / _PACKAGE
@@ -439,6 +549,53 @@ def test_scanner_flags_synthetic_literals_and_cross_layer_spellings(tmp_path: Pa
     assert into_tests == [
         ("qrcheck/checks/uses_tests.py", 1, "tests.conftest")
     ], f"unexpected test-suite imports: {_format(into_tests)}"
+
+
+def test_scanner_flags_a_computed_module_name_and_permits_a_check_one(tmp_path: Path) -> None:
+    """The three computed spellings are reported with their hook and line; a rooted one is not."""
+    package = _control_tree(tmp_path)
+    concatenated = '    return importlib.import_module("qrcheck.targets." + name)'
+    by_variable = "    return __import__(module_name)"
+    through_getattr = '    return getattr(importlib, "import_module")(module_name)'
+    source = [
+        "import importlib",
+        "",
+        "",
+        "def concatenated(name):",
+        concatenated,
+        "",
+        "",
+        "def from_a_variable(module_name):",
+        by_variable,
+        "",
+        "",
+        "def through_getattr(module_name):",
+        through_getattr,
+        "",
+        "",
+        "def own_family(name):",
+        '    return importlib.import_module(f"{__name__}.{name}")',
+        "",
+        "",
+        "def own_module(name):",
+        '    return importlib.import_module("qrcheck.checks." + name)',
+        "",
+        "",
+        "def a_third_party_probe():",
+        '    return importlib.import_module("cairosvg")',
+        "",
+    ]
+    (package / "checks" / "computed.py").write_text("\n".join(source), encoding="utf-8")
+    reported = _computed_imports(package, scope=_CHECKS_SCOPE)
+    expected = [
+        ("qrcheck/checks/computed.py", source.index(concatenated) + 1, "import_module"),
+        ("qrcheck/checks/computed.py", source.index(by_variable) + 1, "__import__"),
+        ("qrcheck/checks/computed.py", source.index(through_getattr) + 1, "import_module"),
+    ]
+    assert reported == expected, (
+        "the scan reports every import hook whose module name it cannot prove is a check "
+        f"module, and only those, as path:lineno:hook:\n{_format(reported)}"
+    )
 
 
 def test_this_module_does_not_import_the_product() -> None:

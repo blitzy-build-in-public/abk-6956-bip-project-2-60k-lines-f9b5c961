@@ -3,13 +3,14 @@
 Nothing here is a test, and a fixture whose precondition cannot be met calls
 :func:`pytest.fail` rather than skip, because a skip in this layer would hide the gate the
 consuming module holds. :func:`run_cli` runs the product as a real process so a test asserts
-the status a shell would see; :func:`reference_report`, :func:`defective_report` and
-:func:`boundary_runs` are session-scoped, which keeps the five-run sequence of AAP §0.6.1 #9
-inside its 600 s ceiling; :func:`report_roots` hands out two distinct roots, because a shared
-one would make the defective run's nine expected failures unattributable (AAP IM-8);
-:func:`http_target_server` and :func:`cli_target` drive both configurable adapters over their
-real transports; and :func:`write_config` writes a schema-valid document from caller values
-and the schema's declared defaults only (AAP §0.12)."""
+the status a shell would see, and bounds its in-process path on a daemon thread with the same
+guard, so a hang fails by name rather than stalling the session; :func:`reference_report`,
+:func:`defective_report` and :func:`boundary_runs` are session-scoped, which keeps the five-run
+sequence of AAP §0.6.1 #9 inside its 600 s ceiling, and each mints its own report root inside
+the run helper, so no run overwrites another's evidence and the defective run's nine expected
+failures stay attributable (AAP IM-8); :func:`http_target_server` and :func:`cli_target` drive
+both configurable adapters over their real transports; and :func:`write_config` writes a
+schema-valid document from caller values and the schema's declared defaults only (AAP §0.12)."""
 
 from __future__ import annotations
 
@@ -24,7 +25,6 @@ import threading
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from types import MappingProxyType
 from typing import Any, Final, NoReturn
 
 import pytest
@@ -113,7 +113,7 @@ def _committed_corpus_path() -> Path:
     return _REPO_ROOT / str(_default("", "corpus_path"))
 
 
-# The repository root and the two report roots
+# The repository root
 
 
 @pytest.fixture(scope="session")
@@ -127,15 +127,6 @@ def repo_root() -> Path:
                 f"layout has changed under the integration tests."
             )
     return _REPO_ROOT
-
-
-@pytest.fixture
-def report_roots(tmp_path: Path) -> Mapping[str, Path]:
-    """Return one report root per built-in target, distinct by construction (AAP IM-8)."""
-    roots = {target: tmp_path / target for target in _BUILTIN_TARGETS}
-    for root in roots.values():
-        root.mkdir(parents=True, exist_ok=True)
-    return MappingProxyType(roots)
 
 
 # Generating a configuration document: ``tomllib`` cannot write TOML and no writer dependency may be
@@ -261,7 +252,9 @@ def write_config() -> Callable[..., Path]:
 
 
 # Running the command line: two paths and one result type -- the real process boundary by default,
-# which makes an exit status what a shell would see, and an in-process path for repeated calls.
+# which makes an exit status what a shell would see, and an in-process path for repeated calls,
+# which the same guard bounds on a daemon thread so a hang fails by name rather than stalling the
+# session until the CI job's timeout kills it.
 
 
 @dataclass(frozen=True, slots=True)
@@ -315,7 +308,7 @@ def _run_cli_out_of_process(config: Path, args: Sequence[str], timeout: float) -
     )
 
 
-def _run_cli_in_process(config: Path, args: Sequence[str]) -> CliResult:
+def _invoke_in_process(config: Path, args: Sequence[str]) -> CliResult:
     """Invoke ``qrcheck.cli.main.main`` under a ``CliRunner`` and return its exit status."""
     import click
     from click.testing import CliRunner
@@ -344,12 +337,43 @@ def _run_cli_in_process(config: Path, args: Sequence[str]) -> CliResult:
     )
 
 
+def _run_cli_in_process(config: Path, args: Sequence[str], timeout: float) -> CliResult:
+    """Invoke the command line in this interpreter, bounded by ``timeout`` seconds."""
+    outcome: list[CliResult] = []
+    raised: list[BaseException] = []
+
+    def _invoke() -> None:
+        """Invoke the unbounded path and park whatever it returned or raised for the caller."""
+        try:
+            outcome.append(_invoke_in_process(config, args))
+        except BaseException as error:
+            # Captured, never swallowed: the caller re-raises it unchanged, so a genuine CLI
+            # fault reaches the test with its own type, traceback and message.
+            raised.append(error)
+
+    argv = ["--config", str(config), *args]
+    # A daemon thread, so an abandoned invocation cannot hold the session open after the failure.
+    worker = threading.Thread(target=_invoke, name="qrcheck-in-process", daemon=True)
+    worker.start()
+    worker.join(timeout)
+    if worker.is_alive():
+        pytest.fail(
+            f"qrcheck did not finish within {timeout:g}s in this interpreter: "
+            f"{' '.join(argv)}. A hang in-process must fail this gate by name: the only other "
+            f"bound is the e2e job's timeout-minutes, and that kills the job instead of "
+            f"reporting the invocation that hung (AAP §0.6.4)."
+        )
+    if raised:
+        raise raised[0]
+    return outcome[0]
+
+
 def _run_cli(
     *, config: Path, args: Sequence[str], in_process: bool, timeout: float
 ) -> CliResult:
     """Invoke the command line one way or the other and return its status and both streams."""
     if in_process:
-        return _run_cli_in_process(config, args)
+        return _run_cli_in_process(config, args, timeout)
     return _run_cli_out_of_process(config, args, timeout)
 
 

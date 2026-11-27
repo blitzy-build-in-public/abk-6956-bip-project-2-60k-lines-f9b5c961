@@ -10,6 +10,13 @@ targets must produce (:mod:`qrcheck.registry.expectations`, the product's proof 
 is not vacuous) -- and this module re-exports them so a consumer names one package,
 ``qrcheck.registry``, instead of the module each concern lives in.
 
+One rule keeps that surface honest: **a name is never re-exported under the name of the module that
+defines it.** Such a binding would replace the package attribute the module itself occupies, so
+``import qrcheck.registry.check as m`` would hand back the registration decorator instead of the
+module and ``m.REGISTRY`` would raise. ``check`` and ``resolve`` are therefore absent from this
+façade: a consumer reaches them through their home modules, or by name with
+``from qrcheck.registry.check import check`` or ``from qrcheck.registry.resolve import resolve``.
+
 Nothing is defined here: every name in ``__all__`` is the exact object its home module defines, and
 no second definition may exist, because two registries would let ``qrcheck list`` and a run disagree
 about which checks exist and two expected-failure sets would let the non-vacuity gate compare a run
@@ -41,7 +48,6 @@ from qrcheck.registry.check import (
     FAMILY_NAMES,
     REGISTRY,
     RunContext,
-    check,
     get_check,
     isolated_registry,
     iter_checks,
@@ -59,7 +65,6 @@ from qrcheck.registry.resolve import (
     CAPABILITY_CASE_ID,
     Resolution,
     SkipOutcome,
-    resolve,
     skip_case_results,
     unmet_capabilities,
     unmet_dependencies,
@@ -107,7 +112,6 @@ __all__: list[str] = [
     "SkipOutcome",
     "TRUNCATED_PAYLOAD_EXPECTED",
     "WRONG_EC_LEVEL_EXPECTED",
-    "check",
     "expected_failures",
     "expected_passing",
     "get_check",
@@ -117,7 +121,6 @@ __all__: list[str] = [
     "parse_selection",
     "register",
     "registered_ids",
-    "resolve",
     "select",
     "skip_case_results",
     "unmet_capabilities",
