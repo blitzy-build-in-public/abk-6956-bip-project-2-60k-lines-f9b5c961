@@ -17,7 +17,7 @@ Four keys every target shares, whatever its `type`:
 | `type` | string | yes | which adapter drives this target | one of `library`, `cli`, `http`, `reference`, `defective` |
 | `timeout_s` | number | no | ceiling on one operation against the target, not on the run | `> 0`; exceeding it raises `TargetTimeout` |
 | `contrast_floor` | number | no | the luminance ratio this target undertakes to render | `> 1.0`; `RN-CONTRAST` asserts at or above it and `IV-BAD-OPTION` builds a request measured below it |
-| `capabilities` | array of strings | no | the operations the target can perform | every member one of the thirteen names in section 8 |
+| `capabilities` | array of strings | no | the operations the target can perform | every member one of the thirteen names in `configuration.md` section 4 |
 
 The three configurable kinds differ in one respect that matters when you write the table: which per-type keys are legal. A key belonging to another kind — `command` on a `library` target, `callable` on an `http` target — is an **unknown key**, not an inert one, and configuration loading exits 2 naming its dotted path. The per-key rules and their exact diagnostics are in `configuration.md` sections 4 and 5.
 
@@ -253,21 +253,7 @@ A path that resolves to nothing — a missing segment, a `null` value, or a valu
 
 `capabilities` is what your target says it can do. The set is closed at thirteen members, and a declared capability must be **true**: the value is read by the runner before any check runs, so an optimistic list produces failed checks you cannot explain.
 
-| Capability | What a target declaring it promises |
-|------------|-------------------------------------|
-| `png` | produce a raster PNG artefact |
-| `svg` | produce a vector SVG artefact |
-| `ec_level` | honour the requested error-correction level |
-| `module_size` | honour a requested module edge length |
-| `quiet_zone` | honour a requested quiet-zone width |
-| `color` | honour requested foreground and background colours |
-| `logo_overlay` | composite a supplied overlay bitmap onto the symbol |
-| `version_pin` | honour a pinned version |
-| `mask_pin` | honour a pinned mask |
-| `metadata_version` | report the symbol's version in its metadata |
-| `metadata_ec` | report the symbol's error-correction level in its metadata |
-| `metadata_mask` | report the symbol's mask in its metadata |
-| `metadata_mode` | report the symbol's encoding mode in its metadata |
+These are the thirteen names: `png`, `svg`, `ec_level`, `module_size`, `quiet_zone`, `color`, `logo_overlay`, `version_pin`, `mask_pin`, `metadata_version`, `metadata_ec`, `metadata_mask` and `metadata_mode`. What each one promises a target that declares it is tabulated in `configuration.md` section 4, beside the `capabilities` key's validation rule and the exit-2 diagnostic for a name outside the set; that table is the vocabulary's single home, and the meanings are not repeated here. `qrcheck/config/schema.py` refuses any member that table does not carry, so a capability added or renamed is a change to that table and to the list of names above, never to a second copy of what each one means.
 
 Which checks each member unlocks is the other half of the same contract: `RT-ROUNDTRIP` requires `png`; `SY-EC-MATCH` requires `png` and `ec_level`; `RN-QUIET-ZONE` requires `png` and `quiet_zone`; `SY-MATRIX-EQUIV` requires `png`, `ec_level`, `version_pin` and `mask_pin`; `RN-SVG` requires `svg` and `quiet_zone`. `qrcheck list --json` prints the exact requirement set of every check on this installation, which is the authoritative answer for any of them.
 

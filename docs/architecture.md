@@ -16,7 +16,7 @@ flowchart TD
   end
   subgraph Orchestration
     Select[Selection and capability resolution]
-    Probe[Pre-flight target probe]
+    Probe[Pre-flight host probe - decoders, rasterizer, pins]
     Loop[Walk checks then cases]
     Run[runner assembles RunResult]
   end
@@ -241,7 +241,7 @@ Exactly five adapter errors exist, all subclasses of `TargetError`. Each has exa
 
 Every `except` inside `qrcheck/targets/` converts a library exception into one of the five rather than re-raising it raw. The list is exhaustive:
 
-- **segno** — `DataOverflowError` → `TargetRejected`, with the capacity and the requested length in the message; `VersionError`, `ErrorLevelError`, `ModeError`, `MaskError` and `ValueError` → `TargetRejected` when they report a request the target itself should have rejected first, and `TargetContractError` otherwise. Both built-in targets validate the request before calling segno precisely so this mapping stays predictable.
+- **segno** — `DataOverflowError` → `TargetRejected`, with the capacity and the requested length in the message; `ValueError` → `TargetRejected` carrying segno's own text, the pinned release's only other complaint and its wording for an illegal level, version or mask; anything else → `TargetContractError`. The pinned segno 1.6.6 defines exactly one dedicated exception, `DataOverflowError`, and has no `VersionError`, `ErrorLevelError`, `ModeError` or `MaskError` — segno's own documentation still names the first two of those, but nothing at that version defines any of them — and where a release does define them they are `ValueError` subclasses, so the `ValueError` clause above already converts them. Both built-in targets validate the request before calling segno precisely so this mapping stays predictable.
 - **httpx** — `TimeoutException` → `TargetTimeout`; `ConnectError`, `ConnectTimeout` and `UnsupportedProtocol` → `TargetUnavailable`; a non-2xx status or an undecodable body → `TargetContractError`.
 - **subprocess** — `TimeoutExpired` → `TargetTimeout`; `FileNotFoundError` and `PermissionError` on spawn → `TargetUnavailable`; a non-zero exit whose output parses as a declared rejection → `TargetRejected`, otherwise `TargetContractError`.
 - **library adapter** — `ImportError` or `AttributeError` while resolving the callable → `TargetUnavailable`.
@@ -390,7 +390,7 @@ Three consequences of that table are worth naming, because they are the ones a c
 
 - **`failure_id()` in `qrcheck/report/model.py` is the only definition of a failure ID.** Its shape is `<CHECK-ID>__<case_id>__<reason>`, every character outside `[A-Za-z0-9._-]` replaced by `_`, and the whole identifier bounded at 64 characters: when the sanitized form is longer, its first 55 characters are kept and an underscore plus an 8-hex `sha256` digest is appended, so the bound applies to the complete path segment rather than to its prefix. `qrcheck/evidence/naming.py` calls it rather than re-deriving it, which is why the identifier inside an evidence path cannot disagree with the identifier `summary.json` records for the same case.
 - **`qrcheck/registry/check.py` holds the only literal list of the twenty-one check identifiers** and the nine family names with the prefix each owns. A check registers itself through the decorator at import of its family module; `FAMILY_MODULES` in `qrcheck/checks/__init__.py` is the explicit, ordered tuple of those nine modules, so which checks exist never depends on whether some unrelated module happened to import a family.
-- **Thresholds are declared once, in `qrcheck.toml`,** with the fallback for an omitted key declared once as a `models.DEFAULT_*` constant. No check, test or document restates a number, so a volume, budget or fraction cannot disagree with itself across the product. `configuration.md` owns the keys and their defaults; `performance.md` owns the budgets defined on them.
+- **Thresholds are declared once, in `qrcheck.toml`,** with the fallback for an omitted key declared once as a `models.DEFAULT_*` constant. A check or test reads a declared threshold from its key rather than from a numeric literal of its own, and no document restates one as an authority: each document that quotes a declared default for its reader names the configuration key that owns it, and the quotation carries no authority, so a volume, budget or fraction cannot disagree with itself across the product. `configuration.md` owns the keys and their defaults; `performance.md` owns the budgets defined on them.
 
 ## 11. Determinism, structurally
 
@@ -458,7 +458,7 @@ No user rules were provided for this project, so the constraints below are the r
 | CPython 3.11 on Linux and macOS; Windows out of scope | The interpreter guard at CLI start-up in `qrcheck/cli/main.py`, and the platform statement `doctor` prints | `dependencies.md` for the platform matrix |
 | `qrcheck/checks/` free of adapter-specific imports, so a fourth adapter kind needs no check change | `tests/unit/test_layering.py`'s AST scan and the allow-list it carries (section 2) | this document |
 | No check weakened, skipped, `xfail`ed, retried or threshold-relaxed to make a target pass; the defective target and its expected failing set are deliverables | `qrcheck/targets/defective.py` with its declared defect table, `qrcheck/registry/expectations.py` as the single declaration of the expected set, and set equality asserted in CI | `checks.md` for the expected set and the per-check assertions |
-| Every threshold declared once, so changing one changes the configuration default and the criterion that reads it | The `qrcheck.toml` default per threshold and the single check that reads it; no numeric literal for a threshold in any check, test or document | `configuration.md` for the keys, `performance.md` for the budgets |
+| Every threshold declared once, so changing one changes the configuration default and the criterion that reads it | The `qrcheck.toml` default per threshold and the single check that reads it, which reads the key rather than a copy of the number; no document restates a value as an authority — each that quotes a declared default names the key that owns it, and the quotation carries no authority | `configuration.md` for the keys, `performance.md` for the budgets |
 | Every dependency pinned to an exact version in a committed lock file, installed with hash verification | `requirements.lock` and `requirements-dev.lock` with their `.in` inputs, and the gate that installs from them | `dependencies.md` |
 
 Where the request's own text is internally in tension, this document follows the resolution the code implements and says so at the point it matters. The one case a reader is most likely to trip over: a capability shortfall is a `skipped` result with reason `unsupported_capability`, never exit 2, because whether a capability set is sufficient depends on the run-time check selection — the same valid configuration would be wrong for one selection and correct for the next. Exit 2 is reserved for configuration that is wrong in itself, including an unknown capability *member*.
