@@ -1,0 +1,36 @@
+# Generated report output: `qrcheck run` writes summary.json, junit.xml, index.html
+# and the whole evidence/ tree under report_dir (reports/ by default). Excluding it
+# is a correctness rule, not hygiene: a committed report would put a volatile
+# duration into version control, and would make the corpus-drift check compare a
+# file against itself.
+reports/
+
+# Python bytecode and tool caches, produced by importing the package and by running
+# pytest. The [cod] class covers .pyc, .pyo and .pyd in one pattern.
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Coverage data and HTML reports from `pytest --cov=qrcheck` and `coverage report`.
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# Packaging and build output from wheel builds, sdists and editable installs.
+build/
+dist/
+*.egg-info/
+*.egg
+
+# Per-checkout virtual environments; dependencies install from the committed locks.
+.venv/
+venv/
+env/
+
+# Local scratch directory used as TMPDIR when the suite runs, so the cleanup check
+# only ever sees the framework's own temporary entries.
+.tmp/
+
+# Archive metadata written by macOS, a supported platform.
+.DS_Store
