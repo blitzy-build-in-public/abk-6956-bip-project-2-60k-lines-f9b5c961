@@ -13,11 +13,16 @@ breaking the exit-code rule; the ten per-result fields and their vocabulary, wit
 deliberately scrambled; ``evidence_dir`` ``null`` for a pass and a relative posix path otherwise,
 since an absolute one names the clone; the canonical text form (sorted keys at every depth,
 two-space indent, UTF-8, LF, one trailing newline, unserialisable values raising); the volatile
-inventory of exactly ``started_at``, ``finished_at`` and each ``results[].duration_ms``; and
-``run_id`` as a content hash stable for one input and different for any changed selection, EC
-level, seed or corpus.
+inventory of exactly ``started_at``, ``finished_at``, each ``results[].duration_ms`` and the
+measured leaves of each ``PF-*`` probe's ``decoded.metrics``, with the configuration-derived
+metrics still compared; and ``run_id``, read off a real run through the public
+:func:`qrcheck.runner.run_suite` path and never from the private derivation, as a SHA-256 content
+hash that repeats for identical inputs and moves when the adapter name, the selected check set, the
+EC level, the seed or the ``--class`` corpus filter changes -- which pins the five arguments the
+runner itself supplies to the derivation, not the derivation alone.
 """
 
+import copy
 import dataclasses
 import hashlib
 import json
@@ -28,10 +33,13 @@ from typing import Any, Final
 
 import pytest
 
+from qrcheck.config.models import Config
 from qrcheck.evidence.naming import EVIDENCE_DIR_NAME, relative_case_evidence_dir
+from qrcheck.registry.selection import Selection
 from qrcheck.report.json_report import dumps_canonical, write_canonical_json, write_summary
 from qrcheck.report.model import CaseResult, Counts, Reason, RunResult, Status
-from qrcheck.runner import _run_identifier
+from qrcheck.runner import run_suite
+from qrcheck.targets.base import Adapter
 
 # The exact schema, stated once. AAP §0.3.4 fixes both key sets as a stable public surface, so each
 # is compared by set equality against the payload a real write produced.
@@ -66,9 +74,20 @@ _RESULT_FIELDS: Final[frozenset[str]] = frozenset(
 # The four tallies, kept separate, read from nothing but this declaration.
 _COUNT_FIELDS: Final[frozenset[str]] = frozenset({"error", "failed", "passed", "skipped"})
 
-# The complete volatile inventory of AAP §0.5.4: two run timestamps and each result's duration.
+# The complete volatile inventory of AAP §0.5.4: two run timestamps, each result's duration, and
+# the measured leaves of a ``PF-*`` result's ``decoded.metrics``. AAP §0.6.1 gate 10 requires the
+# two performance probes to record their measurement, so the determinism comparison masks it instead
+# of dropping it, and AAP §0.5.5 keeps it out of every comparison: a measured latency or throughput
+# is judged once against the configured floor and never against another run's measurement.
 _VOLATILE_RUN_FIELDS: Final[frozenset[str]] = frozenset({"started_at", "finished_at"})
 _VOLATILE_RESULT_FIELDS: Final[frozenset[str]] = frozenset({"duration_ms"})
+_VOLATILE_METRIC_FIELDS: Final[frozenset[str]] = frozenset(
+    {"encode_p95_ms", "decode_p95_ms", "symbols_per_minute"}
+)
+
+# The metrics a probe copies from configuration rather than measuring, so two runs of the same
+# configuration agree on them and they must survive every masking.
+_STABLE_METRIC_FIELDS: Final[frozenset[str]] = frozenset({"image_px", "samples", "warmup"})
 
 # The two closed vocabularies, taken from the enums themselves rather than retyped, so a member
 # added to the model is accepted here without this module carrying a stale list.
@@ -91,9 +110,59 @@ _LATER_STARTED_AT: Final[str] = "2025-06-30T12:34:56+00:00"
 _LATER_FINISHED_AT: Final[str] = "2025-06-30T12:35:07+00:00"
 
 # One duration per case, in the role order :func:`_mixed_results` declares; the two tuples differ in
-# this field alone.
-_BASE_DURATIONS: Final[tuple[float, ...]] = (1.5, 2.25, 12.5, 0.5, 30.0)
-_LATER_DURATIONS: Final[tuple[float, ...]] = (9.75, 4.0, 1.25, 7.5, 0.125)
+# this field alone, so the only other difference between the two runs is the probes' measurement.
+_BASE_DURATIONS: Final[tuple[float, ...]] = (1.5, 2.25, 12.5, 0.5, 30.0, 4.5, 6.25)
+_LATER_DURATIONS: Final[tuple[float, ...]] = (9.75, 4.0, 1.25, 7.5, 0.125, 2.0, 3.5)
+
+# The two performance probes, by the check ID a real run files each under.
+_ENCODE_PROBE: Final[str] = "PF-ENCODE"
+_DECODE_PROBE: Final[str] = "PF-DECODE"
+_PROBE_CHECKS: Final[tuple[str, str]] = (_ENCODE_PROBE, _DECODE_PROBE)
+
+# Each probe's ``decoded.metrics``, shaped like the real result's: the keys that probe publishes.
+# The measured leaves differ between the two runs, the way two real runs' measurements do, while the
+# metrics configuration fixes -- ``samples``, ``warmup`` and ``image_px`` -- are equal in both,
+# because configuration decides them and not the clock.
+_BASE_PROBE_METRICS: Final[dict[str, dict[str, float | int]]] = {
+    _ENCODE_PROBE: {
+        "encode_p95_ms": 0.98,
+        "symbols_per_minute": 58630.7,
+        "samples": 105,
+        "warmup": 5,
+    },
+    _DECODE_PROBE: {
+        "decode_p95_ms": 42.55,
+        "image_px": 500,
+        "samples": 60,
+        "warmup": 5,
+    },
+}
+_LATER_PROBE_METRICS: Final[dict[str, dict[str, float | int]]] = {
+    _ENCODE_PROBE: {
+        **_BASE_PROBE_METRICS[_ENCODE_PROBE],
+        "encode_p95_ms": 1.31,
+        "symbols_per_minute": 63260.5,
+    },
+    _DECODE_PROBE: {
+        **_BASE_PROBE_METRICS[_DECODE_PROBE],
+        "decode_p95_ms": 39.83,
+    },
+}
+
+# The measured leaves each probe publishes: its block minus the metrics configuration fixes. The
+# sets together are the documented volatile inventory, so the fixture exercises every key a masking
+# helper must mask and no key it must leave alone.
+_PROBE_MEASURED_FIELDS: Final[dict[str, frozenset[str]]] = {
+    probe: frozenset(block) - _STABLE_METRIC_FIELDS
+    for probe, block in _BASE_PROBE_METRICS.items()
+}
+
+# Each probe's ``expected``: the configured floors its measurement is judged against, equal in both
+# runs, so a masked comparison still holds the probe's judgement and not only its numbers.
+_PROBE_EXPECTED: Final[dict[str, dict[str, float | int]]] = {
+    _ENCODE_PROBE: {"encode_p95_ms": 250.0, "min_symbols_per_minute": 120.0},
+    _DECODE_PROBE: {"decode_p95_ms": 400.0, "image_px": 500},
+}
 
 # The order the fixture run's cases are handed to ``RunResult`` in: deliberately not sorted, so the
 # ordering assertion compares against an order the model had to produce.
@@ -103,6 +172,8 @@ _CONSTRUCTION_ORDER: Final[tuple[str, ...]] = (
     "error-cleanup",
     "pass-roundtrip",
     "fail-roundtrip",
+    "probe-encode",
+    "probe-decode",
 )
 
 # The signature of the shared masking helper, as ``tests/conftest.py`` supplies it.
@@ -120,9 +191,18 @@ def _mixed_results(
     make_case_result: Callable[..., CaseResult],
     *,
     durations: tuple[float, ...] = _BASE_DURATIONS,
+    probe_metrics: Mapping[str, Mapping[str, float | int]] = _BASE_PROBE_METRICS,
 ) -> dict[str, CaseResult]:
-    """Return the fixture run's five case results keyed by role, reaching all four statuses."""
-    roundtrip_pass, second_pass, roundtrip_fail, symbol_skip, cleanup_error = durations
+    """Return the fixture run's seven case results keyed by role, reaching all four statuses."""
+    (
+        roundtrip_pass,
+        second_pass,
+        roundtrip_fail,
+        symbol_skip,
+        cleanup_error,
+        encode_probe,
+        decode_probe,
+    ) = durations
     fail_check, fail_case = "RT-ROUNDTRIP", "corpus:url-003"
     skip_check, skip_case = "SY-MASK", "corpus:url-004"
     error_check, error_case = "CL-ARTIFACTS", "synthetic:artifacts"
@@ -179,6 +259,24 @@ def _mixed_results(
                 error_check, error_case, Reason.INTERNAL_ERROR
             ),
         ),
+        "probe-encode": make_case_result(
+            check_id=_ENCODE_PROBE,
+            case_id="synthetic:pf-encode",
+            status=Status.PASSED,
+            duration_ms=encode_probe,
+            request={"probe": "encode", "payload_utf8": "https://example.test/qr"},
+            decoded={"metrics": dict(probe_metrics[_ENCODE_PROBE])},
+            expected=dict(_PROBE_EXPECTED[_ENCODE_PROBE]),
+        ),
+        "probe-decode": make_case_result(
+            check_id=_DECODE_PROBE,
+            case_id="synthetic:pf-decode",
+            status=Status.PASSED,
+            duration_ms=decode_probe,
+            request={"probe": "decode", "image_px": 500},
+            decoded={"metrics": dict(probe_metrics[_DECODE_PROBE])},
+            expected=dict(_PROBE_EXPECTED[_DECODE_PROBE]),
+        ),
     }
 
 
@@ -189,10 +287,11 @@ def _build_run(
     started_at: str = _BASE_STARTED_AT,
     finished_at: str = _BASE_FINISHED_AT,
     durations: tuple[float, ...] = _BASE_DURATIONS,
+    probe_metrics: Mapping[str, Mapping[str, float | int]] = _BASE_PROBE_METRICS,
     **overrides: Any,
 ) -> RunResult:
     """Return the fixture run with its cases handed over in a scrambled order."""
-    cases = _mixed_results(make_case_result, durations=durations)
+    cases = _mixed_results(make_case_result, durations=durations, probe_metrics=probe_metrics)
     return make_run_result(
         tuple(cases[role] for role in _CONSTRUCTION_ORDER),
         started_at=started_at,
@@ -232,9 +331,27 @@ def _run_with_changed_result(
     )
 
 
+def _run_with_changed_metrics(
+    make_case_result: Callable[..., CaseResult],
+    make_run_result: Callable[..., RunResult],
+    *,
+    role: str,
+    probe: str,
+    **changes: float | int,
+) -> RunResult:
+    """Return the fixture run with one probe's ``decoded.metrics`` altered in the named keys."""
+    return _run_with_changed_result(
+        make_case_result,
+        make_run_result,
+        role=role,
+        decoded={"metrics": {**_BASE_PROBE_METRICS[probe], **changes}},
+    )
+
+
 # The documented non-volatile fields and the change that alters each one, exactly once. The
-# identifiers are the field names, so a failing case names the field rather than an index; a
-# ``check_id`` change leaves the evidence directory alone so exactly one field moves.
+# identifiers are the field names -- or a dotted path inside one, as ``metrics.samples`` is -- so a
+# failing case names the field rather than an index; a ``check_id`` change leaves the evidence
+# directory alone so exactly one field moves.
 _NONVOLATILE_CHANGES: Final[dict[str, _Mutation]] = {
     "adapter": lambda make_case_result, make_run_result, base: _rebuild(
         make_case_result, make_run_result, base, adapter="defective"
@@ -270,6 +387,15 @@ _NONVOLATILE_CHANGES: Final[dict[str, _Mutation]] = {
     ),
     "loc_count": lambda make_case_result, make_run_result, base: _rebuild(
         make_case_result, make_run_result, base, loc_count=base.loc_count + 1
+    ),
+    "metrics.samples": lambda make_case_result, make_run_result, base: (
+        _run_with_changed_metrics(
+            make_case_result,
+            make_run_result,
+            role="probe-encode",
+            probe=_ENCODE_PROBE,
+            samples=2 * _BASE_PROBE_METRICS[_ENCODE_PROBE]["samples"],
+        )
     ),
     "reason": lambda make_case_result, make_run_result, base: (
         _run_with_changed_result(
@@ -351,6 +477,31 @@ def _differing_keys(before: Mapping[str, Any], after: Mapping[str, Any]) -> froz
 def _scalars_of(payload: Mapping[str, Any]) -> dict[str, Any]:
     """Return a summary payload's top-level fields other than ``results``."""
     return {key: value for key, value in payload.items() if key != "results"}
+
+
+def _probe_metrics(payload: Mapping[str, Any], check_id: str) -> Mapping[str, Any]:
+    """Return one performance probe's ``decoded.metrics`` from a summary payload.
+
+    The assertions that read a measurement would pass on a fixture that had lost its probe, so the
+    lookup fails loudly rather than defaulting to an empty mapping.
+    """
+    results = payload["results"]
+    assert isinstance(results, list)
+    probes = [entry for entry in results if entry.get("check_id") == check_id]
+    assert len(probes) == 1, f"expected one {check_id} probe, found {len(probes)}"
+    metrics = probes[0].get("decoded", {}).get("metrics")
+    assert isinstance(metrics, Mapping), f"{check_id} carries no metrics block: {metrics!r}"
+    return metrics
+
+
+def _probe_metric_differences(
+    before: Mapping[str, Any], after: Mapping[str, Any]
+) -> dict[str, frozenset[str]]:
+    """Return, per probe, the metric keys whose value differs between two summary payloads."""
+    return {
+        probe: _differing_keys(_probe_metrics(before, probe), _probe_metrics(after, probe))
+        for probe in _PROBE_CHECKS
+    }
 
 
 def _reread(path: Path) -> bytes:
@@ -554,7 +705,7 @@ def test_masking_the_volatile_fields_makes_two_runs_byte_equal(
     report_dir: Path,
     mask_volatile: _MaskVolatile,
 ) -> None:
-    """Two runs differing only in timestamps and durations are byte-equal once masked."""
+    """Two runs differing only in the volatile fields are byte-equal once masked."""
     base = _build_run(make_case_result, make_run_result)
     later = _build_run(
         make_case_result,
@@ -562,17 +713,33 @@ def test_masking_the_volatile_fields_makes_two_runs_byte_equal(
         started_at=_LATER_STARTED_AT,
         finished_at=_LATER_FINISHED_AT,
         durations=_LATER_DURATIONS,
+        probe_metrics=_LATER_PROBE_METRICS,
     )
     base_path = write_summary(base, report_dir / "base.json")
     later_path = write_summary(later, report_dir / "later.json")
     # First prove the difference is real and confined to the volatile fields, so the equality below
-    # is the masking at work and not two identical runs agreeing with themselves.
+    # is the masking at work and not two identical runs agreeing with themselves. An ordinary result
+    # moves in its duration alone; a performance probe moves in its whole ``decoded`` mapping,
+    # because that is where its measurement lives.
     assert _reread(base_path) != _reread(later_path)
     assert _differing_keys(_scalars_of(base.as_dict()), _scalars_of(later.as_dict())) == (
         _VOLATILE_RUN_FIELDS
     )
+    probe_moves = _VOLATILE_RESULT_FIELDS | {"decoded"}
     for original, altered in zip(base.as_dict()["results"], later.as_dict()["results"]):
-        assert _differing_keys(original, altered) == _VOLATILE_RESULT_FIELDS
+        if original["check_id"] in _PROBE_CHECKS:
+            assert _differing_keys(original, altered) == probe_moves
+        else:
+            assert _differing_keys(original, altered) == _VOLATILE_RESULT_FIELDS
+    # Inside the probes exactly the measured leaves moved, and the metrics their configuration fixes
+    # are the same in both, so the equality below rests on nothing but the documented inventory.
+    assert _probe_metric_differences(base.as_dict(), later.as_dict()) == _PROBE_MEASURED_FIELDS
+    for probe in _PROBE_CHECKS:
+        original = _probe_metrics(base.as_dict(), probe)
+        altered = _probe_metrics(later.as_dict(), probe)
+        assert set(original) == set(altered) == set(_BASE_PROBE_METRICS[probe])
+        for name in sorted(set(original) - _PROBE_MEASURED_FIELDS[probe]):
+            assert original[name] == altered[name]
     assert _masked_text(base_path, mask_volatile) == _masked_text(later_path, mask_volatile)
 
 
@@ -581,18 +748,34 @@ def test_mask_volatile_masks_exactly_the_documented_inventory(
     make_run_result: Callable[..., RunResult],
     mask_volatile: _MaskVolatile,
 ) -> None:
-    """The shared masking helper touches exactly three fields, and no more may join them."""
+    """The shared masking helper touches the documented fields, and no more may join them."""
     run = _build_run(make_case_result, make_run_result)
-    before = run.as_dict()
+    # A deep copy, so a helper that masked a nested mapping in place would move this snapshot too
+    # and the non-mutation assertion at the end would pass on nothing.
+    before = copy.deepcopy(run.as_dict())
     masked = mask_volatile(run)
     # Nothing is added or dropped, and the order of the results is preserved.
     assert set(masked) == set(before)
     assert _differing_keys(_scalars_of(before), _scalars_of(masked)) == _VOLATILE_RUN_FIELDS
     assert len(masked["results"]) == len(before["results"])
+    probe_moves = _VOLATILE_RESULT_FIELDS | {"decoded"}
     for original, altered in zip(before["results"], masked["results"]):
         assert set(altered) == set(original)
-        assert _differing_keys(original, altered) == _VOLATILE_RESULT_FIELDS
-    # The helper copies: the run it masked still reports what it reported.
+        if original["check_id"] in _PROBE_CHECKS:
+            assert _differing_keys(original, altered) == probe_moves
+        else:
+            assert _differing_keys(original, altered) == _VOLATILE_RESULT_FIELDS
+    # Inside the probes' metrics blocks exactly the measured leaves moved and every key is still
+    # there, so a mask widened to a configuration-derived metric fails here.
+    assert _probe_metric_differences(before, masked) == _PROBE_MEASURED_FIELDS
+    assert set().union(*_PROBE_MEASURED_FIELDS.values()) == _VOLATILE_METRIC_FIELDS
+    for probe in _PROBE_CHECKS:
+        original = _probe_metrics(before, probe)
+        altered = _probe_metrics(masked, probe)
+        assert set(original) == set(altered) == set(_BASE_PROBE_METRICS[probe])
+        for name in sorted(set(original) - _PROBE_MEASURED_FIELDS[probe]):
+            assert original[name] == altered[name]
+    # The helper copies: the run it masked still reports what it reported, nested values included.
     assert run.as_dict() == before
 
 
@@ -616,34 +799,136 @@ def test_any_non_volatile_change_breaks_the_masked_equality(
 
 # --- ``run_id``: a content hash, never a UUID and never a clock reading ---
 
+# The one check that calls no target at all: AAP §0.8.1's case matrix gives ``CL-ARTIFACTS`` a
+# single run-level case with zero encodes and zero decodes, which is what makes a *real* run of it
+# cheap enough for a unit test to drive the identity several times.
+_CLEANUP_CHECK: Final[str] = "CL-ARTIFACTS"
+
+# The cheapest second check in the same matrix -- ``IV-EMPTY`` sends one request and decodes
+# nothing -- so varying the selected-check-set and selector-order inputs costs one encode each.
+_EMPTY_INPUT_CHECK: Final[str] = "IV-EMPTY"
+
+# A corpus class the filter narrows to, so a ``--class`` run digests fewer records than the
+# whole-corpus run it is compared with (AAP §0.3.4's "corpus digest").
+_FILTERED_CLASS: Final[str] = "url"
+
+# The EC level and the adapter name a run is repeated with, one input moved at a time.
+_OTHER_EC_LEVEL: Final[str] = "Q"
+_OTHER_ADAPTER_NAME: Final[str] = "defective"
+
+
+def _run(
+    config: Config,
+    selection: Selection,
+    adapter: Adapter,
+    *,
+    ec_level: str = "M",
+    seed: int | None = None,
+) -> RunResult:
+    """Run `selection` through the interface AAP §0.8.1 names and return the model it reported.
+
+    ``seed`` defaults to the configured one, so a caller moves exactly the input it means to move
+    and leaves the other four alone. This is the public path ``qrcheck run`` takes, not the
+    derivation, which is what lets the assertions below pin the runner's own call site.
+
+    Args:
+        config: The resolved configuration, which owns the corpus and the report directory.
+        selection: The ``--checks`` and ``--class`` selection to run.
+        adapter: The target, reached only by the checks that need one; ``CL-ARTIFACTS`` needs none.
+        ec_level: The error-correction level to run at.
+        seed: The run's seed, or ``None`` for the configured one.
+
+    Returns:
+        The finished :class:`~qrcheck.report.model.RunResult`, whose ``run_id`` is the identity
+        this module asserts.
+    """
+    return run_suite(
+        config, selection, adapter, ec_level, config.seed if seed is None else seed
+    )
+
 
 def test_the_run_identifier_is_a_content_hash_stable_in_its_inputs(
-    make_case_result: Callable[..., CaseResult],
+    config_factory: Callable[..., Config],
+    stub_adapter: Adapter,
     make_run_result: Callable[..., RunResult],
-    corpus_subset: tuple[Any, ...],
 ) -> None:
-    """The derivation repeats for one input and differs for every changed input."""
-    base = _build_run(make_case_result, make_run_result)
-    checks = ("RT-ROUNDTRIP", "SY-MASK")
-    identifier = _run_identifier("reference", "M", base.seed, checks, corpus_subset)
-    # A content hash: the same inputs give the same identity, in any input order.
-    assert identifier == _run_identifier("reference", "M", base.seed, checks, corpus_subset)
-    assert identifier == _run_identifier(
-        "reference", "M", base.seed, ("SY-MASK", "RT-ROUNDTRIP"), corpus_subset
+    """A real run's identity repeats for one input and moves with each of the five AAP §0.3.4
+    hashes, so what fails here is the runner's own call site, not only the derivation."""
+    config = config_factory()
+    selection = Selection(checks=_CLEANUP_CHECK)
+    run_result = _run(config, selection, stub_adapter)
+    identifier = run_result.run_id
+    # The identity of a run that really happened: one check, one run-level case, and it passed.
+    assert len(run_result.results) == 1, (
+        f"{_CLEANUP_CHECK} reported {len(run_result.results)} results; an identity has to describe "
+        "a run whose case is in it"
+    )
+    assert run_result.counts.passed == 1, (
+        f"the run's single case did not pass: counts are {run_result.counts}"
+    )
+    # (1) Identical inputs -- the same adapter name, EC level, seed, check set and corpus -- give
+    #     the same identity, which is what makes a run reproducible from ``summary.json`` alone.
+    repeated = _run(config, selection, stub_adapter).run_id
+    assert repeated == identifier, (
+        "two runs of identical adapter, EC level, seed, check set and corpus reported different "
+        f"identities: {repeated} and {identifier}"
+    )
+    # (2) The selected check IDs are hashed sorted, not in the order the selector spelled them
+    #     (AAP §0.5.3), so the same two checks written the other way round are one identity.
+    forward = _run(
+        config, Selection(checks=f"{_CLEANUP_CHECK},{_EMPTY_INPUT_CHECK}"), stub_adapter
+    ).run_id
+    backward = _run(
+        config, Selection(checks=f"{_EMPTY_INPUT_CHECK},{_CLEANUP_CHECK}"), stub_adapter
+    ).run_id
+    assert forward == backward, (
+        "the selected check IDs were hashed in selector order: the pair and its reverse reported "
+        f"{forward} and {backward}"
+    )
+    # (3) The adapter name. Assigned on the shared stub and put back at once, so no run below
+    #     inherits the other name.
+    own_name = stub_adapter.name
+    stub_adapter.name = _OTHER_ADAPTER_NAME
+    renamed = _run(config, selection, stub_adapter).run_id
+    stub_adapter.name = own_name
+    assert renamed != identifier, (
+        f"the run identity ignored the adapter name: {own_name!r} and "
+        f"{_OTHER_ADAPTER_NAME!r} reported the same identity"
+    )
+    # (4) The EC level.
+    other_level = _run(config, selection, stub_adapter, ec_level=_OTHER_EC_LEVEL).run_id
+    assert other_level != identifier, (
+        f"the run identity ignored the EC level: 'M' and {_OTHER_EC_LEVEL!r} reported the same "
+        "identity"
+    )
+    # (5) The seed: the configured one and the next integer are different runs.
+    other_seed = _run(config, selection, stub_adapter, seed=config.seed + 1).run_id
+    assert other_seed != identifier, (
+        f"the run identity ignored the seed: {config.seed} and {config.seed + 1} reported the same "
+        "identity"
+    )
+    # (6) The selected check set: one check and two checks are different runs, though the pair
+    #     above proves the *order* they are named in is not part of the identity.
+    assert forward != identifier, (
+        f"the run identity ignored the selected check set: {_CLEANUP_CHECK} alone and it with "
+        f"{_EMPTY_INPUT_CHECK} reported the same identity"
+    )
+    # (7) The corpus digest: a ``--class`` run digests only the records the filter kept.
+    filtered = _run(
+        config,
+        Selection(checks=_CLEANUP_CHECK, class_globs=(_FILTERED_CLASS,)),
+        stub_adapter,
+    ).run_id
+    assert filtered != identifier, (
+        "the run identity ignored the corpus digest: the whole corpus and the "
+        f"{_FILTERED_CLASS!r} filter reported the same identity"
     )
     # A SHA-256 hex digest, so it can never be the UUID or timestamp the model refuses -- and the
     # model accepts it, which is the other half of that contract.
-    assert re.fullmatch(r"[0-9a-f]{64}", identifier) is not None
-    assert make_run_result((), run_id=identifier).run_id == identifier
-    # Every component the identity covers changes the identity.
-    assert identifier != _run_identifier("defective", "M", base.seed, checks, corpus_subset)
-    assert identifier != _run_identifier("reference", "H", base.seed, checks, corpus_subset)
-    assert identifier != _run_identifier("reference", "M", base.seed + 1, checks, corpus_subset)
-    assert identifier != _run_identifier(
-        "reference", "M", base.seed, ("RT-ROUNDTRIP",), corpus_subset
+    assert re.fullmatch(r"[0-9a-f]{64}", identifier) is not None, (
+        f"the run identity is not a SHA-256 hex digest: {identifier!r}"
     )
-    assert len(corpus_subset) > 1
-    assert identifier != _run_identifier("reference", "M", base.seed, checks, corpus_subset[:1])
+    assert make_run_result((), run_id=identifier).run_id == identifier
 
 
 @pytest.mark.parametrize(

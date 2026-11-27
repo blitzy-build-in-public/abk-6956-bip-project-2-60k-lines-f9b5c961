@@ -1280,6 +1280,7 @@ def _seeded_case(record: _Record, kind: str) -> Case:
     family="damage",
     requires=frozenset({Capability.png}),
     dependencies=(DEPENDENCY_PRIMARY_DECODER,),
+    corpus_driven=True,
 )
 def dm_resilience_cases(ctx: RunContext) -> Iterator[Case]:
     """Yield the 56 cases of ``DM-RESILIENCE``: eight records by seven damage kinds.
@@ -1298,6 +1299,7 @@ def dm_resilience_cases(ctx: RunContext) -> Iterator[Case]:
     family="damage",
     requires=frozenset({Capability.png}),
     dependencies=(DEPENDENCY_PRIMARY_DECODER,),
+    corpus_driven=True,
 )
 def dm_seeded_cases(ctx: RunContext) -> Iterator[Case]:
     """Yield the 56 cases of ``DM-SEEDED``: the same matrix as ``DM-RESILIENCE``.

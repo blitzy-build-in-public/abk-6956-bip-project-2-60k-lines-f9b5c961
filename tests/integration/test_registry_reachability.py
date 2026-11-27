@@ -295,7 +295,11 @@ def test_family_partition_matches_the_plan(
 def test_each_entry_satisfies_the_check_contract(
     registry: Mapping[str, CheckContract],
 ) -> None:
-    """Every registry entry carries the six fields of ``CheckContract`` with their types."""
+    """Every registry entry carries ``id``, ``title``, ``family``, ``requires``,
+    ``dependencies`` and ``cases`` with their types.
+
+    The contract's two behavioural declarations, ``corpus_driven`` and ``observes_run_end``, are
+    asserted by ``tests/unit/test_registry_contract.py``."""
     assert registry, "the registry is empty, so there is no entry to inspect"
     for check_id in sorted(registry):
         entry = registry[check_id]

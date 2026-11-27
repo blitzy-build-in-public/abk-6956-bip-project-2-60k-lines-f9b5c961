@@ -3,23 +3,34 @@
 One synthetic case, ``synthetic:cleanup``, observing the framework's own footprint rather than
 anything a target produced (AAP §0.8.1), in two halves:
 
-* **temporary-file half** -- a snapshot of :func:`tempfile.gettempdir` taken at case enumeration,
-  compared as a set of names against one taken at execution. Every framework-owned temporary path is
-  created under the prefix :data:`TEMP_PREFIX` -- the subprocess adapter's scratch directory and the
-  logo overlay bitmap -- and each is removed in a ``finally``.
+* **temporary-file half** -- the window is the run. The runner snapshots
+  :func:`tempfile.gettempdir` once, through :func:`temp_entries`, immediately before the first
+  check can run, and hands it to the checks as
+  :attr:`~qrcheck.registry.check.RunContext.temp_baseline`; this check executes after the walk and
+  compares that baseline against the names it finds then. Every framework-owned temporary path is
+  created under the prefix :data:`TEMP_PREFIX` -- the subprocess adapter's scratch directory and
+  the logo overlay bitmap -- and each is removed in a ``finally``.
 * **handle half** -- every entry of :func:`fd_directory` (``/proc/self/fd`` on Linux, ``/dev/fd`` on
   macOS) resolved and compared against ``report_dir``, plus the images
-  :func:`qrcheck.evidence.mux.open_image` registers, read through :func:`mux.open_images`.
+  :func:`qrcheck.evidence.mux.open_image` registers, read through :func:`mux.open_images`. Which
+  interface was enumerated is recorded as the platform token of :func:`fd_directory_token`, never as
+  the directory's path, because no artefact may carry an absolute path (AAP §0.5.5).
+
+The check executes at the end of the run because its contract declares ``observes_run_end=True``:
+it asserts a property of the whole run rather than of one case, so the runner runs it after every
+other check -- after a ``--fail-fast`` break too, since it never invokes the target -- and that is
+what makes the two snapshots bracket the run itself (AAP §0.8.1, §0.5.3).
+
+It relies on a per-run temporary directory: ``TMPDIR``, ``TMP`` or ``TEMP`` pointing at a directory
+of this run's own. The baseline separates this run's entries from what was there before it, but a
+sibling process that leaves a ``qrcheck-*`` entry in a shared system temporary directory *during*
+the run would be reported as this run's leak, because the two are indistinguishable by name. A host
+that runs many checkouts at once has to give each run a private temporary directory.
 
 Zero adapter invocations: :data:`EXPECTED_ENCODES` declares ``0``, and the one dependency token is
 the primary decoder, as AAP §0.3.4's row records, so a run whose target is unreachable still
 reports this check as passing. That token can never turn the check into a ``missing_dependency``
 skip: a run without the primary decoder exits 2 before resolution (AAP §0.6.6 row 3).
-
-The ordering limitation, stated rather than papered over: checks execute in ascending check-ID order
-(AAP §0.5.3) and ``CL-ARTIFACTS`` sorts first, so the case observes the window from its own
-enumeration to its own execution. There is no end-of-run hook, and the run-level end-state assertion
-belongs to the end-to-end test.
 
 Reasons emitted: ``value_mismatch``, the single ``failed`` verdict, carrying the leaked names, the
 fd paths under ``report_dir`` and the open images; and ``unsupported_platform``, the single
@@ -47,6 +58,7 @@ __all__ = [
     "TEMP_PREFIX",
     "cases",
     "fd_directory",
+    "fd_directory_token",
     "leaked_temp_entries",
     "open_paths_under",
     "temp_entries",
@@ -71,6 +83,16 @@ EXPECTED_ENCODES: Final[Mapping[str, int]] = MappingProxyType({CHECK_ID: 0})
 # per case rather than as a skip of the whole check.
 _FD_DIRECTORIES: Final[tuple[Path, ...]] = (Path("/proc/self/fd"), Path("/dev/fd"))
 
+# The artefact token of each descriptor directory: which platform interface was enumerated, stated
+# without naming a host location, because no artefact may carry an absolute path (AAP §0.5.5).  One
+# entry per member of :data:`_FD_DIRECTORIES`, so a third directory cannot be added without a token.
+_FD_DIRECTORY_TOKENS: Final[Mapping[Path, str]] = MappingProxyType(
+    {
+        Path("/proc/self/fd"): "proc-self-fd",
+        Path("/dev/fd"): "dev-fd",
+    }
+)
+
 # The kernel's marker for an entry whose file was unlinked while the handle stayed open.  It is
 # stripped before the path is compared, because an unlinked-but-open file under ``report_dir``
 # is a leaked handle all the same.
@@ -89,6 +111,9 @@ def temp_entries(prefix: str = TEMP_PREFIX) -> frozenset[str]:
     prefix. No entry is stat'd, opened, joined onto a path or walked into, so the snapshot cannot
     itself create, touch or delay anything the next snapshot would see. The names come back as an
     unordered set for set arithmetic, empty when nothing matches or the directory no longer exists.
+    The runner calls it once, immediately before the walk, to take the baseline
+    :attr:`~qrcheck.registry.check.RunContext.temp_baseline` this check compares against at the
+    run's end (AAP §0.8.1).
 
     Raises:
         ValueError: `prefix` is not a non-empty string. An empty prefix would match every entry and
@@ -106,14 +131,16 @@ def temp_entries(prefix: str = TEMP_PREFIX) -> frozenset[str]:
     return frozenset(name for name in names if name.startswith(prefix))
 
 
-def leaked_temp_entries(baseline: frozenset[str]) -> tuple[str, ...]:
-    """Return the framework-prefixed names present now that were absent from `baseline`.
+def leaked_temp_entries(before: frozenset[str], after: frozenset[str]) -> tuple[str, ...]:
+    """Return the framework-prefixed names of `after` that `before` did not hold.
 
-    Set difference over names, not a modification-time comparison: no clock is read, so the verdict
-    is identical on every host and every run for the same sequence of events. The leaked names come
-    back in ascending order, empty when the framework cleaned up after itself.
+    Set difference over the two snapshots, not a modification-time comparison: no clock is read, so
+    the verdict is identical on every host and every run for the same sequence of events. Both
+    snapshots are passed in rather than re-listed here, so the names the artefact reports are
+    exactly the names the verdict compared. The leaked names come back in ascending order, empty
+    when the framework cleaned up after itself.
     """
-    return tuple(sorted(temp_entries() - baseline))
+    return tuple(sorted(after - before))
 
 
 def fd_directory() -> Path | None:
@@ -128,6 +155,31 @@ def fd_directory() -> Path | None:
         if candidate.is_dir():
             return candidate
     return None
+
+
+def fd_directory_token(directory: Path | None) -> str | None:
+    """Return the artefact token of a descriptor directory, ``None`` for ``None``.
+
+    ``/proc/self/fd`` is recorded as ``proc-self-fd`` and ``/dev/fd`` as ``dev-fd``: the token says
+    which platform interface :func:`fd_directory` enumerated, which is what a reader of
+    ``decoded.json`` needs to judge the handle half, and it names no host location, because no
+    artefact may carry an absolute path (AAP §0.5.5). ``None`` stays ``None``: neither directory
+    exists, which is what makes the handle half ``unsupported_platform``.
+
+    Raises:
+        ValueError: `directory` is not one of :data:`_FD_DIRECTORIES` and so has no token. A caller
+        that reaches this has not passed what :func:`fd_directory` returned, and recording ``None``
+        would report a missing platform interface instead of the defect.
+    """
+    if directory is None:
+        return None
+    token = _FD_DIRECTORY_TOKENS.get(Path(directory))
+    if token is None:
+        raise ValueError(
+            f"fd_directory_token: {directory} is not one of "
+            f"{tuple(str(candidate) for candidate in _FD_DIRECTORIES)}"
+        )
+    return token
 
 
 def open_paths_under(directory: Path, root: Path) -> tuple[str, ...]:
@@ -203,38 +255,42 @@ def _report_relative(path: str, report_dir: Path) -> str:
     family="cleanup",
     requires=frozenset(),
     dependencies=(DEPENDENCY_PRIMARY_DECODER,),
+    observes_run_end=True,
 )
 def cases(ctx: RunContext) -> Iterator[Case]:
-    """Yield the single ``synthetic:cleanup`` case, its baseline already captured.
+    """Yield the single ``synthetic:cleanup`` case, compared against the run's own baseline.
 
-    The baseline is taken here, at enumeration, rather than when the case runs: that is the earliest
-    observation the framework offers, because ``CL-ARTIFACTS`` sorts first of the twenty-one check
-    identifiers. Capturing it then means an entry a sibling process left in the shared temporary
-    directory is part of the baseline and cannot be mistaken for this run's leak.
+    Nothing is snapshotted here: the baseline is the one the runner took before the first check
+    could run and carried on :attr:`~qrcheck.registry.check.RunContext.temp_baseline`, so
+    enumeration neither reads the filesystem nor fixes a window of its own. The verdict is formed
+    when the case executes, which the runner arranges to be after the walk, so what the case
+    compares at either end is the run (AAP §0.8.1).
 
     Yields:
         Exactly one :class:`~qrcheck.registry.check.Case`, named :data:`CASE_ID`.
     """
-    baseline = temp_entries()
+    baseline = ctx.temp_baseline
 
     def execute(context: RunContext) -> CaseResult:
-        """Return this case's verdict for the footprint observed right now."""
+        """Return this case's verdict for the run-end footprint observed right now."""
         return _verdict(context, baseline)
 
     yield support.synthetic_case(CHECK_ID, CASE_ID, execute)
 
 
 def _verdict(ctx: RunContext, baseline: frozenset[str]) -> CaseResult:
-    """Return the case's result for the footprint observed at execution time.
+    """Return the case's result for the run's footprint, observed at the run's end.
 
     Both halves are observed before any verdict is formed, so ``decoded`` describes the whole
-    footprint even when one half alone already decided the outcome. Returns ``failed`` with reason
-    ``value_mismatch`` when anything leaked or is open, ``skipped`` with reason
-    ``unsupported_platform`` when the handle half cannot be observed and nothing leaked, and
+    footprint even when one half alone already decided the outcome, and it reports both windows of
+    the temporary-file comparison: the names the run began with and the names present now. Returns
+    ``failed`` with reason ``value_mismatch`` when anything leaked or is open, ``skipped`` with
+    reason ``unsupported_platform`` when the handle half cannot be observed and nothing leaked, and
     ``passed`` when both halves are clean.
     """
     report_dir = ctx.config.report_dir
-    leaked = leaked_temp_entries(baseline)
+    after = temp_entries()
+    leaked = leaked_temp_entries(baseline, after)
     fd_dir = fd_directory()
     handle_supported = fd_dir is not None
     handle_error: str | None = None
@@ -257,9 +313,10 @@ def _verdict(ctx: RunContext, baseline: frozenset[str]) -> CaseResult:
         violations.append("open_images")
     decoded: dict[str, Any] = {
         "temp_prefix": TEMP_PREFIX,
-        "baseline_count": len(baseline),
+        "temp_entries_before": sorted(baseline),
+        "temp_entries_after": sorted(after),
         "leaked": list(leaked),
-        "fd_directory": None if fd_dir is None else str(fd_dir),
+        "fd_directory": fd_directory_token(fd_dir),
         "handle_half": _HANDLE_SUPPORTED if handle_supported else _HANDLE_UNSUPPORTED,
         "open_under_report_dir": [_report_relative(path, report_dir) for path in open_under],
         "open_image_count": len(open_images),

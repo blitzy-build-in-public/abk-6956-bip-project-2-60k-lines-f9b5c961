@@ -361,6 +361,7 @@ def _expected_version(request: GenerateRequest, oracle_version: int) -> int:
     family=_FAMILY,
     requires=frozenset({Capability.png, Capability.ec_level}),
     dependencies=(DEPENDENCY_PRIMARY_DECODER,),
+    corpus_driven=True,
 )
 def SY_VERSION_MIN(ctx: RunContext) -> Iterator[Case]:
     """Yield one case per corpus record: the symbol is the smallest version that fits.
@@ -433,6 +434,7 @@ def _version_min_case(ctx: RunContext, record: CorpusRecord) -> CaseResult:
     family=_FAMILY,
     requires=frozenset({Capability.png, Capability.ec_level}),
     dependencies=(DEPENDENCY_PRIMARY_DECODER,),
+    corpus_driven=True,
 )
 def SY_EC_MATCH(ctx: RunContext) -> Iterator[Case]:
     """Yield one case per corpus record: the symbol carries the level that was requested.
@@ -496,6 +498,7 @@ def _ec_match_case(ctx: RunContext, record: CorpusRecord) -> CaseResult:
     family=_FAMILY,
     requires=frozenset({Capability.png}),
     dependencies=(DEPENDENCY_PRIMARY_DECODER,),
+    corpus_driven=True,
 )
 def SY_MASK(ctx: RunContext) -> Iterator[Case]:
     """Yield one case per corpus record: the mask in the symbol is a legal mask.

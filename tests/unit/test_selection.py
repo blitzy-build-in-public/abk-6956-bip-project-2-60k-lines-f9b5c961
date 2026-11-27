@@ -4,7 +4,10 @@ AAP §0.3.4 ("Identity and selection") fixes three ``--checks`` token forms -- a
 identifier, an identifier glob and a family selector -- makes a selection matching nothing an
 exit-2 condition that echoes the selector **verbatim** with no report written, and makes
 ``--class`` a repeatable glob whose zero-record outcome is a second, differently worded exit-2
-condition; §0.6.6 rows 1 and 2 name this module as the gate for both states.
+condition; §0.6.6 rows 1 and 2 name this module as the gate for both states. Also pinned here:
+the corpus file is a prerequisite only of a run that reads it — a ``--class`` filter, or a check
+whose cases are drawn from the corpus — because §0.3.4 conditions it on a corpus-driven check
+being selected, so a synthetic-only selection completes with no corpus file at all.
 
 Pinned: the forms are unioned, de-duplicated and returned sorted by identifier, asserted against
 a selector written in reverse order, because an order following the user's typing would break
@@ -78,6 +81,16 @@ FAMILY_CHECKS: Final[Mapping[str, tuple[str, ...]]] = {
 # The exit code AAP §0.3.4 assigns to a configuration, selection or corpus-filter fault. A literal
 # on purpose: a test that imported the constant it is checking would follow a renumbering.
 EXIT_CONFIG: Final[int] = 2
+
+# A corpus path that does not exist, relative to the temporary configuration that names it. Every
+# minimal configuration written by ``toml_config_file`` has the committed corpus copied beside it,
+# so only this override can leave the file unreadable.
+MISSING_CORPUS: Final[str] = "corpus/absent.jsonl"
+
+# The checks whose cases are constructed rather than drawn from the corpus. Selecting one of them
+# reads no corpus record, so AAP §0.3.4's "``corpus_path`` must exist when a corpus-driven check is
+# selected" -- a condition that is then false -- cannot make such a run an exit-2 fault.
+CORPUS_INDEPENDENT_CHECKS: Final[tuple[str, ...]] = ("CL-ARTIFACTS", "IV-EMPTY", "PF-DECODE")
 
 
 # --- Helpers ---
@@ -365,6 +378,53 @@ def test_the_cli_reports_an_empty_class_filter_as_exit_two_naming_the_filter(
     assert "--class" in result.stderr
     assert "unknown token" not in result.stderr, "a corpus filter is not a selector token"
     assert result.stdout.strip() == ""
+    assert _report_entries(report_root) == ()
+
+
+# --- The corpus prerequisite is conditioned on the selection (AAP §0.3.4) ---
+
+
+@pytest.mark.parametrize("check_id", CORPUS_INDEPENDENT_CHECKS, ids=lambda value: value)
+def test_a_selection_that_reads_no_corpus_record_needs_no_corpus_file(
+    check_id: str,
+    cli_runner: CliRunner,
+    toml_config_file: Callable[..., Path],
+    tmp_path: Path,
+) -> None:
+    """A synthetic-only selection completes with an unreadable ``corpus_path``.
+
+    AAP §0.3.4 conditions the corpus file's existence on a corpus-driven check being selected, so
+    a run whose checks build their own cases must not be refused for a file it never reads: the
+    command exits 0, writes its report and records that check's results alone.
+    """
+    config_path = toml_config_file(corpus_path=MISSING_CORPUS)
+    report_root = tmp_path / "reports-without-corpus"
+
+    result = _invoke_run(cli_runner, config_path, report_root, "--checks", check_id)
+
+    assert result.exit_code == 0, result.stderr
+    summary = json.loads((report_root / "summary.json").read_text(encoding="utf-8"))
+    assert {entry["check_id"] for entry in summary["results"]} == {check_id}
+    assert summary["counts"]["error"] == 0
+
+
+def test_a_corpus_driven_selection_still_requires_the_corpus_file(
+    cli_runner: CliRunner,
+    toml_config_file: Callable[..., Path],
+    tmp_path: Path,
+) -> None:
+    """``RT-ROUNDTRIP`` draws every case from the corpus, so that same missing file is exit 2.
+
+    The other half of the condition: the file is a prerequisite exactly when a selected check
+    reads it, and the diagnostic names the path a reader has to build.
+    """
+    config_path = toml_config_file(corpus_path=MISSING_CORPUS)
+    report_root = tmp_path / "reports-corpus-required"
+
+    result = _invoke_run(cli_runner, config_path, report_root, "--checks", "RT-ROUNDTRIP")
+
+    assert result.exit_code == EXIT_CONFIG
+    assert Path(MISSING_CORPUS).name in result.stderr
     assert _report_entries(report_root) == ()
 
 

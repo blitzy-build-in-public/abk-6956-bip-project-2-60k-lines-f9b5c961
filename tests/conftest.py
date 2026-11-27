@@ -6,8 +6,10 @@ re-run, quarantine or skip hook exists here: a retry must surface as the declare
 adapter-invocation count plus one, which is what the counting stub exists to make visible.
 :func:`config_factory` builds a configuration in memory that mirrors the committed
 ``qrcheck.toml``, so a retune of that document is honoured by every test and none of them mutates
-the file; :func:`mask_volatile` masks exactly the three volatile fields of the result model; and
-the autouse :func:`no_outbound_network` guard makes any outbound connect fail."""
+the file; :func:`mask_volatile` masks exactly the documented volatile inventory -- the run's two
+timestamps, each result's ``duration_ms`` and the measured leaves of a ``PF-*`` result's
+``decoded.metrics``; and the autouse :func:`no_outbound_network` guard makes any outbound connect
+fail."""
 
 from __future__ import annotations
 
@@ -119,8 +121,24 @@ _MASKED_TIMESTAMP: Final[str] = "<masked>"
 #: What ``duration_ms`` is masked to; numeric, so the masked projection keeps the schema's type.
 _MASKED_DURATION_MS: Final[float] = 0.0
 
+#: What each measured metric inside ``decoded.metrics`` is masked to; numeric, so the masked
+#: projection keeps the schema's type.
+_MASKED_METRIC: Final[float] = 0.0
+
 #: The one volatile field of a result, masked by :func:`mask_volatile` (AAP §0.5.4).
 _RESULT_VOLATILE_FIELD: Final[str] = "duration_ms"
+
+#: The three *measured* fields inside a ``PF-*`` result's ``decoded.metrics``, masked by
+#: :func:`mask_volatile`. AAP §0.6.1 gate 10 requires those probes to record their measurement, so
+#: the determinism comparison masks it rather than dropping it, and AAP §0.5.5 keeps it out of
+#: every comparison: a measured latency or throughput is judged once against the configured floor
+#: in ``expected``, never against another run's measurement. The rest of the block -- ``samples``,
+#: ``warmup`` and ``image_px`` -- is copied from configuration and stays compared.
+_METRIC_VOLATILE_FIELDS: Final[tuple[str, str, str]] = (
+    "encode_p95_ms",
+    "decode_p95_ms",
+    "symbols_per_minute",
+)
 
 #: The two volatile fields of a run, masked by :func:`mask_volatile` (AAP §0.5.4).
 _RUN_VOLATILE_FIELDS: Final[tuple[str, str]] = ("started_at", "finished_at")
@@ -613,8 +631,33 @@ def make_run_result(results: Sequence[CaseResult] = (), **overrides: Any) -> Run
     return RunResult(**fields)
 
 
+def _mask_metrics(item: dict[str, Any]) -> None:
+    """Mask the measured leaves of ``item['decoded']['metrics']`` in place, when it carries one.
+
+    Only :data:`_METRIC_VOLATILE_FIELDS` move: the remaining keys of a ``PF-*`` result's metrics
+    block are configuration-derived, so a change there must still break a masked comparison. A
+    result with no ``decoded`` mapping, or a ``decoded`` without a ``metrics`` mapping, is left
+    exactly as it was, which is every result outside the two performance probes.
+    """
+    decoded = item.get("decoded")
+    if not isinstance(decoded, dict):
+        return
+    metrics = decoded.get("metrics")
+    if not isinstance(metrics, dict):
+        return
+    for name in _METRIC_VOLATILE_FIELDS:
+        if name in metrics:
+            metrics[name] = _MASKED_METRIC
+
+
 def mask_volatile(value: RunResult | Mapping[str, Any]) -> dict[str, Any]:
-    """Return a summary-shaped copy with the three volatile fields masked (AAP §0.5.4)."""
+    """Return a summary-shaped copy with the documented volatile fields masked (AAP §0.5.4).
+
+    The inventory is the run's two timestamps, each result's ``duration_ms`` and the measured
+    leaves of a ``PF-*`` result's ``decoded.metrics`` (:data:`_METRIC_VOLATILE_FIELDS`). Everything
+    else -- the configuration-derived metrics included -- is compared, and the argument itself is
+    never modified, so a caller's own run still reports what it reported.
+    """
     summary = copy.deepcopy(value.as_dict() if isinstance(value, RunResult) else dict(value))
     for key in _RUN_VOLATILE_FIELDS:
         if key in summary:
@@ -627,6 +670,7 @@ def mask_volatile(value: RunResult | Mapping[str, Any]) -> dict[str, Any]:
                 item = dict(entry)
                 if _RESULT_VOLATILE_FIELD in item:
                     item[_RESULT_VOLATILE_FIELD] = _MASKED_DURATION_MS
+                _mask_metrics(item)
                 masked.append(item)
             else:
                 masked.append(entry)

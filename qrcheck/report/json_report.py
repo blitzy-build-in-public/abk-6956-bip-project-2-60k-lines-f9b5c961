@@ -14,8 +14,12 @@ The form is fixed rather than configurable: keys sorted lexicographically at eve
 indent, UTF-8 with non-ASCII characters written literally, exactly one trailing newline per file.
 The literal characters matter because the ``emoji``, ``rtl`` and ``utf8-multibyte`` corpus classes
 appear verbatim in evidence, and sorted keys are what makes two runs comparable field by field once
-the documented volatile fields -- ``started_at``, ``finished_at`` and ``results[].duration_ms`` --
-are masked (AAP §0.5.3, §0.5.4).
+the documented volatile fields are masked (AAP §0.5.3-§0.5.5): ``started_at``, ``finished_at``,
+every ``results[].duration_ms``, and the measured leaves of the two ``PF-*`` results'
+``decoded.metrics`` -- ``encode_p95_ms``, ``decode_p95_ms`` and ``symbols_per_minute``. Those three
+are a measurement judged once against the configured floor in ``expected`` and never against
+another run's measurement, while the metrics a probe copies from configuration -- ``samples``,
+``warmup`` and ``image_px`` -- stay in the comparison. ``docs/performance.md`` §7 owns the recipe.
 
 Nothing here reads a clock, the environment or configuration, and nothing prints or logs, so an
 artefact is a pure function of the value it serialises. No value is sanitised, replaced or escaped

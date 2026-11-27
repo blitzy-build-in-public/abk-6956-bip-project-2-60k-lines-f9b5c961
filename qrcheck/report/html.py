@@ -48,7 +48,13 @@ from html import escape as html_escape
 from pathlib import Path
 
 from qrcheck.evidence.mux import to_data_uri
-from qrcheck.evidence.naming import is_evidence_artifact
+from qrcheck.evidence.naming import (
+    LOGO_PNG,
+    SYMBOL_PNG,
+    SYMBOL_REPEAT_PNG,
+    SYMBOL_SVG,
+    is_evidence_artifact,
+)
 from qrcheck.report.json_report import dumps_canonical
 from qrcheck.report.model import CaseResult, Reason, RunResult, Status
 
@@ -80,8 +86,8 @@ _REASON_EXPLANATIONS: tuple[tuple[str, str], ...] = (
     ),
     (
         Reason.MISSING_DEPENDENCY.value,
-        "An optional runtime dependency was absent, so the check could not make its "
-        "observation and is not counted as a pass.",
+        "A prerequisite the check needs was not available in this run, so the check could "
+        "not make its observation and is not counted as a pass.",
     ),
     (
         Reason.UNSUPPORTED_PLATFORM.value,
@@ -95,17 +101,29 @@ _REASON_EXPLANATIONS: tuple[tuple[str, str], ...] = (
 # result model rather than re-read from disk.
 _IMAGE_SUFFIXES: tuple[str, ...] = (".png", ".svg")
 
-# The decoder names a result's ``per_decoder`` map is keyed by, and the two statuses read
-# back out of it. They are spelled here rather than imported from :mod:`qrcheck.decode`,
-# because this writer is a pure function of the result model: it names the vocabulary it
-# reads instead of depending on the layer that produced it.
+# What each of the four fixed image artefacts shows, in the words a reader who cannot see the
+# image needs: a figure's alternative text is built from this and the case's identity, while
+# the visible caption stays the artefact's name, so an informative image is described rather
+# than announced twice under the same string. A damaged variant is described from the two
+# facts its own name carries, by :func:`_image_description`.
+_IMAGE_DESCRIPTIONS: dict[str, str] = {
+    SYMBOL_PNG: "the symbol the target returned",
+    SYMBOL_SVG: "the symbol the target returned",
+    SYMBOL_REPEAT_PNG: "the symbol the target returned on the second call of the same request",
+    LOGO_PNG: "the overlay bitmap the check composited onto the symbol",
+}
+
+# The decoder names a result's ``per_decoder`` map is keyed by. They are spelled here rather
+# than imported from :mod:`qrcheck.decode`, because this writer is a pure function of the
+# result model: it names the vocabulary it reads instead of depending on the layer that
+# produced it.
 _PRIMARY_DECODER: str = "zxing"
 _SECONDARY_DECODER: str = "opencv"
 
-# The status a decoder records when it returned a payload, and the status it records when
-# it could not be run at all.
+# The status a decoder records when it returned a payload. Every other shape the map can hold -
+# no entry for the decoder at all, ``error`` or ``undetected`` - means the decoder answered
+# nothing about the artefact, which is the only distinction the degradation banner draws.
 _DECODED_STATUS: str = "decoded"
-_ERROR_STATUS: str = "error"
 
 # The single stylesheet of the document. Logical properties throughout, system font
 # stacks only, colour never the sole carrier of meaning - every status is also spelled out
@@ -223,6 +241,24 @@ header {
   font-weight: 600;
   overflow-wrap: break-word;
 }
+
+.reasons {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  gap: 0.5rem 1rem;
+  margin: 0.5rem 0 0;
+}
+
+.reasons div { margin: 0; }
+
+.reasons dt {
+  color: #55555f;
+  font-size: 0.75rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.reasons dd { margin: 0; }
 
 .counts {
   display: grid;
@@ -372,8 +408,8 @@ footer {
 
 @media (max-width: 720px) {
   body { padding: 0.75rem; }
-  .facts, .counts { grid-template-columns: minmax(0, 1fr); }
-  .facts dd, tbody td, .skips li, .evidence h3 { overflow-wrap: anywhere; }
+  .facts, .counts, .reasons { grid-template-columns: minmax(0, 1fr); }
+  .facts dd, .reasons dd, tbody td, .skips li, .evidence h3 { overflow-wrap: anywhere; }
   table, thead, tbody, tr, th, td { display: block; }
   caption { display: block; }
   thead tr {
@@ -457,6 +493,11 @@ def _render_document(run_result: RunResult, evidence_root: Path) -> str:
     The order is the one AAP §0.8.4 fixes: the verdict and its tallies first, so a
     reviewer knows the outcome before scrolling; then any degradation; then every result;
     then the failures in full; then the skips; then how to reproduce a case.
+
+    The header and the footer stay outside the document's single ``main`` region, which holds
+    the banners and the three case sections and is exactly what the skip link targets: a jump
+    from the top of the page lands on the content rather than on the run's identity, and the
+    region a screen reader offers as "main" is the same one.
     """
     anchors = _detail_anchors(run_result.results)
     fragments: list[str] = [
@@ -471,13 +512,15 @@ def _render_document(run_result: RunResult, evidence_root: Path) -> str:
         "</style>",
         "</head>",
         "<body>",
-        '<a class="skip-link" href="#results">Skip to results</a>',
+        '<a class="skip-link" href="#main">Skip to main content</a>',
     ]
     fragments += _render_header(run_result)
+    fragments += ['<main id="main" tabindex="-1">']
     fragments += _render_banners(run_result)
     fragments += _render_table(run_result, anchors)
     fragments += _render_details(run_result, evidence_root, anchors)
     fragments += _render_skipped(run_result)
+    fragments += ["</main>"]
     fragments += _render_footer(run_result)
     fragments += ["</body>", "</html>"]
     return "\n".join(fragments) + "\n"
@@ -558,20 +601,34 @@ def _render_banners(run_result: RunResult) -> list[str]:
     """Render the degradation banners, derived from the results alone.
 
     No probe, no configuration read and no decoder import: a banner states what the
-    results themselves prove. Single-decoder mode is visible from the recorded
-    ``per_decoder`` map of a result (AAP §0.6.6 row 4), and the two dependency skips are
-    visible from the reason of a skipped result. Each banner states the consequence in words,
-    so a reader is never left to infer a degradation from an empty column.
+    results themselves prove. The decoder banner is derived from the ``per_decoder`` map of
+    each decode-bearing result (AAP §0.6.6 row 4) and states how many of those results the
+    corroborating decoder did not answer for; the run is called single-decoder mode only when
+    that is every one of them, and incomplete corroboration otherwise. The two dependency
+    skips are visible from the reason of a skipped result. Each banner states the consequence
+    in words, so a reader is never left to infer a degradation from an empty column.
+
+    The missing-dependency banner names the skipped check IDs and no cause, because one
+    reason token that several different producers record cannot establish which prerequisite
+    was absent (AAP §0.8.4's "degradation is stated", §0.3.4's reason vocabulary): a skip of
+    that kind states which check it denied and leaves the missing prerequisite to the
+    evidence the skip recorded, which is the only place it is written down.
     """
     banners: list[str] = []
-    if _has_single_decoder(run_result.results):
+    bearing, unanswered, primary_alone = _decoder_counts(run_result.results)
+    if primary_alone:
+        heading = (
+            "Single-decoder mode."
+            if unanswered == bearing
+            else "Decoder corroboration incomplete."
+        )
         banners.append(
-            '<p class="banner banner-single-decoder"><strong>Single-decoder mode.</strong> '
-            "Only one decoder answered for this run: the corroborating decoder "
-            "(opencv-python-headless) was not installed, or was installed and could not be "
-            "imported or run. Each payload was corroborated by the primary decoder alone, "
-            "and no check was marked passed on the strength of a decoder that did not "
-            "answer.</p>"
+            f'<p class="banner banner-single-decoder"><strong>{heading}</strong> The '
+            f"corroborating decoder (opencv-python-headless) did not answer for {unanswered} "
+            f"of {bearing} decode-bearing cases in this run: it was not installed, or it was "
+            "asked and could not read that artefact. Where it did not answer, the payload was "
+            "corroborated by the primary decoder alone, and no check was marked passed on the "
+            "strength of a decoder that did not answer.</p>"
         )
     skipped_reasons = {
         _reason_text(case.reason)
@@ -579,10 +636,14 @@ def _render_banners(run_result: RunResult) -> list[str]:
         if case.status is Status.SKIPPED
     }
     if Reason.MISSING_DEPENDENCY.value in skipped_reasons:
+        missing_dependency = _skipped_check_ids(run_result.results, Reason.MISSING_DEPENDENCY)
+        named = ", ".join(f"<code>{_esc(name)}</code>" for name in missing_dependency)
         banners.append(
-            '<p class="banner banner-missing-dependency"><strong>SVG rasterizer '
-            "missing.</strong> No SVG rasterizer was discovered, so RN-SVG could not "
-            "rasterize its symbols and reported skipped: missing_dependency.</p>"
+            '<p class="banner banner-missing-dependency"><strong>Missing dependency.</strong> '
+            "Reported skipped: missing_dependency, because a prerequisite the check needs was "
+            f"not available in this run: {named}. A check skipped this way is counted "
+            "separately and is never counted as a pass; its recorded evidence states which "
+            "prerequisite was absent.</p>"
         )
     if Reason.UNSUPPORTED_PLATFORM.value in skipped_reasons:
         banners.append(
@@ -597,29 +658,49 @@ def _render_banners(run_result: RunResult) -> list[str]:
     return [header, *banners, "</section>"]
 
 
-def _has_single_decoder(results: Sequence[CaseResult]) -> bool:
-    """Return whether any result proves the run decoded without a corroborating decoder.
+def _skipped_check_ids(results: Sequence[CaseResult], reason: Reason) -> list[str]:
+    """Return the sorted distinct check IDs of the results skipped for ``reason``.
 
-    Two recorded shapes prove it, and both mean the same thing: the secondary decoder
-    could not answer, so a payload was corroborated by the primary decoder alone
-    (AAP §0.6.6 row 4, §0.7.2).
-
-    * A non-empty ``per_decoder`` map that omits ``opencv``: the decoder is not installed,
-      consensus never ran it and recorded nothing for it.
-    * A ``per_decoder`` map that records ``opencv`` with status ``error`` while ``zxing``
-      recorded status ``decoded``: the decoder is installed but unusable -- a shadowing
-      module, a broken wheel, a native library that will not load. Consensus asked it, it
-      answered with an error, and the primary decoder read the payload all the same.
-
-    The shape of an artefact no decoder could be shown is deliberately excluded: every
-    decoder at status ``error`` with ``agreement`` ``undetected`` means nothing decoded,
-    so no payload was corroborated by anyone and no check can have passed on the primary
-    decoder's strength.
-
-    Every access is a mapping lookup that cannot raise on an absent key, and a result whose
-    ``decoded`` value is not a mapping at all is simply skipped, because a report must not
-    fail over evidence it knows how to do without.
+    The banner names the checks a degradation denied rather than describing a cause, so this
+    gathers the one fact the results carry: which check each skip belongs to. The IDs are
+    de-duplicated and then sorted, because a whole check can skip once per case and a reader
+    needs each ID once, and because no set iteration order may reach the document
+    (AAP §0.5.3, §0.5.5).
     """
+    return sorted(
+        {
+            case.check_id
+            for case in results
+            if case.status is Status.SKIPPED and _reason_text(case.reason) == reason.value
+        }
+    )
+
+
+def _decoder_counts(results: Sequence[CaseResult]) -> tuple[int, int, int]:
+    """Count what the results prove about the corroborating decoder.
+
+    Returns three counts over ``results``, in one pass:
+
+    * how many results are decode-bearing at all - ``decoded`` is a mapping whose
+      ``per_decoder`` member is a non-empty mapping, which is the only shape that records
+      what a decoder did;
+    * of those, how many the secondary decoder did not answer for - no ``opencv`` entry, or
+      an entry whose status is not ``decoded``. An absent decoder, a decoder that could not be
+      imported and a decoder that raised on one artefact are indistinguishable here, and the
+      banner says exactly that rather than choosing one of the three;
+    * of those, how many the primary decoder read alone - the secondary did not answer and
+      ``zxing`` recorded ``decoded``. That is the one claim a banner may make, because it is
+      the case in which a payload was corroborated by the primary decoder alone
+      (AAP §0.6.6 row 4, §0.7.2).
+
+    The shape of an artefact no decoder could be shown is therefore counted as decode-bearing
+    but not as primary-alone: every decoder at ``error``, or a primary that recorded
+    ``undetected``, means no payload was read by anyone, so no check can have passed on the
+    primary decoder's strength. Every access is a mapping lookup that cannot raise on an
+    absent key, and a result whose ``decoded`` value is not a mapping at all is skipped,
+    because a report must not fail over evidence it knows how to do without.
+    """
+    bearing = unanswered = primary_alone = 0
     for case in results:
         decoded = case.decoded
         if not isinstance(decoded, Mapping):
@@ -627,14 +708,13 @@ def _has_single_decoder(results: Sequence[CaseResult]) -> bool:
         per_decoder = decoded.get("per_decoder")
         if not isinstance(per_decoder, Mapping) or not per_decoder:
             continue
-        if _SECONDARY_DECODER not in per_decoder:
-            return True
-        if (
-            _decoder_status(per_decoder, _SECONDARY_DECODER) == _ERROR_STATUS
-            and _decoder_status(per_decoder, _PRIMARY_DECODER) == _DECODED_STATUS
-        ):
-            return True
-    return False
+        bearing += 1
+        if _decoder_status(per_decoder, _SECONDARY_DECODER) == _DECODED_STATUS:
+            continue
+        unanswered += 1
+        if _decoder_status(per_decoder, _PRIMARY_DECODER) == _DECODED_STATUS:
+            primary_alone += 1
+    return bearing, unanswered, primary_alone
 
 
 def _decoder_status(per_decoder: Mapping[object, object], decoder: str) -> str | None:
@@ -661,14 +741,20 @@ def _render_table(run_result: RunResult, anchors: Mapping[int, str]) -> list[str
     the model - a link to the case's block, an explicit statement that a directory was
     recorded for a case reported elsewhere, or the em dash that means nothing was recorded
     (:func:`_evidence_cell`) - so the page cannot contradict ``summary.json`` about a case
-    that persisted evidence. The section carries ``tabindex="-1"`` so the jump from the
-    skip link takes the keyboard focus with it instead of leaving the reader's focus on the
-    link.
+    that persisted evidence. The section keeps ``id="results"`` and ``tabindex="-1"`` so a
+    link to the results takes the keyboard focus with it instead of leaving the reader's
+    focus on the link.
 
     A run that recorded no result gets the empty state in place of the table rather than a
     table with only a header: there is no row to read, and a header-only table under four
     zero tallies would leave a reader nothing to contradict a conclusion that the suite
     passed. The paragraph says so in words, so the state does not rest on colour alone.
+
+    The table's structural elements also carry explicit ARIA roles. They are not redundant
+    with the native elements: the narrow-viewport rule sets ``display: block`` on the table
+    parts, which strips the roles a browser derives from them, so the row and column
+    association the caption, ``thead`` and ``th scope`` establish has to survive the collapse
+    explicitly.
     """
     if not run_result.results:
         return [
@@ -679,30 +765,36 @@ def _render_table(run_result: RunResult, anchors: Mapping[int, str]) -> list[str
             "one check and run again.</p>",
             "</section>",
         ]
+    # The roles below exist because the narrow-viewport rule in _STYLE overrides `display` on
+    # the table parts, which strips the roles a browser derives from them; do not delete them
+    # as redundant with the native elements.
     fragments: list[str] = [
         '<section id="results" tabindex="-1">',
         "<h2>Results</h2>",
-        "<table>",
+        '<table role="table">',
         "<caption>One row per case, ordered by check ID and then by case ID. In the "
         "Evidence column, a link opens that case's block below, "
         '"recorded, not shown" marks evidence that was persisted for a case reported '
         "elsewhere on this page, and an em dash means nothing was recorded.</caption>",
-        "<thead>",
-        '<tr><th scope="col">Check</th><th scope="col">Case</th>'
-        '<th scope="col">Status</th><th scope="col">Reason</th>'
-        '<th scope="col">Duration</th><th scope="col">Evidence</th></tr>',
+        '<thead role="rowgroup">',
+        '<tr role="row"><th scope="col" role="columnheader">Check</th>'
+        '<th scope="col" role="columnheader">Case</th>'
+        '<th scope="col" role="columnheader">Status</th>'
+        '<th scope="col" role="columnheader">Reason</th>'
+        '<th scope="col" role="columnheader">Duration</th>'
+        '<th scope="col" role="columnheader">Evidence</th></tr>',
         "</thead>",
-        "<tbody>",
+        '<tbody role="rowgroup">',
     ]
     for index, case in enumerate(run_result.results):
         fragments.append(
-            f'<tr class="{_status_class(case.status)}">'
-            f'<td data-label="Check"><code>{_esc(case.check_id)}</code></td>'
-            f'<td data-label="Case"><code>{_esc(case.case_id)}</code></td>'
-            f'<td data-label="Status">{_esc(_status_text(case.status))}</td>'
-            f'<td data-label="Reason">{_esc(_reason_text(case.reason))}</td>'
-            f'<td data-label="Duration">{_esc(f"{case.duration_ms:.3f} ms")}</td>'
-            f'<td data-label="Evidence">'
+            f'<tr class="{_status_class(case.status)}" role="row">'
+            f'<td data-label="Check" role="cell"><code>{_esc(case.check_id)}</code></td>'
+            f'<td data-label="Case" role="cell"><code>{_esc(case.case_id)}</code></td>'
+            f'<td data-label="Status" role="cell">{_esc(_status_text(case.status))}</td>'
+            f'<td data-label="Reason" role="cell">{_esc(_reason_text(case.reason))}</td>'
+            f'<td data-label="Duration" role="cell">{_esc(f"{case.duration_ms:.3f} ms")}</td>'
+            f'<td data-label="Evidence" role="cell">'
             f"{_evidence_cell(case, anchors.get(index))}</td>"
             "</tr>"
         )
@@ -748,6 +840,11 @@ def _render_details(
     of read back from the files on disk, which is what keeps this writer a pure function of
     the result it is handed. Each block carries ``tabindex="-1"`` so a jump to it moves the
     keyboard focus as well as the viewport.
+
+    Each JSON panel is marked ``dir="auto"``: the panels render payload text a target
+    supplied, so a payload in a right-to-left script would otherwise reorder the JSON
+    punctuation around it and could make the panel read as something other than what the
+    evidence says.
     """
     blocks: list[str] = []
     for index, case in enumerate(run_result.results):
@@ -777,12 +874,12 @@ def _render_details(
         )
         blocks += _render_images(evidence_root, case)
         blocks.append("<h4>request.json</h4>")
-        blocks.append(f"<pre>{_esc(dumps_canonical(_request_payload(case)))}</pre>")
+        blocks.append(f'<pre dir="auto">{_esc(dumps_canonical(_request_payload(case)))}</pre>')
         blocks.append("<h4>decoded.json</h4>")
-        blocks.append(f"<pre>{_esc(dumps_canonical(case.decoded))}</pre>")
+        blocks.append(f'<pre dir="auto">{_esc(dumps_canonical(case.decoded))}</pre>')
         if case.expected is not None:
             blocks.append("<h4>expected</h4>")
-            blocks.append(f"<pre>{_esc(dumps_canonical(case.expected))}</pre>")
+            blocks.append(f'<pre dir="auto">{_esc(dumps_canonical(case.expected))}</pre>')
         blocks.append("</section>")
     if not blocks:
         return []
@@ -822,6 +919,12 @@ def _render_images(evidence_root: Path, case: CaseResult) -> list[str]:
     this writer must not surface something the product never promised to write. An SVG
     goes through a ``data:`` URI inside an image element too: that context is what makes a
     target-supplied vector inert.
+
+    Each figure's alternative text says what the image shows - the symbol the target returned,
+    its second call of the same request, a damaged variant or the composited overlay - and
+    which case it belongs to, while the caption underneath names the artefact; the two never
+    carry the same string, so an informative image is described once instead of being
+    announced twice.
 
     The image area degrades rather than raising, but it says which of three facts it is
     reporting, because a reader triaging a failure reads this block to learn what the run
@@ -864,15 +967,38 @@ def _render_images(evidence_root: Path, case: CaseResult) -> list[str]:
                 )
             )
             continue
+        alternative = f"{_image_description(name)}, recorded for {case.check_id} {case.case_id}"
         figures += [
             '<figure class="evidence-image">',
-            f'<img src="{_esc(to_data_uri(data))}" alt="{_esc(name)}">',
+            f'<img src="{_esc(to_data_uri(data))}" alt="{_esc(alternative)}">',
             f"<figcaption>{_esc(name)}</figcaption>",
             "</figure>",
         ]
     if not figures and not unreadable:
         return [_NO_IMAGE]
     return figures + unreadable
+
+
+def _image_description(name: str) -> str:
+    """Return what the image artefact ``name`` shows, for a reader who cannot see it.
+
+    The four fixed image members are described by :data:`_IMAGE_DESCRIPTIONS`. A
+    ``damage-<kind>-<seed>.png`` member is described from the two facts its own name carries -
+    the damage kind applied and the derived seed - because those are what make the damaged
+    symbol re-derivable, and they are the only description a variant can honestly be given.
+    The caller has already admitted ``name`` through
+    :func:`qrcheck.evidence.naming.is_evidence_artifact`, so a name outside that closed set
+    cannot arrive; the fallback gives a generic description rather than publishing an empty
+    alternative, which would turn an informative image into a decorative one.
+    """
+    description = _IMAGE_DESCRIPTIONS.get(name)
+    if description is not None:
+        return description
+    head, _, seed = name.rpartition(".png")[0].rpartition("-")
+    kind = head.removeprefix("damage-")
+    if kind != head and kind and seed.isdigit():
+        return f"the symbol after {kind} damage with damage seed {seed}"
+    return "a recorded evidence image"
 
 
 def _image_artifact_names(directory: Path) -> list[str]:

@@ -22,7 +22,9 @@ report directory is left empty:
   an http template with no payload placeholder, or a target the constructor finds
   unavailable (``ConfigError``, ``TargetError`` and ``ValueError``);
 * ``--adapter`` names no declared ``[targets.<name>]`` table, ``--ec`` is outside ``L``,
-  ``M``, ``Q``, ``H``, or the seed is negative;
+  ``M``, ``Q``, ``H``, the seed is negative, or ``--report-dir`` is a value the
+  configuration's own path rule refuses -- an empty or whitespace-only path, which would
+  otherwise resolve to the working directory and fill it with a report set;
 * ``--checks`` matches no registered check (``SelectionError``, which echoes the selector);
 * a pinned runtime dependency cannot be imported -- the primary decoder, ``segno``,
   ``numpy``, ``Pillow``, ``httpx`` or ``click``. For an ``http`` target it surfaces when the
@@ -72,6 +74,7 @@ import click
 from qrcheck.checks import load_families
 from qrcheck.cli.exit import EXIT_CONFIG, EXIT_INTERNAL, exit_code_for
 from qrcheck.config import ConfigError, load_config
+from qrcheck.config.schema import SCHEMA
 from qrcheck.dependencies import blocking_problem
 from qrcheck.registry import REGISTRY, SelectionError, parse_selection, select
 from qrcheck.report import write_all_reports
@@ -129,10 +132,13 @@ def run(
 ) -> int:
     """Execute one run of the suite and return the process exit code.
 
-    The eleven steps below are the exit-code guarantee: nothing is created, written or
-    streamed until the configuration, the options, the selection and the run prerequisites
-    have all been settled, so an exit-2 path leaves the report directory empty and an
-    exit-3 path either writes a complete report or streams the results it holds.
+    The nine steps below are the exit-code guarantee: no report artefact is written and no
+    result is streamed until the configuration, the options, the selection and the run
+    prerequisites have all been settled, so an exit-2 path writes no artefact and streams
+    nothing. The report directory is created and probed in step 5 -- before the selection is
+    resolved in step 6 -- so a failing invocation may leave it behind empty rather than absent,
+    the probe file itself removed; an override the schema's own path rule refuses never gets
+    that far. An exit-3 path either writes a complete report or streams the results it holds.
 
     Args:
         adapter: The ``--adapter`` name of a declared ``[targets.<name>]`` table, or ``None``
@@ -150,16 +156,19 @@ def run(
             ``error`` result. Forwarded unchanged; the policy lives in the runner.
         report_dir: The ``--report-dir`` report root, or ``None`` for the configuration's
             ``report_dir``. An override replaces the configured value for the runner, the
-            evidence store and all three writers at once.
+            evidence store and all three writers at once, and is held to the configuration's
+            own path rule, so an empty or whitespace-only value is a bad invocation -- exit
+            code 2 naming the option -- rather than a report written into the working
+            directory.
         config_path: The ``--config`` file, supplied by the group's option. Keyword-only
             because it is not one of the run's seven options.
 
     Returns:
         :data:`qrcheck.cli.exit.EXIT_CONFIG` for a configuration, adapter, level, seed,
-        selection or prerequisite fault; :data:`qrcheck.cli.exit.EXIT_INTERNAL` for an
-        unwritable report directory; otherwise :func:`qrcheck.cli.exit.exit_code_for`'s
-        reading of the finished run -- 3 when any result errored, 1 when any failed, 0 when
-        everything passed or was skipped.
+        report-directory value, selection or prerequisite fault;
+        :data:`qrcheck.cli.exit.EXIT_INTERNAL` for an unwritable report directory; otherwise
+        :func:`qrcheck.cli.exit.exit_code_for`'s reading of the finished run -- 3 when any
+        result errored, 1 when any failed, 0 when everything passed or was skipped.
 
     Raises:
         Exception: anything the framework did not classify -- a constructor fault outside the
@@ -187,7 +196,7 @@ def run(
     except OSError as error:
         # Exactly one filesystem fault escapes the loader unwrapped: the configured
         # report_dir could not be created or written. That is exit 3, and with no run to
-        # describe there is nothing to stream -- see step 9.
+        # describe there is nothing to stream -- see :func:`_report_unwritable`.
         return _report_unwritable(error, None, None)
 
     # -- 2. the target --------------------------------------------------------
@@ -220,6 +229,20 @@ def run(
         return EXIT_CONFIG
 
     # -- 5. the report directory, resolved once and carried on the config -----
+    # An override is held to the configuration's own path rule before anything is created,
+    # because the file and the option name the same key and a value the file refuses cannot
+    # become a report root merely by arriving on the command line. The rule and its wording
+    # have one owner -- the schema entry ``report_dir`` names -- so only the option's name is
+    # put in front of the fragment it returns: ``--report-dir ""`` is a bad invocation, exit 2,
+    # rather than ``Path("")`` resolving to the working directory and filling it with a report
+    # set. The same check refuses a NUL byte, which no filesystem call accepts and which
+    # ``Path.resolve`` answers with a ``ValueError`` rather than the ``OSError`` the exit-3
+    # contract below covers.
+    if report_dir is not None:
+        fragment = SCHEMA[""]["report_dir"].check(report_dir)
+        if fragment is not None:
+            click.echo(f"{_DIAGNOSTIC_PREFIX}--report-dir {fragment}", err=True)
+            return EXIT_CONFIG
     chosen_report_dir = (
         Path(report_dir).expanduser().resolve()
         if report_dir is not None
@@ -294,6 +317,12 @@ def run(
         click.echo(f"{_DIAGNOSTIC_PREFIX}{error}", err=True)
         return EXIT_CONFIG
     except OSError as error:
+        # The walk's evidence writes cannot arrive here: the runner contains each one as an
+        # ``error`` result, so the results it accumulated survive to be written or streamed from
+        # ``step 8`` instead of being lost with this exception (AAP §0.6.6 row 11). The one
+        # ``OSError`` still raised is ``EvidenceStore.clear`` failing to remove a previous run's
+        # evidence tree -- before the walk, before any result exists, so there is nothing to
+        # stream and :func:`_report_unwritable` is handed no result.
         return _report_unwritable(error, config.report_dir, None)
     finally:
         # Closing twice is safe -- the port requires ``close`` to tolerate a second call --
@@ -314,7 +343,7 @@ def run(
     except OSError as error:
         return _report_unwritable(error, config.report_dir, run_result)
 
-    # -- 10. the summary line -------------------------------------------------
+    # -- 9. the summary line -------------------------------------------------
     # Read from the run's own four tallies and its recorded adapter, level and seed, so the
     # line and ``summary.json`` cannot describe the same run differently. No timing and no
     # path appears in it, which is what keeps two runs of one configuration byte-identical.
@@ -383,10 +412,18 @@ def _report_unwritable(
     consumer parses results it would otherwise never see.
 
     When the caller holds no run result the stream stays empty and the diagnostic says so, so an
-    empty stdout is never mistaken for a truncated one: the failure was found before the run
-    produced a result to stream, and none is fabricated to fill the output. Every fault is
-    decided by the caller, not here: the run may have completed and only the report failed, and
-    then the number of results streamed is stated on stderr as well.
+    empty stdout is never mistaken for a truncated one -- and it says no more than that, because
+    a result is either handed to this function or it is not, and what an earlier fault may have
+    discarded is not something it can know. The condition it can state is the one that reaches
+    it holding nothing: the report directory was found unusable before this command held a
+    result. Three faults are of that kind, and the runner is why there are only three -- a
+    report directory the configuration's own load could not create, one the writability probe
+    refused, and a previous run's evidence tree ``EvidenceStore.clear`` could not remove before
+    the walk began; every evidence write *during* the walk is contained by the runner as an
+    ``error`` result instead of raising, which is what lets the results of such a run be
+    streamed from the other branch (AAP §0.6.6 row 11, §0.3.4). No result is fabricated to fill
+    the output. Every fault is decided by the caller, not here: the run may have completed and
+    only the report failed, and then the number of results streamed is stated on stderr as well.
 
     Args:
         detail: The ``OSError`` that prevented the write, quoted in the diagnostic because its
@@ -394,8 +431,8 @@ def _report_unwritable(
             component that is a file.
         report_directory: The report root that could not be written, or ``None`` when the
             configuration itself failed before one was resolved.
-        run_result: The finished run whose results are streamed, or ``None`` when the failure
-            preceded the run.
+        run_result: The finished run whose results are streamed, or ``None`` when the caller
+            holds no result to stream.
 
     Returns:
         :data:`qrcheck.cli.exit.EXIT_INTERNAL`, always: an unwritable report directory is exit
@@ -408,9 +445,12 @@ def _report_unwritable(
     )
     if run_result is None:
         # Nothing is streamed and nothing is invented: a consumer reading only stdout has to
-        # learn from stderr that the empty stream is this run's whole answer, not a truncation.
+        # learn from stderr that the empty stream is this command's whole answer, not a
+        # truncation. What follows the colon is only what this function can see -- it was handed
+        # no result -- because whether a run produced any is not something it can know.
         click.echo(
-            f"{_DIAGNOSTIC_PREFIX}no result was streamed to stdout: the run produced none",
+            f"{_DIAGNOSTIC_PREFIX}no result was streamed to stdout: the report directory was "
+            f"found unusable before this command held a result",
             err=True,
         )
     else:

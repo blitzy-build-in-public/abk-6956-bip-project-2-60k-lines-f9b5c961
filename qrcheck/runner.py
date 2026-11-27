@@ -5,14 +5,17 @@ nothing, builds no request, encodes nothing, decodes nothing, writes no report a
 code; it performs the sequence AAP §0.3.2 fixes for it: capture the run's start time once; probe
 what the host provides -- both reference decoders and the SVG rasterizer, with **zero** target
 invocations -- and refuse to start when the blocking primary decoder is unusable or any other
-pinned dependency cannot be imported; load the committed corpus and apply the ``--class`` filter,
-refusing to start when the filter leaves nothing; build the one
-:class:`~qrcheck.registry.check.RunContext` the checks of this run share; resolve the ``--checks``
-selection against the target's declared capabilities, so every check is decided runnable or skipped
-*before* the first case runs; walk the runnable checks in check-identifier order and each check's
-cases in case-identifier order, containing every per-case fault; apply the
-one-error-result-per-check policy when the target is lost; and accumulate one
-:class:`~qrcheck.report.model.RunResult` before closing the adapter.
+pinned dependency cannot be imported; resolve the ``--checks`` selection, because which checks a run
+selected is what decides what the run needs; load the committed corpus when that selection reads it
+-- a ``--class`` filter was given, or a selected check draws its cases from the corpus -- and apply
+the filter, refusing to start when it leaves nothing; build the one
+:class:`~qrcheck.registry.check.RunContext` the checks of this run share; resolve each selected
+check's requirements against the target's declared capabilities, so every check is decided runnable
+or skipped *before* the first case runs; walk the runnable checks in check-identifier order and
+each check's cases in case-identifier order, containing every per-case fault, and finish with the
+run-scoped checks -- the ones whose subject is the whole run -- so that they observe the run's end
+(AAP §0.8.1); apply the one-error-result-per-check policy when the target is lost; and accumulate
+one :class:`~qrcheck.report.model.RunResult` before closing the adapter.
 
 What this module deliberately does not own.  **Exit codes**: ``qrcheck.cli.exit`` is the only place
 a code is decided, from the returned model's tallies, and nothing here prints, calls ``sys.exit`` or
@@ -36,12 +39,16 @@ for a fault found before any case runs, after which the command ends with exit c
 report, raised for exactly four conditions: the blocking primary decoder (``zxing-cpp``) is
 unusable, another pinned runtime dependency cannot be imported, the configured corpus file cannot be
 read or is malformed, or the ``--class`` filter leaves zero records -- the message always naming the
-offending dependency, path or glob.  An ``error`` result, created here and only here, either
-because an exception escaped a case's ``execute`` (contained, with its traceback, and the run
-continues: AAP §0.6.6 row 11) or because the target was lost.  A ``skipped`` result, built by
-:func:`qrcheck.registry.resolve.skip_case_results`, one per check the target's capabilities or the
-host's dependencies cannot serve, counted separately and never folded into ``passed``.  And a
-``passed`` or ``failed`` result, produced by a check and accumulated verbatim.
+offending dependency, path or glob.  An ``error`` result, created here and only here, for an
+exception that escaped a case's ``execute``, a check's case generator or an evidence write --
+each contained with its traceback while the run continues (AAP §0.6.6 row 11), the evidence one
+also keeping every result the walk had already accumulated, which is what lets the writer path
+stream them when the report directory turns out to be unwritable (AAP §0.3.4, §0.6.6 row 10) --
+or for a lost target, a fact about the run rather than a verdict on a case.  A ``skipped``
+result, built by :func:`qrcheck.registry.resolve.skip_case_results`, one per check the target's
+capabilities or the host's dependencies cannot serve, counted separately and never folded into
+``passed``.  And a ``passed`` or ``failed`` result, produced by a check and accumulated
+verbatim.
 
 Target loss is a run-level condition, not a per-case one:
 :class:`~qrcheck.targets.base.TargetUnavailable` and
@@ -80,6 +87,7 @@ from typing import Final
 
 import qrcheck
 from qrcheck.checks import load_families
+from qrcheck.checks.cleanup import temp_entries
 from qrcheck.checks.render import discover_svg_rasterizer
 from qrcheck.config.models import Config
 from qrcheck.corpus.builder import CorpusRecord
@@ -125,6 +133,16 @@ __all__ = ["RunPrerequisiteError", "run_suite"]
 #: "this target was reachable when the run started and then broke".
 TARGET_LOSS_CASE_ID: Final[str] = "synthetic:target"
 
+#: The case identifier a result for a broken case *generator* is filed under.
+#:
+#: Deliberately distinct from :data:`TARGET_LOSS_CASE_ID` -- a lost target is a fact about the
+#: run's environment, described by one result per affected check, while a generator that raises
+#: is a fault of one check's own enumeration -- and from every ``synthetic:*`` name a check
+#: builds for itself (``capability``, ``cleanup``, ``determinism-*``, ``iv-*``, ``pf-*``,
+#: ``target``), so a reader can tell "this check could not say what it would run" from "this
+#: target never promised this" and from "this case did not behave".
+CASES_FAILED_CASE_ID: Final[str] = "synthetic:cases"
+
 #: The two statuses that make a check count as having gone wrong, for ``--fail-fast``.
 #: A ``skipped`` result is not one of them: it describes a target that never promised the
 #: capability, not a check that produced a bad verdict.
@@ -149,7 +167,8 @@ class RunPrerequisiteError(Exception):
     * another pinned runtime dependency cannot be imported -- a broken installation is an
       environment error, exit 2 naming the distribution and ``requirements.lock`` (§0.7.2);
     * the configured corpus file cannot be read, or holds a line that is not a valid
-      record (AAP §0.3.4 ``corpus_path``, §0.6.6 row 2);
+      record, when the run selects a corpus-driven check or gives a ``--class`` filter -- and
+      only then (AAP §0.3.4 ``corpus_path``, §0.6.6 row 2);
     * the ``--class`` filters leave zero corpus records, so the run would describe an empty
       selection as if it were a complete one (AAP §0.6.6 row 2).
 
@@ -177,14 +196,17 @@ def run_suite(
     """Execute one run and return its accumulated model.
 
     Keyword Args:
-        fail_fast: Stop launching further checks once a check has produced a ``failed`` or
-            ``error`` result.  The in-flight check always completes all of its cases, so the
-            report never describes a check whose cases were cut off half-way.  Additive and
+        fail_fast: Stop launching further ordinary checks once a check has produced a
+            ``failed`` or ``error`` result.  The in-flight check always completes all of its
+            cases, so the report never describes a check whose cases were cut off half-way.
+            The run-scoped check still runs, because it never invokes the target and its
+            subject is the finished run (:func:`_walk`, AAP §0.8.1).  Additive and
             keyword-only because the CLI's ``--fail-fast`` option has to reach the runner
             while the positional interface stays as specified.
 
     Args:
-        config: The resolved configuration; it owns every threshold, the corpus path, the
+        config: The resolved configuration; it owns every threshold, the corpus path -- read
+            only when this run's selection reads the corpus (:func:`_corpus_for_run`) -- the
             report directory and the ``[render]`` table.
         selection: What the run was asked to select -- the raw ``--checks`` selector and the
             normalised ``--class`` globs.
@@ -199,18 +221,23 @@ def run_suite(
         The finished :class:`~qrcheck.report.model.RunResult`, whose ``results`` are sorted by
         ``(check_id, case_id)`` and whose ``counts`` are the four separate tallies the model
         re-derives and compares.  A run whose target was lost still returns normally, with
-        one ``error`` result per affected check, so the CLI can write a complete report and
-        exit 3.
+        one ``error`` result per affected check, and a case whose evidence could not be written
+        is reported in its own place as one ``error`` result (:func:`_persist`), so the CLI can
+        always write a complete report -- or stream one -- and exit 3.
 
     Raises:
         RunPrerequisiteError: The primary decoder is unusable, another pinned runtime
-            dependency cannot be imported, the corpus file cannot be read or is malformed, or
-            the ``--class`` filter leaves no record.
+            dependency cannot be imported, the corpus file cannot be read or is malformed when
+            this run's selection reads it (:func:`_corpus_for_run`, AAP §0.3.4), or the
+            ``--class`` filter leaves no record.
         SelectionError: The ``--checks`` selector matches no check (raised by
             :func:`qrcheck.registry.selection.select`), which is exit code 2 upstream.
-        OSError: The report directory cannot take the evidence of a case this layer reports,
-            or the previous run's evidence tree cannot be removed, which is exit code 3
-            upstream.
+        OSError: The previous run's evidence tree cannot be removed
+            (:meth:`qrcheck.report.evidence.EvidenceStore.clear`), which happens before the walk
+            and before any result exists, and is exit code 3 upstream.  An evidence write once
+            the walk has begun raises here no more: :func:`_persist` contains it as an ``error``
+            result, because aborting would discard the results accumulated so far (AAP §0.6.6
+            row 11, §0.3.4).
     """
     started_at = datetime.datetime.now(datetime.timezone.utc)
     # Idempotent: the family modules register themselves while they import, and calling this
@@ -221,12 +248,20 @@ def run_suite(
     # Before the corpus is read and long before an evidence store or a report exists: a broken
     # installation is an exit-2 environment error, not thirty fabricated generator defects.
     _require_blocking_dependencies()
-    corpus = _filtered_corpus(config, selection)
+    # Resolved before the corpus is read: which checks this run selected is what decides
+    # whether it needs the corpus at all, and an empty selector is an exit-2 fault of its own
+    # (AAP §0.6.6 row 1).
+    selected = select(REGISTRY, selection.checks)
+    corpus = _corpus_for_run(config, selection, selected)
     # Bound before the walk so that a target lost, or a check that failed, cannot change the
     # identity of the run that reports it.
     adapter_name = adapter.name
     capabilities = adapter.capabilities
     evidence = EvidenceStore(config.report_dir)
+    # AAP §0.8.1: the snapshot ``CL-ARTIFACTS`` calls "before the run", taken at the last instant
+    # before a check can enumerate a case -- every exit-2 fault is already decided -- through the
+    # observation that check documents, so this layer restates neither the prefix nor the listing.
+    temp_baseline = temp_entries()
     context = RunContext(
         adapter=adapter,
         config=config,
@@ -235,8 +270,8 @@ def run_suite(
         seed=seed,
         availability=MappingProxyType(probes.available),
         evidence=evidence,
+        temp_baseline=temp_baseline,
     )
-    selected = select(REGISTRY, selection.checks)
     resolution = resolve(
         selected,
         capabilities,
@@ -246,8 +281,10 @@ def run_suite(
     # After every exit-2 fault is decided: a reused root then holds this run alone (AAP §0.3.4).
     evidence.clear()
     # AAP §0.3.4 requires evidence for a skipped-with-reason case, which only this layer stores.
+    # Through :func:`_persist` like every other result this layer builds, so a store that cannot
+    # write the skip reports it as an error result instead of raising out of the run.
     results: list[CaseResult] = [
-        _with_evidence(evidence, result) for result in skip_case_results(resolution, seed)
+        _persist(evidence, result) for result in skip_case_results(resolution, seed)
     ]
     try:
         results.extend(_walk(resolution, context, fail_fast=fail_fast))
@@ -433,10 +470,51 @@ def _platform_note(tag: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _corpus_for_run(
+    config: Config,
+    selection: Selection,
+    selected: tuple[CheckContract, ...],
+) -> tuple[CorpusRecord, ...]:
+    """Return the corpus records this run covers, reading the file only when the run uses it.
+
+    AAP §0.3.4 conditions ``corpus_path``'s "must exist" rule on a corpus-driven check being
+    selected, so the file is read for exactly two kinds of run and neither of them otherwise:
+
+    * any run given a ``--class`` filter, because that filter is a statement about the records:
+      :func:`_filtered_corpus` is what refuses a filter that leaves nothing (AAP §0.6.6 row 2);
+    * any run that selected a check declaring ``corpus_driven``, because those cases are drawn
+      from the records the run loaded.
+
+    Every other selection -- a run of the synthetic-only checks such as ``IV-EMPTY``,
+    ``PF-DECODE`` or ``CL-ARTIFACTS`` -- proceeds with no corpus at all, which is what lets it
+    complete on a machine where no corpus has ever been built.
+
+    Args:
+        config: The resolved configuration; its ``corpus_path`` names the file.
+        selection: The run's selection; its ``class_globs`` decide whether a filter applies.
+        selected: The contracts this run selected, in identifier order.
+
+    Returns:
+        The matching records in ``id`` order and never empty, or ``()`` when this run reads no
+        corpus record.
+
+    Raises:
+        RunPrerequisiteError: A corpus is needed and the file cannot be read, holds a malformed
+            line, or the filter leaves no record. Every message names the path or the globs.
+    """
+    if not selection.class_globs and not any(
+        contract.corpus_driven for contract in selected
+    ):
+        return ()
+    return _filtered_corpus(config, selection)
+
+
 def _filtered_corpus(config: Config, selection: Selection) -> tuple[CorpusRecord, ...]:
     """Return the corpus records this run covers, refusing an empty selection.
 
-    Two faults are the runner's rather than the loader's, because both depend on the run and
+    Called only for a run that reads the corpus -- a ``--class`` filter was given, or a selected
+    check declares ``corpus_driven`` (:func:`_corpus_for_run` decides that, AAP §0.3.4).  Two
+    faults are the runner's rather than the loader's, because both depend on the run and
     neither can be decided from the configuration alone: the corpus file itself, which
     :func:`qrcheck.corpus.io.load_corpus` reads but whose absence means no run can happen,
     and the ``--class`` filter, which only this layer applies (AAP §0.3.4, §0.6.6 row 2).  A
@@ -525,12 +603,12 @@ def _walk(
 ) -> tuple[CaseResult, ...]:
     """Execute every runnable check of `resolution` in order and return the results.
 
-    The order is fixed twice: checks by identifier ascending (which
-    :class:`~qrcheck.registry.resolve.Resolution` has already sorted) and each check's cases
-    by case identifier ascending.  Import order, registry insertion order and the order a
-    check happened to yield its cases therefore never reach a report (AAP §0.5.3).
+    The order is fixed twice: checks by identifier ascending within each of the two groups below
+    (which :class:`~qrcheck.registry.resolve.Resolution` has already sorted) and each check's cases
+    by case identifier ascending.  Import order, registry insertion order and the order a check
+    happened to yield its cases therefore never reach a report (AAP §0.5.3).
 
-    Two run-level policies live here:
+    Three run-level policies live here:
 
     * **Target loss.** Once any check has lost the target, every later check that requires a
       capability gets exactly one ``synthetic:target`` error and is never asked to produce a
@@ -541,6 +619,14 @@ def _walk(
       further checks from launching.  The check that produced it always finished all of its
       cases, and the pre-execution skip results are kept, because they were decided before
       execution and describe checks that were never going to run.
+    * **Run-scoped observation.** A check whose contract sets
+      :attr:`~qrcheck.registry.check.CheckContract.observes_run_end` asserts a property of the
+      whole run rather than of one case, so it executes after every ordinary check -- still
+      through :func:`_run_check`, so the per-case containment and the one-result-per-check rule
+      apply unchanged.  It always runs, even after a ``--fail-fast`` break, because it never
+      invokes the target and the footprint it reports is only complete once the run is (AAP
+      §0.8.1).  Running it out of identifier order changes no report: :func:`run_suite` sorts
+      every result by ``(check_id, case_id)`` before it returns (§0.5.3).
 
     Args:
         resolution: The selected checks, split into the runnable ones and the skips.
@@ -548,11 +634,19 @@ def _walk(
         fail_fast: Whether to stop launching checks after the first failed or errored one.
 
     Returns:
-        Every result this walk produced, in ``(check_id, case_id)`` order.
+        Every result this walk produced, in execution order: the ordinary checks by identifier
+        with their cases in case-identifier order, then the run-scoped checks in identifier order.
+        :func:`run_suite` sorts the accumulated tuple by ``(check_id, case_id)`` (§0.5.3).
     """
+    ordinary = tuple(
+        contract for contract in resolution.runnable if not contract.observes_run_end
+    )
+    run_scoped = tuple(
+        contract for contract in resolution.runnable if contract.observes_run_end
+    )
     results: list[CaseResult] = []
     target_loss: TargetUnavailable | TargetTimeout | None = None
-    for contract in resolution.runnable:
+    for contract in ordinary:
         if target_loss is not None and contract.requires:
             # The target died earlier and this check cannot run without it: one result, no
             # target call, no case enumerated.
@@ -568,6 +662,15 @@ def _walk(
             result.status in _STOPPING_STATUSES for result in outcome.results
         ):
             break
+    # After the walk, and after a ``--fail-fast`` break: a run-scoped check never invokes the target
+    # and its subject is the footprint of the finished run (AAP §0.8.1).
+    for contract in run_scoped:
+        if target_loss is not None and contract.requires:
+            results.append(
+                _target_loss_result(contract.id, target_loss, context, duration_ms=0.0)
+            )
+            continue
+        results.extend(_run_check(contract, context).results)
     return tuple(results)
 
 
@@ -578,16 +681,23 @@ def _run_check(contract: CheckContract, context: RunContext) -> _CheckRun:
     check's declared adapter-invocation count comes out right on a single pass and any
     attempt to re-run a case would surface as that count plus one (AAP §0.4.3).
 
-    Three outcomes per case:
+    Four outcomes, the last two of them faults this layer contains rather than re-raises:
 
     * a returned result is accumulated as the check built it, evidence directory and all;
     * :class:`~qrcheck.targets.base.TargetUnavailable` or
       :class:`~qrcheck.targets.base.TargetTimeout` ends the check: one ``synthetic:target``
       error result is recorded and the remaining cases are abandoned, because they would all
       report the same dead target;
-    * any other exception is contained: one ``error`` result carrying the traceback is
-      recorded and the walk continues with the next case, which is what keeps one broken
-      case from hiding every result after it (AAP §0.6.6 row 11).
+    * any other exception escaping a case's ``execute`` is contained: one ``error`` result
+      carrying the traceback is recorded and the walk continues with the next case, which is
+      what keeps one broken case from hiding every result after it;
+    * an exception escaping the check's own case *generator* -- raised while its cases are
+      enumerated, before any case can run -- is contained the same way: one ``error`` result
+      under :data:`CASES_FAILED_CASE_ID` carrying the traceback is recorded and the walk
+      continues with the next **check**, so a check that cannot even say what it would run
+      never destroys the report for the others. Both containments are AAP §0.6.6 row 11: the
+      check reports ``error`` with its traceback, the run continues, and the process exits 3
+      at the end, after the report is written (§0.3.4).
 
     Args:
         contract: The registered check to execute.
@@ -598,7 +708,23 @@ def _run_check(contract: CheckContract, context: RunContext) -> _CheckRun:
         early when there was one.
     """
     results: list[CaseResult] = []
-    cases: list[Case] = sorted(contract.cases(context), key=lambda case: case.case_id)
+    try:
+        cases: list[Case] = sorted(contract.cases(context), key=lambda case: case.case_id)
+    except Exception as error:  # noqa: BLE001 - containment is this layer's purpose
+        # A check that cannot enumerate its cases has produced no result at all, so its whole
+        # contribution is one error result: letting this escape would abort the run before a
+        # RunResult exists, and one broken generator would destroy the report for the other
+        # twenty checks (AAP §0.6.6 row 11).
+        results.append(
+            _internal_error_result(
+                contract.id,
+                CASES_FAILED_CASE_ID,
+                error,
+                context,
+                duration_ms=0.0,
+            )
+        )
+        return _CheckRun(tuple(results), None)
     for case in cases:
         started = time.perf_counter()
         try:
@@ -653,7 +779,9 @@ def _target_loss_result(
             that was never asked to produce a case.
 
     Returns:
-        The ``error`` result, with its evidence directory when the store wrote one.
+        The ``error`` result, with its evidence directory when the store wrote one, or -- when
+        the store could not write it -- the evidence-fault error result that replaces it in the
+        same case (:func:`_persist`).
     """
     reason = (
         Reason.TARGET_TIMEOUT
@@ -679,7 +807,7 @@ def _target_loss_result(
         expected={"outcome": "reachable_target"},
         seed=context.seed,
     )
-    return _with_evidence(context.evidence, result)
+    return _persist(context.evidence, result)
 
 
 def _internal_error_result(
@@ -706,7 +834,9 @@ def _internal_error_result(
         duration_ms: How long the case ran before it raised.
 
     Returns:
-        The ``error`` result, with its evidence directory when the store wrote one.
+        The ``error`` result, with its evidence directory when the store wrote one, or -- when
+        the store could not write it -- the evidence-fault error result that replaces it in the
+        same case (:func:`_persist`).
     """
     result = CaseResult(
         check_id=check_id,
@@ -722,7 +852,90 @@ def _internal_error_result(
         expected={"outcome": "completed_case"},
         seed=context.seed,
     )
-    return _with_evidence(context.evidence, result)
+    return _persist(context.evidence, result)
+
+
+def _persist(store: EvidenceStore, result: CaseResult) -> CaseResult:
+    """Persist `result` and return it, containing an evidence write fault as an error result.
+
+    The containment AAP §0.6.6 row 11 requires of this layer, at the point where the fault
+    happens.  :class:`~qrcheck.report.evidence.EvidenceStore` raises ``OSError`` when a
+    non-passing result's case directory or one of its artefacts cannot be written -- a full
+    disk, a permission that changed under the run, a path component that became a file -- and
+    letting that escape would abort the walk with every result accumulated so far discarded,
+    so ``qrcheck.cli.run`` would report an empty stream over a run that had produced plenty.
+    Contained, the fault becomes one ``error`` result in its own case, the walk continues with
+    the next case, and the report the other results describe is still written -- or, when the
+    report directory itself is what failed, still streamed as JSON lines (AAP §0.3.4, §0.6.6
+    row 10), which is what §0.6.6 row 11's "the run continues, the process exits 3 at the end"
+    asks for.
+
+    A containment and never a retry: the store is called exactly once per result whether it
+    succeeds or fails, so no check's declared adapter-invocation count changes and no retry
+    path appears (AAP §0.4.3, §0.5.6).  Every result this layer builds takes this path -- the
+    two error builders and the pre-execution skips -- and a result a check built is persisted by
+    the check itself, inside its own case, where the same ``OSError`` reaches :func:`_run_check`
+    as a case fault.
+
+    Args:
+        store: The run's evidence store.
+        result: The result this layer built, already carrying its ``check_id``, ``case_id``,
+            ``duration_ms`` and ``seed``.
+
+    Returns:
+        ``result`` itself when the store wrote its evidence or declined to, or the ``error``
+        result :func:`_evidence_fault_result` builds in its place when the store raised.
+    """
+    try:
+        return _with_evidence(store, result)
+    except OSError as error:
+        return _evidence_fault_result(result, error, traceback.format_exc())
+
+
+def _evidence_fault_result(
+    result: CaseResult,
+    error: OSError,
+    traceback_text: str,
+) -> CaseResult:
+    """Return the ``error`` result that replaces `result` when its evidence cannot be written.
+
+    The case keeps the one result it is entitled to rather than gaining a second: a run must
+    never hold two results for one ``(check_id, case_id)`` pair, because that pair is the case's
+    identity and the failure ID and evidence directory are derived from it.  So the outcome the
+    case had already reached is *replaced*, not repeated -- ``check_id``, ``case_id``,
+    ``duration_ms`` and ``seed`` are carried over unchanged, ``evidence_dir`` is unset because
+    no evidence exists, and ``decoded`` records both the fault and the outcome it displaced.
+    That last part is why the displaced outcome is spelled out rather than dropped: one
+    ``reason`` cannot say both "the framework failed" and "this case had already skipped" or
+    "this case had already failed", so a reader of ``summary.json`` would otherwise be unable to
+    tell a lost failing case from a lost skipped one.
+
+    Args:
+        result: The result whose evidence the store could not write.
+        error: The ``OSError`` the store raised, named in ``decoded["error_type"]``.
+        traceback_text: The traceback captured at the fault, stored under
+            :data:`qrcheck.report.model.TRACEBACK_KEY` -- the one key the result model
+            normalises, so no artefact records the directory the run happened in.
+
+    Returns:
+        The replacement ``error`` result -- status ``error``, reason
+        :attr:`qrcheck.report.model.Reason.INTERNAL_ERROR` -- whose ``expected`` names the write
+        the case was prevented from reaching.
+    """
+    decoded: dict[str, object] = {
+        "error_type": type(error).__name__,
+        TRACEBACK_KEY: traceback_text,
+        "prevented_status": result.status.value,
+        "prevented_reason": None if result.reason is None else result.reason.value,
+    }
+    return dataclasses.replace(
+        result,
+        status=Status.ERROR,
+        reason=Reason.INTERNAL_ERROR,
+        decoded=decoded,
+        expected={"outcome": "evidence_recorded"},
+        evidence_dir=None,
+    )
 
 
 def _with_evidence(store: EvidenceStore, result: CaseResult) -> CaseResult:
@@ -746,8 +959,10 @@ def _with_evidence(store: EvidenceStore, result: CaseResult) -> CaseResult:
         report directory.
 
     Raises:
-        OSError: The case directory cannot be created or written, which ``qrcheck.cli.run``
-            maps to exit code 3.
+        OSError: The case directory cannot be created or written. Propagated to
+            :func:`_persist`, its only caller, which contains it as an ``error`` result so the
+            walk continues and the run's results still reach the report -- or the JSON-lines
+            stream an unwritable report directory falls back to (AAP §0.6.6 row 11, §0.3.4).
     """
     directory = store.record(result)
     if directory is None:

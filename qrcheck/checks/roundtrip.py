@@ -87,6 +87,7 @@ _EXPECTED_OUTCOME: Final[str] = "decoded payload bytes equal the requested bytes
     family="roundtrip",
     requires=frozenset({Capability.png}),
     dependencies=(DEPENDENCY_PRIMARY_DECODER,),
+    corpus_driven=True,
 )
 def cases(ctx: RunContext) -> Iterator[Case]:
     """Yield one round-trip case per corpus record, ascending by record ``id``.

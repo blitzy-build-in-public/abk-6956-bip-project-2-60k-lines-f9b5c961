@@ -223,8 +223,16 @@ class RunContext:
     the check report ``skipped`` with reason ``missing_dependency``, which the zero-skip reference
     gate fails loudly, instead of a pass against something never present. A missing primary decoder
     never reaches this mapping: ``qrcheck doctor`` and ``qrcheck run`` exit 2 naming zxing-cpp
-    first, so that token records what a check needs rather than a skip path. The instance is frozen,
-    so a check cannot change what another check sees.
+    first, so that token records what a check needs rather than a skip path.
+
+    ``temp_baseline`` is the temporary-file snapshot the run began with: the names in
+    :func:`tempfile.gettempdir` that carried the framework's ``qrcheck-`` prefix when the runner
+    took it, at the last instant before any check could run. The runner observes it through the
+    check layer's own :func:`qrcheck.checks.cleanup.temp_entries` (AAP §0.8.1), and only
+    ``CL-ARTIFACTS`` reads it. A context built directly -- as a test does -- carries the empty
+    default, under which any prefixed entry present is reported as leaked: the safe direction for
+    a snapshot nobody took. The instance is frozen, so a check cannot change what another check
+    sees.
     """
 
     adapter: Adapter
@@ -234,6 +242,7 @@ class RunContext:
     seed: int
     availability: Mapping[str, bool]
     evidence: EvidenceStore
+    temp_baseline: frozenset[str] = frozenset()
 
     def dependency_available(self, token: str) -> bool:
         """Return whether `token` was resolved as available for this run.
@@ -327,16 +336,30 @@ def _normalise_dependencies(value: object, check_id: str) -> tuple[str, ...]:
 class CheckContract:
     """One registered check: its identity, what it needs, and the cases it contributes.
 
-    Six fields, each a stable public surface: ``id`` (one of :data:`CHECK_IDS`), ``title`` (the line
-    ``qrcheck list`` prints), ``family`` (owning module and JUnit ``classname`` suffix),
-    ``requires`` (capabilities the target must declare, else the check is ``skipped`` with reason
-    ``unsupported_capability``), ``dependencies`` (:data:`DEPENDENCY_TOKENS` members, resolved into
-    :attr:`RunContext.availability`) and ``cases``. Construction validates and normalises at import
-    of the check module - ``requires`` coerced to members, ``dependencies`` sorted and
-    de-duplicated, the identifier/family pair checked against the prefix table - so a malformed
-    check fails the process that imports it, raising :class:`CheckRegistrationError` for any field
-    that is unusable or inconsistent. ``cases`` stays the raw callable: when a case executes, and
-    whether it does under ``--fail-fast``, is the runner's decision.
+    Eight fields, each a stable public surface: ``id`` (one of :data:`CHECK_IDS`), ``title``
+    (the line ``qrcheck list`` prints), ``family`` (owning module and JUnit ``classname``
+    suffix), ``requires`` (capabilities the target must declare, else the check is ``skipped``
+    with reason ``unsupported_capability``), ``dependencies`` (:data:`DEPENDENCY_TOKENS` members,
+    resolved into :attr:`RunContext.availability`), ``cases``, ``corpus_driven`` and
+    ``observes_run_end``. Construction validates and normalises at import of the check module -
+    ``requires`` coerced to members, ``dependencies`` sorted and de-duplicated, the
+    identifier/family pair checked against the prefix table - so a malformed check fails the
+    process that imports it, raising :class:`CheckRegistrationError` for any field that is
+    unusable or inconsistent. ``cases`` stays the raw callable: when a case executes, and whether
+    it does under ``--fail-fast``, is the runner's decision.
+
+    ``corpus_driven`` says whether the cases this check yields are drawn from the corpus the run
+    loaded, which is what decides whether the corpus file has to exist: AAP §0.3.4 conditions
+    ``corpus_path``'s "must exist" rule on a corpus-driven check being selected, so a run of
+    synthetic-only checks can complete on a machine where no corpus has ever been built. It is
+    declared rather than inferred, because only the check knows whether it reads
+    :attr:`RunContext.corpus`.
+
+    ``observes_run_end`` says whether the check asserts a property of the whole run rather than of
+    one case. It is true for exactly one check, ``CL-ARTIFACTS``, whose subject is the footprint the
+    finished run leaves behind: the runner takes that check's "before" snapshot immediately before
+    the walk and executes the check after it, so the two snapshots bracket the run (AAP §0.8.1).
+    Every other check leaves it false and has its cases executed in the ordinary identifier order.
     """
 
     id: str
@@ -345,6 +368,8 @@ class CheckContract:
     requires: frozenset[Capability]
     dependencies: tuple[str, ...]
     cases: CasesFn
+    corpus_driven: bool = False
+    observes_run_end: bool = False
 
     def __post_init__(self) -> None:
         """Validate the declaration and normalise the two collection fields.
@@ -352,7 +377,8 @@ class CheckContract:
         Raises:
             CheckRegistrationError: The identifier is outside :data:`CHECK_IDS`, the
                 family is unknown or does not own the identifier's prefix, the title
-                is empty, a capability or dependency token is unknown, or ``cases`` is not callable.
+                is empty, a capability or dependency token is unknown, ``cases`` is not callable,
+                ``corpus_driven`` is not a bool, or ``observes_run_end`` is not a bool.
         """
         check_id = self.id
         if not isinstance(check_id, str) or check_id not in CHECK_IDS:
@@ -382,6 +408,18 @@ class CheckContract:
         if not callable(self.cases):
             raise CheckRegistrationError(
                 f"check {check_id!r} declares cases={self.cases!r}, which is not callable"
+            )
+        if not isinstance(self.corpus_driven, bool):
+            raise CheckRegistrationError(
+                f"check {check_id!r} declares corpus_driven={self.corpus_driven!r}, which is "
+                f"not a bool; it decides whether the corpus file must exist for this run "
+                f"(AAP §0.3.4)"
+            )
+        if not isinstance(self.observes_run_end, bool):
+            raise CheckRegistrationError(
+                f"check {check_id!r} declares observes_run_end={self.observes_run_end!r}, which "
+                f"is not a bool; it decides whether the runner executes this check after the walk, "
+                f"so that it observes the run's end (AAP §0.8.1)"
             )
         object.__setattr__(self, "requires", _coerce_requires(self.requires, check_id))
         object.__setattr__(
@@ -437,6 +475,8 @@ def check(
     family: str,
     requires: frozenset[Capability] = frozenset(),
     dependencies: tuple[str, ...] = (),
+    corpus_driven: bool = False,
+    observes_run_end: bool = False,
 ) -> CheckDecorator:
     """Return the decorator that registers one check.
 
@@ -445,11 +485,16 @@ def check(
     ``contract.cases(ctx)`` instead of calling it. ``id`` is one of the twenty-one identifiers of
     :data:`CHECK_IDS`, ``title`` the line ``qrcheck list`` prints, ``family`` the owning family
     name, which must match the identifier's prefix, ``requires`` the capabilities the target must
-    declare for the check to run, and ``dependencies`` the tokens it needs, from
-    :data:`DEPENDENCY_TOKENS`. Returns a decorator mapping a ``cases`` generator to its registered
-    contract, and raises :class:`CheckRegistrationError` when the declaration is invalid or the
-    identifier is already registered - raised when the returned decorator is applied, since that is
-    when the contract is built.
+    declare for the check to run, ``dependencies`` the tokens it needs, from
+    :data:`DEPENDENCY_TOKENS`, and ``corpus_driven`` whether its cases are drawn from the corpus
+    the run loaded -- which is what makes the corpus file a prerequisite of a run that selects it,
+    and nothing else one (AAP §0.3.4). ``observes_run_end`` says whether the check asserts a
+    property of the whole run rather than of one case, which is true for the one check the runner
+    executes after the walk so that it observes the run's end (AAP §0.8.1), and false for every
+    other check. Returns a decorator mapping a ``cases`` generator to its registered contract, and
+    raises :class:`CheckRegistrationError` when the declaration is invalid or the identifier is
+    already registered - raised when the returned decorator is applied, since that is when the
+    contract is built.
     """
 
     def decorator(cases_fn: CasesFn) -> CheckContract:
@@ -461,6 +506,8 @@ def check(
             requires=requires,
             dependencies=dependencies,
             cases=cases_fn,
+            corpus_driven=corpus_driven,
+            observes_run_end=observes_run_end,
         )
         return register(contract)
 

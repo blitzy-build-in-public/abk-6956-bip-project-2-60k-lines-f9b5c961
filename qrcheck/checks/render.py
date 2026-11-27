@@ -1000,6 +1000,7 @@ def _translate(
     family=_FAMILY,
     requires=frozenset({Capability.png, Capability.quiet_zone}),
     dependencies=(DEPENDENCY_PRIMARY_DECODER,),
+    corpus_driven=True,
 )
 def quiet_zone_cases(ctx: RunContext) -> Iterator[Case]:
     """Yield the quiet-zone cases: the first twelve corpus records, in ``id`` order.
@@ -1134,6 +1135,7 @@ def _run_quiet_zone(
     family=_FAMILY,
     requires=frozenset({Capability.png, Capability.module_size}),
     dependencies=(DEPENDENCY_PRIMARY_DECODER,),
+    corpus_driven=True,
 )
 def module_size_cases(ctx: RunContext) -> Iterator[Case]:
     """Yield the module-size cases: the first twelve corpus records, in ``id`` order.
@@ -1433,6 +1435,7 @@ def _run_contrast(
     family=_FAMILY,
     requires=frozenset({Capability.svg}),
     dependencies=(DEPENDENCY_SVG_RASTERIZER,),
+    corpus_driven=True,
 )
 def svg_cases(ctx: RunContext) -> Iterator[Case]:
     """Yield the SVG cases: the first twelve corpus records, requested as vector output.

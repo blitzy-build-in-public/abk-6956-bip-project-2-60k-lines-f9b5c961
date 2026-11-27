@@ -145,6 +145,7 @@ _CORPUS_CASE_PREFIX: Final[str] = "corpus:"
     family="mode",
     requires=frozenset({Capability.png}),
     dependencies=(DEPENDENCY_PRIMARY_DECODER,),
+    corpus_driven=True,
 )
 def mode_optimal_cases(ctx: RunContext) -> Iterator[Case]:
     """Yield one case per record of the discriminating set and the byte-mode sample.
@@ -331,6 +332,7 @@ def _own_charset_minimal_version(
     family="mode",
     requires=frozenset({Capability.png}),
     dependencies=(DEPENDENCY_PRIMARY_DECODER,),
+    corpus_driven=True,
 )
 def charset_cases(ctx: RunContext) -> Iterator[Case]:
     """Yield one case per record of the six charset coverages.

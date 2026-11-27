@@ -120,21 +120,24 @@ Three forces decide the structure, and each is a requirement rather than a prefe
 
 1. capture the run's start time, once;
 2. probe what the host provides — both reference decoders and the SVG rasterizer — with zero target invocations, and refuse to start when the blocking primary decoder is absent or cannot be imported, or when any other pinned runtime dependency cannot be imported;
-3. load the corpus and apply the `--class` filter, refusing to start when the filter leaves nothing;
+3. resolve the `--checks` selection, because which checks a run selected is what decides what the
+   run needs, and load the corpus when that selection reads it — a `--class` filter was given, or a
+   selected check draws its cases from the corpus — applying the filter and refusing to start when
+   it leaves nothing;
 4. build the one `RunContext` the checks of this run share;
-5. resolve the `--checks` selection against the adapter's declared capabilities, so every check is
-   decided runnable or skipped **before** the first case runs, then remove, before this run writes
-   anything, any evidence tree a previous run left under this report root, so that the root
+5. resolve each selected check's requirements against the adapter's declared capabilities, so every
+   check is decided runnable or skipped **before** the first case runs, then remove, before this run
+   writes anything, any evidence tree a previous run left under this report root, so that the root
    describes this run alone;
-6. walk the runnable checks in check-identifier order and each check's cases in case-identifier order, containing every per-case fault;
+6. walk the runnable checks in check-identifier order and each check's cases in case-identifier order, containing every per-case fault, and finish with the run-scoped checks — the ones whose subject is the whole run — so that they observe the run's end; report order is unaffected, because the results are sorted by `(check_id, case_id)` before the model is built;
 7. apply the one-error-result-per-check policy when the target is lost;
 8. accumulate one `RunResult` and close the adapter exactly once, whatever happened during the walk.
 
 A check never calls the runner and never knows which check ran before it. It receives a `RunContext` and yields cases; when a case executes and whether it executes at all is the runner's decision alone. The runner is the only place that decides three policies:
 
-- **The pre-flight probe.** A fault found before any case runs — the primary decoder absent or installed but not importable, another pinned runtime dependency (the oracle or a core library) that cannot be imported, the corpus unreadable or malformed, a `--class` filter that leaves zero records — raises `RunPrerequisiteError`, which ends the command with exit code 2 and writes no report.
+- **The pre-flight probe.** A fault found before any case runs — the primary decoder absent or installed but not importable, another pinned runtime dependency (the oracle or a core library) that cannot be imported, the corpus unreadable or malformed when the run's selection reads it, a `--class` filter that leaves zero records — raises `RunPrerequisiteError`, which ends the command with exit code 2 and writes no report.
 - **The one-error-per-check policy on target loss.** `TargetUnavailable` and `TargetTimeout` propagate out of a check unchanged, because only this layer can tell one dead target from one defective symbol. On the first such error the check that met it receives exactly **one** `error` result filed under `synthetic:target`, its remaining cases are abandoned, and every later check that requires a capability of the target receives its own single `synthetic:target` error without the target being called again. Checks that declare no capability requirement are target-independent, so they still run and the report describes what was measurable rather than only what broke.
-- **Fail-fast.** `--fail-fast` stops launching new checks after the first check that produced a `failed` or `error` result; the in-flight check always completes all of its cases, so the report never describes a check whose cases were cut off half-way, and the report stays schema-complete.
+- **Fail-fast.** `--fail-fast` stops launching new checks after the first check that produced a `failed` or `error` result — the run-scoped check still runs, because it never invokes the target and its subject is the finished run; the in-flight check always completes all of its cases, so the report never describes a check whose cases were cut off half-way, and the report stays schema-complete.
 
 What the runner deliberately does not own, because a second owner of each would let two artefacts describe one run differently:
 
@@ -342,7 +345,7 @@ The `reference` target is built on segno, so `SY-MATRIX-EQUIV` against `referenc
 |--------|-----------|------------------------|
 | `zxing-cpp`, the primary decoder | **Refuse.** `qrcheck doctor` and `qrcheck run` both exit 2 naming the dependency and the interpreter/platform; `RT-ROUNDTRIP` is never silently skipped. The same refusal covers a binding that is installed yet cannot be imported, because both commands confirm the load through the shared importability probe instead of trusting module presence. On a platform with no 2.2.0 wheel the diagnostic additionally names the platform tag and says no wheel is published for it. | stderr diagnostic; no report written |
 | `segno`, the oracle | **Refuse.** `qrcheck doctor` reports it as a blocking core distribution and exits 2 naming it, and no run can make an oracle-backed assertion without it. It is a required runtime dependency, so an absent or unimportable install is a broken environment rather than a user choice. | stderr diagnostic; no report written |
-| The secondary decoder | **Degrade.** The run proceeds in single-decoder mode; `qrcheck/decode/consensus.py` records `agreement == "primary_only"`, and `index.html` carries a banner stating that the corroborating decoder was not installed, or was installed and could not be imported or run. When the decoder is not installed, `decoded.json`'s `per_decoder` holds the primary decoder alone; when it is installed but cannot be imported or run, `per_decoder` holds both names, the secondary at status `error` with its diagnostic in `error_text`, and no comparison was attempted, so `secondary_comparable` is `null`. No check is marked passed on the strength of a decoder that did not answer. | `decoded.json`, the HTML banner, and the run's own results |
+| The secondary decoder | **Degrade.** The run proceeds in single-decoder mode; `qrcheck/decode/consensus.py` records `agreement == "primary_only"`, and `index.html` carries a banner stating how many decode-bearing cases the corroborating decoder did not answer for, naming it as either not installed or asked and unable to read the artefact. When the decoder is not installed, `decoded.json`'s `per_decoder` holds the primary decoder alone; when it is installed but cannot be imported or run, `per_decoder` holds both names, the secondary at status `error` with its diagnostic in `error_text`, and no comparison was attempted, so `secondary_comparable` is `null`. No check is marked passed on the strength of a decoder that did not answer. | `decoded.json`, the HTML banner, and the run's own results |
 | An SVG rasterizer | **Degrade.** `RN-SVG` reports `skipped` with reason `missing_dependency`, and the result records the discovery order the framework attempted; a skip is counted separately and never as a pass. | the skipped block in `index.html`, and the reason in `summary.json` |
 
 The rasterizer discovery itself has one owner, `qrcheck/checks/render.py`, and one order: an importable `cairosvg` first, then `rsvg-convert`, `resvg`, `magick` and `convert` on `PATH`. The order is a contract rather than a preference, because a report quotes the sequence it attempted, so reordering it changes a report. The discovery is imported **into** `qrcheck/runner.py` and `qrcheck/cli/doctor.py`, never re-implemented there. `dependencies.md` owns what each of those tools is and which platforms provide it.
@@ -424,7 +427,7 @@ Because of this one point, a run is reproducible from what the report records al
 ### What must never enter an artefact or an assertion
 
 - `random`, `os.urandom`, `hash()`, `id()` or a set's iteration order, as a value or as a key.
-- `time.time()` and any wall-clock reading, other than the run's two timestamps and the per-case durations the model requires — both excluded from every determinism comparison. `performance.md` records the one exception, where a measured duration is compared against a configured ceiling.
+- `time.time()` and any wall-clock reading, other than the run's two timestamps and the per-case durations the model requires — both excluded from every determinism comparison, as is the measurement the two `PF-*` probes record in `decoded.metrics` (`encode_p95_ms`, `decode_p95_ms`, `symbols_per_minute`), which `performance.md` §7 masks beside them. `performance.md` also records the one exception, where a measured duration is compared against a configured ceiling.
 - Hostname, user name, process ID, locale, timezone or `PYTHONHASHSEED`.
 - Absolute paths: evidence paths are recorded relative to `report_dir`, configuration paths are recorded as given rather than resolved, and an error traceback is normalised so no frame path names the machine.
 - A library's internal ordering: decoder maps are keyed by sorted decoder name, so no assertion depends on the order a library returns anything in.

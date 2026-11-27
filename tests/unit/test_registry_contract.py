@@ -215,6 +215,32 @@ _EXPECTED_DEPENDENCIES: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType(
     }
 )
 
+# The eleven checks whose cases are drawn from the corpus the run loaded, from AAP §0.3.4's
+# condition that ``corpus_path`` must exist exactly when such a check is selected -- the ten
+# synthetic-only identifiers are its complement. One literal, so a check that quietly stopped
+# reading the corpus, or started to, fails here rather than changing what a run requires of a
+# machine where no corpus has ever been built.
+_EXPECTED_CORPUS_DRIVEN: Final[frozenset[str]] = frozenset(
+    {
+        "DM-RESILIENCE",
+        "DM-SEEDED",
+        "MD-CHARSET",
+        "MD-MODE-OPTIMAL",
+        "RN-MODULE-SIZE",
+        "RN-QUIET-ZONE",
+        "RN-SVG",
+        "RT-ROUNDTRIP",
+        "SY-EC-MATCH",
+        "SY-MASK",
+        "SY-VERSION-MIN",
+    }
+)
+
+# The one check whose subject is the whole run rather than one case (AAP §0.8.1). The runner
+# takes its baseline immediately before the walk and executes it after every other check, so
+# declaring a second such check would change when that check runs and what it can observe.
+_EXPECTED_RUN_END: Final[frozenset[str]] = frozenset({"CL-ARTIFACTS"})
+
 # Every capability the port declares, and an availability mapping naming every dependency token
 # as present. Together they are the strongest possible declaration a target and a host can make,
 # which is what the conforming ``reference`` target makes: a check that still cannot run against
@@ -385,8 +411,9 @@ def test_an_unknown_check_id_is_a_named_key_error() -> None:
 
 
 @pytest.mark.parametrize("check_id", sorted(_EXPECTED_CHECK_IDS))
-def test_a_contract_carries_the_six_fields_the_registry_declares(check_id: str) -> None:
-    """``id``, ``title``, ``family``, ``requires``, ``dependencies`` and ``cases``."""
+def test_a_contract_carries_the_eight_fields_the_registry_declares(check_id: str) -> None:
+    """``id``, ``title``, ``family``, ``requires``, ``dependencies``, ``cases``,
+    ``corpus_driven`` and ``observes_run_end``."""
     contract = get_check(check_id)
     assert contract.id == check_id, f"{check_id}: the contract is filed under another id"
     assert isinstance(contract.title, str), f"{check_id}: the title is not a str"
@@ -408,14 +435,42 @@ def test_a_contract_carries_the_six_fields_the_registry_declares(check_id: str) 
     unexpected = sorted(token for token in contract.dependencies if token not in DEPENDENCY_TOKENS)
     assert not unexpected, f"{check_id}: unknown dependency tokens {unexpected}"
     assert callable(contract.cases), f"{check_id}: cases is not callable"
+    assert isinstance(contract.corpus_driven, bool), (
+        f"{check_id}: corpus_driven must be a bool, got {type(contract.corpus_driven).__name__}"
+    )
+    assert isinstance(contract.observes_run_end, bool), (
+        f"{check_id}: observes_run_end must be a bool, got "
+        f"{type(contract.observes_run_end).__name__}"
+    )
+
+
+def test_the_two_declared_flags_name_exactly_the_planned_checks() -> None:
+    """``CL-ARTIFACTS`` alone observes the run's end, and eleven checks draw their cases from the
+    corpus -- the two declarations that decide when a check runs and whether the corpus file has
+    to exist (AAP §0.8.1, §0.3.4)."""
+    corpus_driven = frozenset(
+        check_id for check_id in CHECK_IDS if get_check(check_id).corpus_driven
+    )
+    assert corpus_driven == _EXPECTED_CORPUS_DRIVEN, (
+        "the corpus file is a prerequisite of a run exactly when a check declaring corpus_driven "
+        f"is selected; the registry declares {sorted(corpus_driven)}"
+    )
+    run_end = frozenset(
+        check_id for check_id in CHECK_IDS if get_check(check_id).observes_run_end
+    )
+    assert run_end == _EXPECTED_RUN_END, (
+        "the one check whose subject is the whole run is executed after the walk, so it observes "
+        f"the run's end (AAP §0.8.1); the registry declares {sorted(run_end)}"
+    )
 
 
 # A malformed declaration is refused, never registered as a plausible check
 
 # One field broken per row, everything else valid, so the refusal that fires is the one under
-# test: ``id``, ``family``, ``title``, ``cases``, ``requires`` and ``dependencies`` are each
-# validated in ``CheckContract`` before a contract can reach the registry, and a check that
-# registered with any of them broken would produce a report describing a run it never made.
+# test: ``id``, ``family``, ``title``, ``cases``, ``requires``, ``dependencies``,
+# ``corpus_driven`` and ``observes_run_end`` are each validated in ``CheckContract`` before a
+# contract can reach the registry, and a check that registered with any of them broken would
+# produce a report describing a run it never made.
 _MALFORMED_DECLARATIONS: Final[tuple[tuple[Mapping[str, object], str], ...]] = (
     ({"id": "XX-NOT-A-CHECK"}, "XX-NOT-A-CHECK"),
     ({"family": "nonsense"}, "nonsense"),
@@ -426,11 +481,13 @@ _MALFORMED_DECLARATIONS: Final[tuple[tuple[Mapping[str, object], str], ...]] = (
     ({"requires": {"not-a-capability"}}, "not-a-capability"),
     ({"dependencies": 5}, "RT-ROUNDTRIP"),
     ({"dependencies": ("not-a-token",)}, "not-a-token"),
+    ({"corpus_driven": "yes"}, "corpus_driven"),
+    ({"observes_run_end": "yes"}, "yes"),
 )
 
 
 def _valid_declaration() -> dict[str, object]:
-    """Return the six fields of a declaration that registers cleanly, before any defect."""
+    """Return the six required fields of a declaration that registers cleanly, before any defect."""
     return {
         "id": "RT-ROUNDTRIP",
         "title": "stub declaration",

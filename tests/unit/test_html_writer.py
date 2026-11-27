@@ -39,6 +39,7 @@ from qrcheck.evidence.naming import (
     SYMBOL_PNG,
     SYMBOL_REPEAT_PNG,
 )
+from qrcheck.report import html as html_module
 from qrcheck.report.evidence import EvidenceStore
 from qrcheck.report.html import write_html
 from qrcheck.report.model import (
@@ -55,7 +56,7 @@ from qrcheck.report.model import (
 # request.json, and one tally figure.
 _VERDICT = re.compile(r'<p class="verdict (?P<modifier>[a-z-]+)">(?P<text>[^<]*)</p>')
 _REQUEST_PANEL = re.compile(
-    r"<h4>request\.json</h4>\s*<pre>(?P<body>.*?)</pre>", re.DOTALL
+    r"<h4>request\.json</h4>\s*<pre[^>]*>(?P<body>.*?)</pre>", re.DOTALL
 )
 _COUNT_VALUE = re.compile(r'<span class="count-value">(?P<value>[^<]*)</span>')
 
@@ -68,8 +69,12 @@ _COUNT_LABEL = re.compile(r'<span class="count-label">(?P<label>[^<]*)</span>')
 _BANNERS = re.compile(r'<section class="banners"[^>]*>(?P<body>.*?)</section>', re.DOTALL)
 _SKIPPED_SECTION = re.compile(r'<section id="skipped">(?P<body>.*?)</section>', re.DOTALL)
 _FAILURES_SECTION = re.compile(r'<section id="failures">(?P<body>.*?)</section>', re.DOTALL)
-_TABLE_ROW = re.compile(r'<tr class="status-(?P<status>[a-z]+)">(?P<cells>.*?)</tr>', re.DOTALL)
-_TABLE_CELL = re.compile(r'<td data-label="(?P<label>[A-Za-z]+)">(?P<body>.*?)</td>', re.DOTALL)
+_TABLE_ROW = re.compile(
+    r'<tr class="status-(?P<status>[a-z]+)"[^>]*>(?P<cells>.*?)</tr>', re.DOTALL
+)
+_TABLE_CELL = re.compile(
+    r'<td data-label="(?P<label>[A-Za-z]+)"[^>]*>(?P<body>.*?)</td>', re.DOTALL
+)
 _FIGURE = re.compile(
     r'<figure class="evidence-image">\s*'
     r'<img src="(?P<src>[^"]*)" alt="(?P<alt>[^"]*)">\s*'
@@ -80,6 +85,21 @@ _IMAGE = re.compile(r"<img\b(?P<attributes>[^>]*)>")
 _SRC_ATTRIBUTE = re.compile(r'src="(?P<value>[^"]*)"')
 _REFERENCE = re.compile(r'\b(?:src|href)="(?P<value>[^"]*)"')
 _TAG = re.compile(r"<[^>]*>")
+
+# The accessibility skeleton the writer emits, read back one property at a time: the six column
+# labels the table's header row carries in the order the columns are defined, one column header,
+# the caption body, and the level of one heading element.
+_TABLE_HEADINGS: tuple[str, ...] = (
+    "Check",
+    "Case",
+    "Status",
+    "Reason",
+    "Duration",
+    "Evidence",
+)
+_TH_HEADING = re.compile(r'<th scope="col"[^>]*>(?P<label>[^<]*)</th>')
+_CAPTION = re.compile(r"<caption>(?P<body>.*?)</caption>", re.DOTALL)
+_HEADING_LEVEL = re.compile(r"<h(?P<level>[1-4])>")
 
 # A symbol a target could return in vector form, whose own text carries a URL: it reaches
 # the page base64-encoded inside a data: URI, so the document holds no reference to it.
@@ -290,7 +310,7 @@ def _rows(document: str) -> list[dict[str, str]]:
 def _panel(document: str, heading: str) -> object:
     """Return the JSON the panel headed ``heading`` renders, parsed back out of the page."""
     match = re.search(
-        rf"<h4>{re.escape(heading)}</h4>\s*<pre>(?P<body>.*?)</pre>", document, re.DOTALL
+        rf"<h4>{re.escape(heading)}</h4>\s*<pre[^>]*>(?P<body>.*?)</pre>", document, re.DOTALL
     )
     assert match is not None
     return json.loads(unescape(match.group("body")))
@@ -354,7 +374,7 @@ def test_zero_result_run_states_that_no_case_ran(tmp_path: Path) -> None:
     assert '<section id="results" tabindex="-1">' in document
     assert "<h2>Results</h2>" in document
     assert '<p class="empty-state">No cases ran' in document
-    assert "<table>" not in document
+    assert "<table" not in document
 
 
 def test_zero_result_footer_offers_no_row_to_rerun(tmp_path: Path) -> None:
@@ -453,7 +473,7 @@ def test_a_run_with_results_keeps_its_verdict(
     assert verdict is not None
     assert (verdict.group("text"), verdict.group("modifier")) == (text, modifier)
     assert '<p class="empty-state">' not in document
-    assert "<table>" in document
+    assert '<table role="table">' in document
 
 
 def test_header_states_the_run_identity_and_its_four_tallies(tmp_path: Path) -> None:
@@ -571,7 +591,7 @@ def test_a_missing_evidence_directory_states_the_failure_and_embeds_nothing(
 def test_a_failing_case_embeds_the_images_the_evidence_store_wrote(
     report_dir: Path,
 ) -> None:
-    """Every image a failing case recorded is embedded, and its bytes are the store's."""
+    """Every image a failing case recorded is embedded, and its alternative describes it."""
     failure = _failed_case(_REQUEST)
     damage_name = DAMAGE_ARTIFACT_TEMPLATE.format(kind="blur", seed=failure.seed)
     recorded = dataclasses.replace(
@@ -604,6 +624,18 @@ def test_a_failing_case_embeds_the_images_the_evidence_store_wrote(
     assert on_disk == expected
     assert all(name in FIXED_ARTIFACT_NAMES or name == damage_name for name, _ in figures)
     assert document.count('<section id="ev-') == 1
+    alternatives = {
+        figure.group("name"): unescape(figure.group("alt"))
+        for figure in _FIGURE.finditer(document)
+    }
+    assert sorted(alternatives) == expected
+    for name, alternative in alternatives.items():
+        assert alternative, name
+        assert alternative != name
+        assert recorded.check_id in alternative
+        assert recorded.case_id in alternative
+    assert len(set(alternatives.values())) == len(expected)
+    assert f"blur damage with damage seed {failure.seed}" in alternatives[damage_name]
 
 
 def test_a_passing_case_embeds_no_image(tmp_path: Path) -> None:
@@ -702,7 +734,6 @@ def test_every_reference_is_inline_data_or_a_fragment(tmp_path: Path) -> None:
     assert {value.split(":", 1)[0] for value in references if not value.startswith("#")} == {
         "data"
     }
-    assert "http" not in "".join(references)
     images = _IMAGE.findall(document)
     assert len(images) == len(_FIGURE.findall(document)) == len(recorded)
     for attributes in images:
@@ -711,6 +742,49 @@ def test_every_reference_is_inline_data_or_a_fragment(tmp_path: Path) -> None:
         assert source.group("value").startswith("data:image/")
         assert 'alt="' in attributes
     assert '<img src="data:image/svg+xml;base64,' in document
+
+
+def test_the_page_carries_the_accessibility_skeleton_it_declares(tmp_path: Path) -> None:
+    """Every structural property the writer declares is present in the page it wrote.
+
+    One page holds a failing case with evidence, an errored case and a skip, so the results
+    table, two detail blocks with their panels and the skip section all exist -- which is what
+    makes the heading sequence below the whole document's rather than one region's. The roles
+    at the end are the ones the narrow-viewport collapse needs: that rule overrides ``display``
+    on the table parts, which strips the roles a browser would otherwise derive from them.
+    """
+    failure = _failed_case(_REQUEST)
+    errored = _error_case("PF-ENCODE", "synthetic:encode")
+    results = (
+        dataclasses.replace(
+            failure,
+            evidence_dir=EvidenceStore(tmp_path).record(
+                failure,
+                symbol=SimpleNamespace(image_bytes=_derived_png("symbol"), output_format="png"),
+            ),
+        ),
+        dataclasses.replace(errored, evidence_dir=EvidenceStore(tmp_path).record(errored)),
+        _skipped_case("RN-SVG", "synthetic:svg-rasterizer", Reason.MISSING_DEPENDENCY),
+    )
+
+    document = _write_page(tmp_path, _run(*results))
+
+    assert '<html lang="en">' in document
+    caption = _CAPTION.search(document)
+    assert caption is not None
+    assert caption.group("body").startswith(
+        "One row per case, ordered by check ID and then by case ID."
+    )
+    assert "em dash means nothing was recorded" in caption.group("body")
+    assert _TH_HEADING.findall(document) == list(_TABLE_HEADINGS)
+    levels = [int(level) for level in _HEADING_LEVEL.findall(document)]
+    assert tuple(levels) == (1, 2, 2, 3, 4, 4, 4, 3, 4, 4, 2, 2)
+    assert all(later - earlier <= 1 for earlier, later in zip(levels, levels[1:]))
+    assert '<a class="skip-link" href="#main">Skip to main content</a>' in document
+    assert '<main id="main" tabindex="-1">' in document
+    assert "@media (max-width: 720px)" in document
+    for role in ("table", "rowgroup", "row", "columnheader", "cell"):
+        assert f'role="{role}"' in document
 
 
 def test_an_errored_case_renders_its_traceback_in_its_block(tmp_path: Path) -> None:
@@ -756,9 +830,22 @@ def test_an_errored_case_renders_its_traceback_in_its_block(tmp_path: Path) -> N
             "Single-decoder mode.",
         ),
         (
+            (
+                _passed_case("RT-ROUNDTRIP", "corpus:url-001"),
+                _passed_case("RT-ROUNDTRIP", "corpus:url-002", _UNUSABLE_SECONDARY_DECODE),
+            ),
+            "banner-single-decoder",
+            "Decoder corroboration incomplete.",
+        ),
+        (
             (_skipped_case("RN-SVG", "synthetic:svg-rasterizer", Reason.MISSING_DEPENDENCY),),
             "banner-missing-dependency",
-            "SVG rasterizer missing.",
+            "Missing dependency.",
+        ),
+        (
+            (_skipped_case("DM-SEEDED", "corpus:random-bytes-000", Reason.MISSING_DEPENDENCY),),
+            "banner-missing-dependency",
+            "Missing dependency.",
         ),
         (
             (_skipped_case("CL-ARTIFACTS", "synthetic:open-handles", Reason.UNSUPPORTED_PLATFORM),),
@@ -769,7 +856,9 @@ def test_an_errored_case_renders_its_traceback_in_its_block(tmp_path: Path) -> N
     ids=(
         "single-decoder",
         "single-decoder-unusable-secondary",
+        "decoder-corroboration-incomplete",
         "missing-dependency",
+        "missing-dependency-dm-seeded",
         "unsupported-platform",
     ),
 )
@@ -783,6 +872,49 @@ def test_a_degraded_run_states_the_degradation_in_a_banner(
     block = section.group("body")
     assert f'class="banner {banner}"' in block
     assert phrase in block
+
+
+def test_the_missing_dependency_banner_names_the_check_and_no_cause(tmp_path: Path) -> None:
+    """The banner names the check a missing prerequisite denied, never a guessed cause.
+
+    ``missing_dependency`` is recorded by more than one producer: an absent SVG rasterizer, a
+    check's unmet declared dependency token, and a check whose run-scoped precondition was
+    never filled. The token therefore cannot establish which prerequisite was absent, so a
+    run of ``DM-SEEDED`` alone -- every case of which skips for a precondition another check
+    fills rather than for an install -- must not be reported as a rasterizer problem.
+    """
+    skip = _skipped_case("DM-SEEDED", "corpus:random-bytes-000", Reason.MISSING_DEPENDENCY)
+    section = _BANNERS.search(_write_page(tmp_path, _run(skip)))
+
+    assert section is not None
+    block = section.group("body")
+    assert 'class="banner banner-missing-dependency"' in block
+    assert "<code>DM-SEEDED</code>" in block
+    assert "rasteriz" not in block.lower()
+    assert "RN-SVG" not in block
+
+
+def test_the_decoder_banner_states_how_many_cases_it_did_not_answer_for(
+    tmp_path: Path,
+) -> None:
+    """A partly corroborated run reports its counts instead of claiming single-decoder mode.
+
+    One agreeing result beside one whose secondary decoder errored on the artefact proves the
+    degradation for one case and not for the run, so the heading says corroboration is
+    incomplete and the sentence states how many of how many decode-bearing cases were not
+    corroborated -- the only claim the recorded statuses support (AAP §0.6.6 row 4).
+    """
+    run = _run(
+        _passed_case("RT-ROUNDTRIP", "corpus:url-001"),
+        _passed_case("RT-ROUNDTRIP", "corpus:url-002", _UNUSABLE_SECONDARY_DECODE),
+    )
+    section = _BANNERS.search(_write_page(tmp_path, run))
+
+    assert section is not None
+    block = section.group("body")
+    assert "Decoder corroboration incomplete." in block
+    assert "Single-decoder mode." not in block
+    assert "did not answer for 1 of 2" in block
 
 
 @pytest.mark.parametrize(
@@ -856,3 +988,134 @@ def test_two_writes_of_one_run_are_byte_identical(tmp_path: Path) -> None:
     assert first.read_bytes() == second.read_bytes() == again.read_bytes()
     assert first.read_bytes().endswith(b"\n")
     assert not first.read_bytes().endswith(b"\n\n")
+
+
+def test_each_failing_case_block_carries_its_own_reproduction_command(tmp_path: Path) -> None:
+    """The block's command is built from its own case, not copied from the footer's constant.
+
+    The two cases differ only in their check ID and seed, so a single constant command could
+    not satisfy both, and the count at the end separates the two block commands from the
+    footer's placeholder one.
+    """
+    cases = (
+        _failed_case(_REQUEST),
+        dataclasses.replace(
+            _failed_case(_REQUEST), check_id="RT-ROUNDTRIP", case_id="corpus:url-007", seed=7
+        ),
+    )
+    recorded = tuple(
+        dataclasses.replace(case, evidence_dir=EvidenceStore(tmp_path).record(case))
+        for case in cases
+    )
+
+    document = _write_page(tmp_path, _run(*recorded))
+
+    for case in cases:
+        start = document.index(f"<h3>{case.check_id} — {case.case_id}</h3>")
+        block = document[start : document.index("</section>", start)]
+        assert (
+            f'<p class="command"><code>qrcheck run --checks {case.check_id} '
+            f'--seed {case.seed}</code></p>' in block
+        )
+    assert document.count("qrcheck run --checks") == len(cases) + 1
+
+
+def test_the_decoded_panel_renders_the_artefact_the_store_wrote(tmp_path: Path) -> None:
+    """The decoded.json panel parses to the file beside it, its non-ASCII payload included."""
+    decoded: dict[str, object] = {
+        "payload_len": 31,
+        "payload_text": "ünïcode — ✓",
+        "per_decoder": {"opencv": {"status": "decoded"}, "zxing": {"status": "decoded"}},
+    }
+    failure = dataclasses.replace(_failed_case(_REQUEST), decoded=decoded)
+    recorded = dataclasses.replace(failure, evidence_dir=EvidenceStore(tmp_path).record(failure))
+    assert recorded.evidence_dir is not None
+
+    document = _write_page(tmp_path, _run(recorded))
+
+    panel = re.search(r'<h4>decoded\.json</h4>\s*<pre(?P<attributes>[^>]*)>', document)
+    assert panel is not None
+    assert panel.group("attributes") == ' dir="auto"'
+    artefact = json.loads(
+        (tmp_path / recorded.evidence_dir / "decoded.json").read_text(encoding="utf-8")
+    )
+    assert _panel(document, "decoded.json") == artefact == decoded
+
+
+def test_an_unreadable_artefact_is_stated_and_the_readable_ones_still_embedded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A present-but-unreadable image is named, and every artefact that did read is shown.
+
+    File mode cannot express this: the suite may run as root, where a read-only file still
+    reads. The module's single read seam is patched instead, which is the one place a read
+    failure can be raised from.
+    """
+    failure = _failed_case(_REQUEST)
+    recorded = dataclasses.replace(
+        failure,
+        evidence_dir=EvidenceStore(tmp_path).record(
+            failure,
+            symbol=SimpleNamespace(image_bytes=_derived_png("symbol"), output_format="png"),
+            logo=_derived_png("logo"),
+        ),
+    )
+    assert recorded.evidence_dir is not None
+    real_read = html_module._read_artifact
+
+    def _refuse_the_symbol(path: Path) -> bytes:
+        if path.name == SYMBOL_PNG:
+            raise OSError("simulated read failure")
+        return real_read(path)
+
+    monkeypatch.setattr(html_module, "_read_artifact", _refuse_the_symbol)
+
+    document = _write_page(tmp_path, _run(recorded))
+
+    assert (
+        '<p class="evidence-unreadable">image present but could not be read '
+        f"({SYMBOL_PNG}: OSError)</p>" in document
+    )
+    assert [name for name, _ in _figures(document)] == [LOGO_PNG]
+    assert (tmp_path / recorded.evidence_dir / SYMBOL_PNG).is_file()
+
+
+def test_a_file_outside_the_closed_evidence_set_is_never_published(tmp_path: Path) -> None:
+    """An unrecognised name in the case directory is ignored rather than surfaced."""
+    failure = _failed_case(_REQUEST)
+    recorded = dataclasses.replace(
+        failure,
+        evidence_dir=EvidenceStore(tmp_path).record(
+            failure,
+            symbol=SimpleNamespace(image_bytes=_derived_png("symbol"), output_format="png"),
+        ),
+    )
+    assert recorded.evidence_dir is not None
+    directory = tmp_path / recorded.evidence_dir
+    hidden = ("notes.txt", "damage-hologram-1.png")
+    for name in hidden:
+        (directory / name).write_bytes(b"not a member of the closed evidence set")
+
+    document = _write_page(tmp_path, _run(recorded))
+
+    assert [name for name, _ in _figures(document)] == [SYMBOL_PNG]
+    assert document.count("<figure") == 1
+    for name in hidden:
+        assert name not in document
+
+
+def test_the_page_never_carries_the_evidence_directory_as_an_absolute_path(
+    tmp_path: Path,
+) -> None:
+    """The evidence directory reaches the page as the relative posix path the model holds."""
+    failure = _failed_case(_REQUEST)
+    recorded = dataclasses.replace(failure, evidence_dir=EvidenceStore(tmp_path).record(failure))
+    assert recorded.evidence_dir is not None
+
+    document = _write_page(tmp_path, _run(recorded))
+
+    assert str(tmp_path) not in document
+    facts = dict(_FACT.findall(document))
+    assert facts["evidence_dir"] == recorded.evidence_dir
+    assert facts["evidence_dir"].startswith(f"{EVIDENCE_DIR_NAME}/")
+    assert "\\" not in facts["evidence_dir"]

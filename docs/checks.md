@@ -77,13 +77,15 @@ Every case has a stable identifier, and there are exactly three forms.
 
 The corpus-driven forms are built by the shared support layer from the record the runner hands the check, so a record's `class` filter (`--class`) narrows them and nothing else. The `synthetic:` names are fixed literals in the owning check module, which is what lets a reader reproduce one case from this document alone.
 
-One case identifier is not a check's: `synthetic:target`. When a target is lost mid-run, the runner files exactly one error result per affected check under that identifier, with reason `target_unavailable` or `target_timeout`, rather than one error per corpus record — a dead target is one fact about the run, not hundreds. Checks that need nothing from the target keep running and keep their own results.
+Those nine checks, together with `DM-RESILIENCE` and `DM-SEEDED`, are the **corpus-driven** checks: they declare `corpus_driven=True`, which is what makes the corpus file a prerequisite of a run that selects one (AAP §0.3.4), and a selection of the remaining synthetic-only checks runs without a corpus file at all. A `--class` filter always reads the corpus, because its diagnostic is a statement about the records.
+
+Two case identifiers are the runner's rather than a check's. `synthetic:target`: when a target is lost mid-run, the runner files exactly one error result per affected check under that identifier, with reason `target_unavailable` or `target_timeout`, rather than one error per corpus record — a dead target is one fact about the run, not hundreds; checks that need nothing from the target keep running and keep their own results. `synthetic:cases`: when a check's own case generator raises, so that none of its cases can run, the runner files that check's single `error` result under this identifier with the traceback in its evidence, and the walk continues with the next check — one broken generator never costs the report its other twenty checks (AAP §0.6.6 row 11).
 
 ### 2.2 Ordering
 
 Order is part of the contract, because two runs' artefacts have to be comparable field by field.
 
-- **Checks** are executed, listed and reported in ascending order of check identifier — the order of `CHECK_IDS` in `qrcheck/registry/check.py`, which is the ASCII order of the twenty-one strings. Import order never reaches an artefact: `iter_checks()` is the only iteration a consumer may use and it sorts.
+- **Checks** are executed, listed and reported in ascending order of check identifier — the order of `CHECK_IDS` in `qrcheck/registry/check.py`, which is the ASCII order of the twenty-one strings — with one exception: `CL-ARTIFACTS` executes after every ordinary check, because its contract declares `observes_run_end` and its subject is the finished run (section 3.1), and its place in the artefacts is still its identifier's. Import order never reaches an artefact: `iter_checks()` is the only iteration a consumer may use and it sorts.
 - **Cases within a check** are executed in ascending order of case identifier.
 - **Results** in `summary.json`, `junit.xml` and `index.html` are ordered by `(check_id, case_id)`, so the three artefacts cannot disagree about the sequence.
 - **Damage variants within a case** follow the declared kind order `occluders`, `blur`, `jpeg`, `noise`, `rotation`, `perspective`, `downscale` — a fixed tuple in `qrcheck/evidence/naming.py`, never a set's iteration order.
@@ -109,11 +111,11 @@ One subsection per check, in check-ID order. Every subsection carries the same s
 | Optional runtime dependency | `primary-decoder` |
 | Cases | one synthetic case, `synthetic:cleanup` |
 | Cases / encodes / decodes | 1 / 0 / 0 |
-| Evidence | `request.json` (identity only: the case observes the run, not the target) and `decoded.json` with `temp_prefix`, `baseline_count`, `leaked`, `fd_directory`, `handle_half`, `open_under_report_dir`, `open_image_count`, `open_images`, `violations` |
+| Evidence | `request.json` (identity only: the case observes the run, not the target) and `decoded.json` with `temp_prefix`, `temp_entries_before`, `temp_entries_after`, `leaked`, `fd_directory`, `handle_half`, `open_under_report_dir`, `open_image_count`, `open_images`, `violations` |
 | Failure reasons | `value_mismatch`; `unsupported_platform` for the handle half alone |
 | Reproduce | `qrcheck run --checks CL-ARTIFACTS --seed <seed>` |
 
-**What it asserts.** That the run left nothing behind that a user could see. Two halves. The temporary-file half snapshots the entries of `tempfile.gettempdir()` whose name carries the framework's prefix `qrcheck-` before and after the run and requires the two snapshots to be equal — the baseline is taken when the runner enumerates the check's cases, which is the earliest observation available and is why this check sorts first. The handle half enumerates `os.listdir('/proc/self/fd')` on Linux or `/dev/fd` on macOS, resolves every entry, and requires that no entry resolves to a path under the report directory; every image the framework opens goes through the `qrcheck/evidence/mux.py` context manager, so an unclosed handle is attributable to a case rather than merely counted. Where neither descriptor directory exists, the handle half reports `skipped` with reason `unsupported_platform` while the temporary-file half still asserts.
+**What it asserts.** That the run left nothing behind that a user could see. Two halves. The temporary-file half snapshots the entries of `tempfile.gettempdir()` whose name carries the framework's prefix `qrcheck-` before and after the run and requires the two snapshots to be equal — the runner takes the first one immediately before any check can run and executes this check after every other one, because the check declares `observes_run_end`, so the two snapshots bracket the run itself rather than this case alone; both are reported in `decoded.json` as `temp_entries_before` and `temp_entries_after`, and a `qrcheck-` entry any other case leaves behind fails it. That is also why it needs a temporary directory of the run's own (`TMPDIR`, `TMP` or `TEMP`): a sibling process leaving a `qrcheck-*` entry in a shared system temporary directory during the run is indistinguishable from this run's leak. The handle half enumerates `os.listdir('/proc/self/fd')` on Linux or `/dev/fd` on macOS — recorded in `decoded.json` as the token `proc-self-fd` or `dev-fd`, never as the directory's path — resolves every entry, and requires that no entry resolves to a path under the report directory; every image the framework opens goes through the `qrcheck/evidence/mux.py` context manager, so an unclosed handle is attributable to a case rather than merely counted. Where neither descriptor directory exists, the handle half reports `skipped` with reason `unsupported_platform` while the temporary-file half still asserts.
 
 A failure here is a framework defect, not a target defect: no target can cause a leaked handle or a stray temporary file. If the finding is a leaked entry, the `leaked` list names it; if it is a handle, `open_images` names the case that opened it.
 
@@ -653,9 +655,9 @@ On top of that projection each check records the measurements its assertion used
 | `IV-OVERCAPACITY` | `requested_len` against `capacity`, `decoded_len`, `first_divergence_offset` |
 | `IV-BAD-OPTION` | `offending_field`, `value`, and for the contrast probe `contrast_ratio` and `contrast_floor` |
 | `DT-DETERMINISTIC` | `comparison` (`image_bytes`, `matrix_sha256`, `mask`), `divergent`, `unmeasured`, plus each call's snapshot |
-| `PF-ENCODE` | `metrics.encode_p95_ms`, `metrics.symbols_per_minute`, `metrics.samples`, `metrics.warmup` |
-| `PF-DECODE` | `metrics.decode_p95_ms`, `metrics.image_px`, `metrics.samples`, `metrics.warmup` |
-| `CL-ARTIFACTS` | `leaked`, `open_images`, `open_under_report_dir`, `handle_half`, `violations` |
+| `PF-ENCODE` | `metrics.encode_p95_ms` and `metrics.symbols_per_minute` — both **measured**, so both are masked by every determinism comparison — then `metrics.samples`, `metrics.warmup`, which are configuration-derived and stay compared |
+| `PF-DECODE` | `metrics.decode_p95_ms` — **measured**, so it is masked by every determinism comparison — then `metrics.image_px`, `metrics.samples`, `metrics.warmup`, which are configuration-derived and stay compared |
+| `CL-ARTIFACTS` | `temp_entries_before`, `temp_entries_after`, `leaked`, `fd_directory`, `open_images`, `open_under_report_dir`, `handle_half`, `violations` |
 
 `request.json` for the `IV-*` probes carries `out_of_contract: true`. That flag is the only thing distinguishing an intentionally illegal request from one the framework considered valid, so it is the first field to check when an `IV-*` result looks wrong: a probe that was accidentally built through the validating builder would be rejected before it ever reached the target.
 
