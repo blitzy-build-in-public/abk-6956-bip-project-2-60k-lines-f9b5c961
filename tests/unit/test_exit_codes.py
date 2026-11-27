@@ -835,6 +835,43 @@ def test_exit_two_when_a_configuration_the_schema_accepts_cannot_build_an_adapte
 
 
 @pytest.mark.parametrize(
+    ("document", "offending_key"),
+    [
+        (UNKNOWN_KWARGS_FIELD_DOCUMENT, "targets.local.kwargs_map"),
+        (STDOUT_METADATA_MAP_DOCUMENT, "targets.local.metadata_map"),
+    ],
+    ids=["kwargs_map-names-an-unknown-field", "metadata_map-beside-a-stdout-returns"],
+)
+def test_exit_two_when_doctor_cannot_build_the_configured_adapter(
+    invoke_cli: Callable[..., Any],
+    toml_config_file: Callable[..., Path],
+    report_dir: Path,
+    document: str,
+    offending_key: str,
+) -> None:
+    """``doctor`` and ``run`` must answer one configuration fault the same way: exit 2, naming it.
+
+    Both documents are schema-valid -- no cross-field rule links ``metadata_map`` to ``returns``,
+    and a ``kwargs_map``'s vocabulary belongs to the adapter, not to the schema -- so the fault
+    exists only once the adapter is constructed, which is the moment ``doctor`` used to lose it in
+    the generic framework-defect arm and exit 3. The agreement is the assertion: a pre-flight
+    command that calls a configuration fault an internal error sends its reader to the framework
+    instead of the key to edit, and neither command may write a report for it.
+    """
+    config = toml_config_file(text=document)
+
+    doctor_result = invoke_cli("doctor", config=config)
+
+    assert doctor_result.exit_code == EXIT_CONFIG
+    assert offending_key in doctor_result.stderr
+
+    run_result = invoke_cli("run", "--checks", "RT-ROUNDTRIP", config=config)
+
+    assert run_result.exit_code == EXIT_CONFIG
+    assert_no_report(report_dir)
+
+
+@pytest.mark.parametrize(
     "supplied",
     ["", "   "],
     ids=["empty", "whitespace-only"],

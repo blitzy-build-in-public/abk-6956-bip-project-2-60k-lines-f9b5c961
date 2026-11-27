@@ -388,10 +388,24 @@ class _Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
 
+class _Server(ThreadingHTTPServer):
+    """Serve the example's loopback clients concurrently, with no connect() left queued.
+
+    ``request_queue_size`` covers a burst wider than the ``socketserver`` default of 5,
+    which a 20-wide client would overflow because every response closes its connection
+    (``Connection: close``) and so arrives on a fresh one. Both attributes are class-level
+    because ``listen()`` runs inside the constructor: the kernel is told the queue depth
+    before any statement after the constructor could change it, and a handler thread still
+    running must not delay the process's exit.
+    """
+
+    request_queue_size = 128
+    daemon_threads = True
+
+
 def main() -> int:
     """Serve until ``SIGTERM`` or ``SIGINT``, then return the exit status."""
-    server = ThreadingHTTPServer((_HOST, 0), _Handler)
-    server.daemon_threads = True
+    server = _Server((_HOST, 0), _Handler)
 
     def _stop(signum: int, frame: FrameType | None) -> None:
         # shutdown() waits for serve_forever() to return, and a handler runs on the

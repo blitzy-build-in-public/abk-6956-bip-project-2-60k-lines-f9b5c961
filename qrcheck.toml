@@ -14,8 +14,9 @@
 # the effective value a run uses; the fallback for a key this document omits is
 # declared once, as a models.DEFAULT_* constant in qrcheck/config/models.py,
 # which qrcheck/config/schema.py's table references by name. No check, test or
-# document restates a number, and the comment on each key names the single check
-# or command that reads it.
+# document restates one as an authority: a document that quotes a declared default
+# for a reader names the key that owns it, and the comment on each key names the
+# single check or command that reads it.
 
 # The [targets.<name>] table a run uses when --adapter is not given.
 default_adapter = "reference"

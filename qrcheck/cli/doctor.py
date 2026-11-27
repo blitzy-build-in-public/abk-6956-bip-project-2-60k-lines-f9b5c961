@@ -10,9 +10,11 @@ probe below, which makes this module the **only** place outside a run that is al
 What it verifies, and what each outcome means, prerequisite by prerequisite.  A blocking
 prerequisite fails the command with exit 2, naming the culprit: the configuration file (the dotted
 key, or the path of a file that cannot be read, since nothing else can be resolved without it), a
-CPython older than 3.11, an undeclared target adapter (the diagnostic echoing the declared list) or
-a declared one that is unreachable, the primary decoder ``zxing-cpp`` (naming the distribution, the
-interpreter and the wheel tag of this platform), and the oracle and core libraries ``segno``,
+CPython older than 3.11, an undeclared target adapter (the diagnostic echoing the declared list), a
+declared one that is unreachable, or a declared one that refuses its own configuration when it is
+built (a mapping whose vocabulary belongs to the adapter, reported with its dotted key), the
+primary decoder ``zxing-cpp`` (naming the distribution, the interpreter and the wheel tag of this
+platform), and the oracle and core libraries ``segno``,
 ``numpy``, ``Pillow``, ``httpx`` and ``click`` (naming the distribution and
 ``requirements.lock``).  A degrading prerequisite still exits 0: a newer 3.x or a non-CPython
 interpreter runs unsupported, is reported ``degraded`` and still exits 0; a missing secondary
@@ -48,9 +50,10 @@ The public surface is two names, split exactly as ``qrcheck/cli/loc.py`` splits 
 :func:`doctor` is the function behind it, returning the exit code to a direct caller and to a test.
 
 Exit codes, from :mod:`qrcheck.cli.exit`: ``0`` when every blocking prerequisite passes, ``2`` when
-one fails or the configuration, the adapter name or the probe does, and ``3`` when an unexpected
-framework fault occurred -- a probe that raises outside the adapter error vocabulary, an adapter
-that cannot be closed, or a ``report_dir`` that cannot be prepared.
+one fails -- a configuration fault included, whether the loader or the adapter itself reports it --
+and ``3`` when an unexpected framework fault occurred: an exception outside both the adapter error
+vocabulary and the configuration faults an adapter states by ``ConfigError`` or ``ValueError``, an
+adapter that cannot be closed, or a ``report_dir`` that cannot be prepared.
 """
 
 from __future__ import annotations
@@ -82,6 +85,7 @@ from qrcheck.report.json_report import dumps_canonical
 from qrcheck.targets import ADAPTER_TYPES
 from qrcheck.targets.base import (
     TargetContractError,
+    TargetError,
     TargetRejected,
     TargetTimeout,
     TargetUnavailable,
@@ -206,8 +210,8 @@ class _ProbeOutcome:
     ``capabilities`` is the capability set the adapter itself declares, which is the effective
     set -- the two built-in targets declare all thirteen in code rather than in configuration --
     and is empty when the adapter could not be built at all.
-    ``internal_failure`` marks a fault outside the adapter error vocabulary -- a framework
-    defect, which exits 3 rather than 2.
+    ``internal_failure`` marks a framework defect -- a fault outside both the adapter error
+    vocabulary and the configuration faults an adapter states for its own keys -- and exits 3.
     """
 
     reachable: bool
@@ -276,8 +280,8 @@ def doctor(
     Returns:
         :data:`qrcheck.cli.exit.EXIT_OK` when every blocking prerequisite passed,
         :data:`qrcheck.cli.exit.EXIT_CONFIG` when one failed or the configuration, the adapter
-        name or the probe did, and :data:`qrcheck.cli.exit.EXIT_INTERNAL` for a fault outside
-        the documented vocabulary.
+        name or the probe did -- the adapter refusing that configuration at construction included
+        -- and :data:`qrcheck.cli.exit.EXIT_INTERNAL` for a fault outside both vocabularies.
 
     Raises:
         Nothing. Every failure is reported on stderr and returned as an exit code, so a caller
@@ -632,7 +636,10 @@ def _probe_target(target: TargetConfig, name: str, notes: list[_Note]) -> _Probe
     * ``TargetUnavailable``, ``TargetTimeout`` and ``TargetContractError`` mean no usable
       symbol arrived, so they are unreachable as well as blocking.
 
-    A fault outside that vocabulary is a framework defect: it is reported and mapped to
+    A configuration the adapter refuses for its own keys is neither a target fault nor a framework
+    defect: a ``ConfigError`` or ``ValueError`` naming the dotted key is exit 2, decided before any
+    check runs, exactly as ``qrcheck run`` classifies the same refusal at construction. Only a
+    fault outside both vocabularies is a framework defect, mapped to
     :data:`qrcheck.cli.exit.EXIT_INTERNAL` rather than silently becoming a target fault.
 
     Args:
@@ -693,6 +700,13 @@ def _probe_target(target: TargetConfig, name: str, notes: list[_Note]) -> _Probe
                 True,
             )
         )
+    except (ConfigError, TargetError, ValueError) as exc:
+        # The adapter refused its own configuration -- a ``kwargs_map`` field the framework does
+        # not have, a ``metadata_map`` beside a stdout-based ``returns`` -- and only the adapter
+        # can see that: the mapping's vocabulary is its own, not the schema's. So this is the
+        # exit-2 configuration fault ``qrcheck run`` calls it, naming the dotted key, and the arm
+        # follows the five adapter errors because those answer a request the adapter accepted.
+        notes.append(_Note(f"configuration error: {exc}", True))
     except ImportError as exc:
         # The adapter's own module could not be imported, so a dependency this host declares is
         # absent or broken. That is an environment fault (exit 2) and names the lock file, not
