@@ -24,17 +24,19 @@ because the two ways click reaches that builtin -- a broken stdout pipe while ec
 completion request -- are framework exits and never a check's verdict, while exit 1 is reserved for
 a check that failed; ``ImportError`` or ``OSError`` returns ``EXIT_CONFIG`` when a
 pinned runtime dependency cannot be imported, after that dependency's own diagnostic on stderr, and
-otherwise falls through to the last arm; and any other ``Exception`` returns ``EXIT_INTERNAL`` after
-the exception's type and message and ``traceback.format_exc()`` on stderr.
+otherwise falls through to the last arm; and any other ``Exception`` is diagnosed by the same probe,
+which returns ``EXIT_CONFIG`` when a pinned dependency is broken and ``EXIT_INTERNAL``, with the
+exception's type and message and ``traceback.format_exc()`` on stderr, otherwise.
 
 A bad invocation is exit 2, never exit 1: exit 1 means a check failed, and conflating the two would
 let a mistyped option look like a failing generator.  A broken installation is exit 2 as well, and
 only a fault the framework did not anticipate is exit 3.  Registering the subcommands and importing
-the check families loads ``segno``, ``numpy``, ``PIL`` and ``httpx``, so an ``ImportError`` or
-``OSError`` raised here is reported through :func:`qrcheck.dependencies.blocking_problem`,
-naming the distribution and ``requirements.lock``: every pin is declared in the lock file, so an
-unusable one means a broken install rather than a defect of this program (AAP §0.7.2), and only
-when no pinned dependency is broken does the exception reach the last-resort arm and exit 3.
+the check families load ``segno``, ``numpy``, ``PIL`` and ``httpx`` where each is used, so an
+exception raised while one of them loads is reported through
+:func:`qrcheck.dependencies.blocking_problem`, naming the distribution and ``requirements.lock``:
+every pin is declared in the lock file, so an unusable one means a broken install rather than a
+defect of this program (AAP §0.7.2), and only when no pinned dependency is broken does the
+exception reach the last-resort arm and exit 3.
 
 The interpreter guard is the first statement of ``main`` and so runs before click parses anything,
 which is what makes ``qrcheck --help`` refuse on an unsupported interpreter too.  Below CPython 3.11
@@ -326,11 +328,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (ImportError, OSError) as exc:
         # The probe and its import live in a helper that may not raise: see its docstring.
         return _report_import_failure(exc)
-    # The last-resort net: an exception no command anticipated is a framework fault, so the
-    # process exits 3 and the type, the message and the traceback are printed, not discarded.
+    # The last-resort net, reached through the same dependency probe: a pin that cannot even
+    # initialise raises whatever its own import raised -- ``RuntimeError`` as readily as
+    # ``ImportError`` -- and AAP §0.7.2 makes that an exit-2 environment fault naming the
+    # distribution, not a framework fault. `_report_import_failure` writes the last-resort
+    # wording and returns `EXIT_INTERNAL` when no pinned dependency is broken.
     except Exception as exc:
-        _write_stderr(f"internal error: {type(exc).__name__}: {exc}", traceback.format_exc())
-        return EXIT_INTERNAL
+        return _report_import_failure(exc)
     # A command that returns nothing is a success, and `main` owes its callers an integer.
     return result if isinstance(result, int) else EXIT_OK
 

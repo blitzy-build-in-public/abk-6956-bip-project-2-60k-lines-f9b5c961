@@ -47,7 +47,6 @@ from types import MappingProxyType
 from typing import Any, Final
 
 from qrcheck.checks import support
-from qrcheck.evidence import mux
 from qrcheck.registry.check import DEPENDENCY_PRIMARY_DECODER, Case, RunContext, check
 from qrcheck.report.model import CaseResult, Reason
 
@@ -288,6 +287,9 @@ def _verdict(ctx: RunContext, baseline: frozenset[str]) -> CaseResult:
     reason ``unsupported_platform`` when the handle half cannot be observed and nothing leaked, and
     ``passed`` when both halves are clean.
     """
+    # Deferred: importing this module starts no image stack in a process that only lists checks.
+    from qrcheck.evidence import mux
+
     report_dir = ctx.config.report_dir
     after = temp_entries()
     leaked = leaked_temp_entries(baseline, after)

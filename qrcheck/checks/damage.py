@@ -22,33 +22,37 @@ without calling the adapter. The occluder budget is ``recovery_fraction(decoded 
 occlusion_margin`` from the level the symbol itself reports (AAP §0.4.2), spent whole codewords at
 a time.
 
+The memo those two checks share belongs to the run whose evidence store the context carries, not to
+the process: :func:`_bind_run` empties it whenever the store, the seed or the EC level differs from
+the run that filled it, and the runner builds exactly one store per run, so a second invocation in
+one process starts empty whatever its target, seed or level. A ``DM-SEEDED`` run with no
+``DM-RESILIENCE`` of its own therefore reports the documented ``missing_dependency`` skip instead of
+comparing against another run's artefacts, while the two checks of one run still share the symbols,
+readings and variants they exist to share. :func:`clear_symbol_memo` empties it outright.
+
 Reasons emitted: ``value_mismatch``, ``sampling_failed`` (pristine measurement only),
-``missing_dependency``, plus ``target_rejected``, ``contract_error`` and ``unsupported_capability``
-from :func:`~qrcheck.checks.support.case_status_for_error`; ``TargetUnavailable`` and
-``TargetTimeout`` propagate to :mod:`qrcheck.runner`. Randomness is ``numpy``'s ``PCG64`` fed only
-by ``derive_seed(run_seed, "DM-RESILIENCE", case_id, kind)``, which is also the result's ``seed``
-and the ``<seed>`` of ``damage-<kind>-<seed>.png``.
+``missing_dependency``, plus ``target_rejected``, ``unsupported_capability`` and ``contract_error``
+from :func:`~qrcheck.checks.support.case_status_for_error` -- ``contract_error`` when the artefact
+the target returned is an image no installed library can open, which fails that one case with the
+artefact's first 256 bytes in ``decoded["hex_prefix"]`` (AAP §0.3.4) rather than aborting the run;
+``TargetUnavailable`` and ``TargetTimeout`` propagate to :mod:`qrcheck.runner`. Randomness is
+``numpy``'s ``PCG64`` fed only by ``derive_seed(run_seed, "DM-RESILIENCE", case_id, kind)``, which
+is also the result's ``seed`` and the ``<seed>`` of ``damage-<kind>-<seed>.png``.
 """
 
 from __future__ import annotations
 
 import dataclasses
-import hashlib
 import io
 import math
 import time
 from collections.abc import Iterator, Mapping
 from types import MappingProxyType
-from typing import Any, Final, Protocol
-
-import numpy
+from typing import TYPE_CHECKING, Any, Final, Protocol
 
 from qrcheck.checks import support
 from qrcheck.config.models import DamageLimits
 from qrcheck.config.seeding import derive_seed
-from qrcheck.decode import DecodeResult
-from qrcheck.decode.matrix import module_count_for_version, version_from_dimension
-from qrcheck.evidence import mux
 from qrcheck.evidence.naming import DAMAGE_KINDS
 from qrcheck.registry.check import (
     DEPENDENCY_PRIMARY_DECODER,
@@ -67,6 +71,11 @@ from qrcheck.targets.base import (
     TargetUnavailable,
     TargetUnsupported,
 )
+
+if TYPE_CHECKING:  # Annotations only: numpy and the decode types must not load with this module.
+    import numpy
+
+    from qrcheck.decode import DecodeResult
 
 class _Record(Protocol):
     """The two members of a corpus record this family reads.
@@ -147,9 +156,11 @@ _FIRST_VERSION_WITH_VERSION_INFO: Final[int] = 7
 _FILL_VALUE: Final[float] = 255.0
 
 
-# The run-scoped memo: the symbol, the pristine reading and the damaged variant of each
-# sampled record.  DM-SEEDED's zero-encode assertion rests on it, so its lifetime is stated
-# in the module docstring and its only writer is DM-RESILIENCE's case executor.
+# The run-scoped memo: the symbol, the pristine reading and the damaged variant of each sampled
+# record, plus the identity of the run that filled it.  DM-SEEDED's zero-encode assertion rests on
+# it, so its lifetime is stated in the module docstring, DM-RESILIENCE's case executor fills it and
+# :func:`clear_symbol_memo` empties it.  Every reader below is reached only through a run that has
+# bound the memo to itself first (:func:`_bind_run`).
 
 # The symbol the target returned for a record, keyed by record id: one encode per record,
 # shared across that record's seven kinds.
@@ -164,17 +175,46 @@ _READINGS: dict[str, DecodeResult] = {}
 # DM-SEEDED regenerates and compares against, byte for byte.
 _VARIANTS: dict[tuple[str, str], bytes] = {}
 
+# The identity of the run the memo holds: the run's evidence store, plus the seed and the EC level
+# it was asked for.  One store is built per run and reaches every case on the frozen context, so
+# the store alone separates two runs of one process; the seed and the level ride along because they
+# are what the run asked its target for.  ``None`` until a run binds to it, and reset by
+# :func:`clear_symbol_memo`.
+_RUN_KEY: tuple[Any, ...] | None = None
+
 
 def clear_symbol_memo() -> None:
     """Forget every symbol, pristine reading and damaged variant held for a run.
 
-    Called at the start of ``DM-RESILIENCE``'s enumeration, which the runner reaches first
-    because it walks checks by identifier ascending, so a second run in one process cannot
-    inherit the first one's memo.
+    Empties the memo unconditionally and forgets which run filled it, so whatever memoises next
+    starts a fresh one. The enumerators call :func:`_bind_run` instead, which clears only when the
+    run that reaches it is not the run the memo's identity names.
     """
+    global _RUN_KEY
     _SYMBOLS.clear()
     _READINGS.clear()
     _VARIANTS.clear()
+    _RUN_KEY = None
+
+
+def _bind_run(ctx: RunContext) -> None:
+    """Drop the memo unless it already belongs to `ctx`'s run.
+
+    A run's identity is the evidence store its context carries: :mod:`qrcheck.runner` builds exactly
+    one store per run and hands it to every case through the frozen :class:`RunContext`, so two runs
+    never share one, whatever their target, seed or level. The seed and the EC level are compared
+    alongside it because they are what the run asks its target for.
+
+    A run that differs in any of the three therefore starts empty, which is what turns a
+    ``DM-SEEDED`` invocation with no ``DM-RESILIENCE`` of its own into the documented
+    ``missing_dependency`` skip for every case instead of a comparison against another run's
+    artefacts, and what leaves the two checks of one run sharing the memo they exist to share.
+    """
+    global _RUN_KEY
+    key = (ctx.evidence, ctx.seed, ctx.ec_level)
+    if _RUN_KEY != key:
+        clear_symbol_memo()
+        _RUN_KEY = key
 
 
 def remember_symbol(record_id: str, symbol: GeneratedSymbol) -> None:
@@ -196,8 +236,10 @@ def remember_symbol(record_id: str, symbol: GeneratedSymbol) -> None:
 def recall_symbol(record_id: str) -> GeneratedSymbol | None:
     """Return the symbol held for `record_id`, or ``None`` when the memo holds none.
 
-    ``None`` is the normal answer when ``DM-SEEDED`` runs without ``DM-RESILIENCE``: the case
-    is skipped with reason ``missing_dependency`` rather than asking the adapter for a symbol.
+    The memo is run-scoped (:func:`_bind_run`), so ``None`` is what ``DM-SEEDED`` sees when this
+    run held no ``DM-RESILIENCE`` to fill it -- its own evidence store, seed and EC level none of
+    the memo's: the case is then skipped with reason ``missing_dependency`` rather than asking the
+    adapter for a symbol.
     """
     return _SYMBOLS.get(record_id)
 
@@ -280,6 +322,11 @@ def _function_modules(module_count: int, version: int) -> numpy.ndarray:
     Raises:
         ValueError: `module_count` and `version` disagree, or `version` is outside 1-40.
     """
+    # Deferred: importing this module starts no image stack in a process that only lists checks.
+    import numpy
+
+    from qrcheck.decode.matrix import module_count_for_version
+
     expected = module_count_for_version(version)
     if module_count != expected:
         raise ValueError(
@@ -397,6 +444,9 @@ class _Frame:
 
 def _luma(pixels: numpy.ndarray) -> numpy.ndarray:
     """Return the single-channel luminance of an ``(H, W, 3)`` or ``(H, W)`` pixel array."""
+    # Deferred: importing this module starts no image stack in a process that only lists checks.
+    import numpy
+
     values = pixels.astype(numpy.float64)
     if values.ndim == 3:
         return values.mean(axis=2)
@@ -413,6 +463,11 @@ def _frame(version: int, pixels: numpy.ndarray) -> _Frame | None:
         ValueError: `version` is outside 1-40, or `pixels` is not 2- or 3-dimensional -- both
             producer defects rather than evidence about a target.
     """
+    # Deferred: importing this module starts no image stack in a process that only lists checks.
+    import numpy
+
+    from qrcheck.decode.matrix import module_count_for_version
+
     module_count = module_count_for_version(version)
     luma = _luma(pixels)
     if luma.ndim != 2:
@@ -465,6 +520,9 @@ def _occluder_modules(
     evenly -- what the documented recovery capacity assumes and uniform random selection does
     not achieve. Several separated runs keep the damage from becoming one contiguous hole.
     """
+    # Deferred: importing this module starts no image stack in a process that only lists checks.
+    import numpy
+
     total = len(codewords)
     if total == 0:
         raise ValueError("a symbol with no codeword cannot be damaged")
@@ -495,6 +553,9 @@ def _bilinear(pixels: numpy.ndarray, xs: numpy.ndarray, ys: numpy.ndarray) -> nu
     Coordinates outside the source image read :data:`_FILL_VALUE`, the light module and quiet
     zone colour: a warp must extend the quiet zone, never punch a dark border into it.
     """
+    # Deferred: importing this module starts no image stack in a process that only lists checks.
+    import numpy
+
     values = pixels.astype(numpy.float64)
     height, width = values.shape[0], values.shape[1]
     x0 = numpy.floor(xs).astype(numpy.int64)
@@ -519,6 +580,9 @@ def _resample(pixels: numpy.ndarray, width: int, height: int) -> numpy.ndarray:
     Raises:
         ValueError: `width` or `height` is not positive.
     """
+    # Deferred: importing this module starts no image stack in a process that only lists checks.
+    import numpy
+
     if width < 1 or height < 1:
         raise ValueError(f"resample target must be positive, got {width}x{height}")
     source_height, source_width = pixels.shape[0], pixels.shape[1]
@@ -535,6 +599,9 @@ def _rotate_pixels(pixels: numpy.ndarray, degrees: float) -> numpy.ndarray:
     corners the rotation exposes are the light colour -- a black wedge over the quiet zone would
     be a second, unintended damage kind.
     """
+    # Deferred: importing this module starts no image stack in a process that only lists checks.
+    import numpy
+
     height, width = pixels.shape[0], pixels.shape[1]
     radians = math.radians(degrees)
     cosine = math.cos(radians)
@@ -559,6 +626,9 @@ def _homography(destination: numpy.ndarray, source: numpy.ndarray) -> numpy.ndar
     Raises:
         ValueError: the four points are degenerate, so no projective map exists.
     """
+    # Deferred: importing this module starts no image stack in a process that only lists checks.
+    import numpy
+
     matrix = numpy.zeros((8, 8), dtype=numpy.float64)
     target = numpy.zeros(8, dtype=numpy.float64)
     for index in range(4):
@@ -580,6 +650,9 @@ def _perspective_pixels(pixels: numpy.ndarray, degrees: float) -> numpy.ndarray:
     The top edge is narrowed and shifted, the shape a symbol takes when photographed off-axis;
     the quadrangle is solved back onto the source rectangle, so sampling stays a bilinear read.
     """
+    # Deferred: importing this module starts no image stack in a process that only lists checks.
+    import numpy
+
     height, width = pixels.shape[0], pixels.shape[1]
     shift = min(abs(math.tan(math.radians(degrees))), 1.0) * width / 2.0
     destination = numpy.array(
@@ -635,6 +708,9 @@ def _blur_pixels(pixels: numpy.ndarray, radius_px: float) -> numpy.ndarray:
     A separable convolution over an edge-padded source, so the quiet zone's border is not
     darkened; the weights are numpy floats, so the result is identical on every run.
     """
+    # Deferred: importing this module starts no image stack in a process that only lists checks.
+    import numpy
+
     sigma = max(radius_px / 2.0, 1e-6)
     half = max(1, int(math.ceil(2.0 * sigma)))
     offsets = numpy.arange(-half, half + 1, dtype=numpy.float64)
@@ -668,6 +744,9 @@ def _noise_pixels(pixels: numpy.ndarray, sigma: float, seed: int) -> numpy.ndarr
     stream is stable across numpy releases, so the damaged image is reproducible byte for byte
     inside the pinned lock (AAP §0.5.4).
     """
+    # Deferred: importing this module starts no image stack in a process that only lists checks.
+    import numpy
+
     if sigma <= 0.0:
         return pixels.copy()
     generator = numpy.random.Generator(numpy.random.PCG64(seed))
@@ -707,6 +786,44 @@ def _raster(pixels: numpy.ndarray, reference: Any) -> Any:
     return canvas
 
 
+def _reference_raster(symbol: GeneratedSymbol) -> tuple[Any, numpy.ndarray]:
+    """Return the target's artefact opened as an image, plus its ``(H, W, 3)`` ``uint8`` pixels.
+
+    The bytes came from the target, so an artefact no installed image library can open is that
+    target's contract failure rather than this module's (AAP §0.3.4): it becomes a
+    :class:`~qrcheck.targets.base.TargetContractError` carrying the artefact, which
+    :func:`~qrcheck.checks.support.case_status_for_error` reports as one ``contract_error`` case
+    with the first 256 bytes in ``decoded["hex_prefix"]``.
+
+    The library's own text is deliberately not interpolated: Pillow names the buffer it refused by
+    its ``repr`` (``<_io.BytesIO object at 0x...>``), and that address changes with every run, so
+    the diagnostic names the exception class instead and keeps ``decoded.json`` byte-identical for
+    one case and seed (AAP §0.5.4).
+
+    Raises:
+        TargetContractError: the artefact is not an image any library can open, or its pixels
+            cannot be read as RGB. ``PIL.UnidentifiedImageError`` is an :exc:`OSError` and the
+            image mux's refusal of an empty body a :exc:`ValueError`, so these two arms cover
+            every way the open and the conversion fail without naming an image library's class
+            here.
+    """
+    # Deferred: importing this module starts no image stack in a process that only lists checks.
+    import numpy
+
+    from qrcheck.evidence import mux
+
+    try:
+        reference = mux.decode_image(symbol.image_bytes)
+        pixels = numpy.asarray(reference.convert("RGB"), dtype=numpy.uint8)
+    except (OSError, ValueError) as error:
+        raise TargetContractError(
+            f"damage artefact of {len(symbol.image_bytes)} bytes in format "
+            f"{symbol.output_format!r} is an image no library can open: {type(error).__name__}",
+            body_prefix=symbol.image_bytes,
+        ) from error
+    return reference, pixels
+
+
 def _jpeg_pixels(pixels: numpy.ndarray, quality: int, reference: Any) -> numpy.ndarray:
     """Re-encode `pixels` as JPEG at `quality` and read the decoded result back.
 
@@ -714,6 +831,11 @@ def _jpeg_pixels(pixels: numpy.ndarray, quality: int, reference: Any) -> numpy.n
     transmitted in a lossy format. The re-encode goes through the image mux's Pillow writer, so
     this module still imports no image library.
     """
+    # Deferred: importing this module starts no image stack in a process that only lists checks.
+    import numpy
+
+    from qrcheck.evidence import mux
+
     buffer = io.BytesIO()
     _raster(pixels, reference).save(buffer, format="JPEG", quality=int(quality))
     return numpy.asarray(mux.decode_image(buffer.getvalue()).convert("RGB"), dtype=numpy.uint8)
@@ -808,8 +930,13 @@ class _Measurement:
 
 
 def _case_id(record: _Record, kind: str) -> str:
-    """Return the case identifier of one record's variant: ``corpus:<record-id>@<kind>``."""
-    return f"corpus:{record.id}@{kind}"
+    """Return the case identifier of one record's variant: ``corpus:<record-id>@<kind>``.
+
+    The ``corpus:<record-id>`` half is :func:`qrcheck.checks.support.corpus_case_id`'s, so the
+    record's identifier is spelled one way in the product; this appends the damage kind that
+    distinguishes the seven variants of one record.
+    """
+    return f"{support.corpus_case_id(record.id)}@{kind}"
 
 
 def _case_seed(run_seed: int, case_id: str, kind: str) -> int:
@@ -839,15 +966,6 @@ def _case_matrix(ctx: RunContext) -> tuple[tuple[_Record, str], ...]:
     """Return every ``(record, kind)`` case of the matrix, sorted by case identifier."""
     pairs = ((record, kind) for record in _sample_records(ctx) for kind in DAMAGE_KINDS)
     return tuple(sorted(pairs, key=lambda pair: _case_id(pair[0], pair[1])))
-
-
-def _elapsed(started: float) -> float:
-    """Return the milliseconds elapsed since `started`, for the result's ``duration_ms``.
-
-    The only clock read in this module, feeding a field every report masks: no assertion here
-    compares a duration (AAP §0.5.5).
-    """
-    return max((time.perf_counter() - started) * 1000.0, 0.0)
 
 
 def _symbol_for(
@@ -893,6 +1011,9 @@ def _version_of(reading: DecodeResult) -> int | None:
     and the sampled dimension its only input: the pinned zxing-cpp reports no version, and a
     target's declared version is evidence rather than assertion.
     """
+    # Deferred: importing this module starts no image stack in a process that only lists checks.
+    from qrcheck.decode.matrix import version_from_dimension
+
     if reading.version is not None:
         return int(reading.version)
     if reading.matrix is not None:
@@ -950,7 +1071,7 @@ def _measure(
             request=request.as_dict(),
             decoded=decoded,
             expected=expected,
-            duration_ms=_elapsed(started),
+            duration_ms=support.elapsed_ms(started),
             seed=seed,
         )
     return _Measurement(frame=frame, reading=reading, decoded_ec=ec_level)
@@ -1009,7 +1130,7 @@ def _expectation(
 ) -> dict[str, Any]:
     """Return the ``expected`` mapping: what the case asserted, and the values it applied."""
     return {
-        "payload_sha256": hashlib.sha256(request.payload).hexdigest(),
+        "payload_sha256": support.sha256_hex(request.payload),
         "payload_len": len(request.payload),
         "damage_kind": kind,
         "damage_seed": seed,
@@ -1021,16 +1142,6 @@ def _expectation(
 def _request_extra(kind: str, seed: int, applied: Mapping[str, Any]) -> dict[str, Any]:
     """Return the facts ``request.json`` records beside the request itself."""
     return {"damage": {"kind": kind, "seed": seed, "applied": dict(applied)}}
-
-
-def _first_difference(left: bytes, right: bytes) -> int | None:
-    """Return the offset of the first differing byte, or ``None`` when the two are equal."""
-    for offset, (mine, theirs) in enumerate(zip(left, right)):
-        if mine != theirs:
-            return offset
-    if len(left) != len(right):
-        return min(len(left), len(right))
-    return None
 
 
 def _assert_payload(
@@ -1085,14 +1196,16 @@ def _run_resilience_case(ctx: RunContext, record: _Record, kind: str) -> CaseRes
             one-error-result-per-check policy on target loss.
         TargetTimeout: no response within the configured timeout; propagated for the same reason.
     """
+    # Deferred: importing this module starts no image stack in a process that only lists checks.
+    from qrcheck.evidence import mux
+
     case_id = _case_id(record, kind)
     seed = _case_seed(ctx.seed, case_id, kind)
     request = support.build(record.payload_bytes, ctx.ec_level)
     started = time.perf_counter()
     try:
         symbol = _symbol_for(ctx, record, request)
-        reference = mux.decode_image(symbol.image_bytes)
-        pixels = numpy.asarray(reference.convert("RGB"), dtype=numpy.uint8)
+        reference, pixels = _reference_raster(symbol)
         measurement = _measure(
             request,
             _reading_for(ctx, record, symbol, request),
@@ -1133,11 +1246,11 @@ def _run_resilience_case(ctx: RunContext, record: _Record, kind: str) -> CaseRes
                 error,
                 request=request,
                 seed=seed,
-                duration_ms=_elapsed(started),
+                duration_ms=support.elapsed_ms(started),
             ),
         )
     outcome = support.decode(ctx, variant, request)
-    duration = _elapsed(started)
+    duration = support.elapsed_ms(started)
     evidence = _damage_evidence(measurement, outcome, kind, seed, applied)
     expected = _expectation(request, kind, seed, applied)
     result = _assert_payload(
@@ -1160,8 +1273,12 @@ def _run_seeded_case(ctx: RunContext, record: _Record, kind: str) -> CaseResult:
     No adapter call: the symbol comes from the memo ``DM-RESILIENCE`` filled, the damage is re-
     applied with the same derived seed and resolved thresholds, and the encoded result is compared
     with the recorded bytes before decoding it and asserting the payload again. An empty memo skips
-    the case with reason ``missing_dependency``, never a pass.
+    the case with reason ``missing_dependency``, never a pass; a held artefact no image library can
+    open fails it with reason ``contract_error``, as the resilience executor reports it.
     """
+    # Deferred: importing this module starts no image stack in a process that only lists checks.
+    from qrcheck.evidence import mux
+
     case_id = _case_id(record, kind)
     seed = _case_seed(ctx.seed, case_id, kind)
     request = support.build(record.payload_bytes, ctx.ec_level)
@@ -1189,12 +1306,26 @@ def _run_seeded_case(ctx: RunContext, record: _Record, kind: str) -> CaseResult:
                         f"byte-identical to the one {DM_RESILIENCE} recorded"
                     )
                 },
-                duration_ms=_elapsed(started),
+                duration_ms=support.elapsed_ms(started),
                 seed=seed,
             ),
         )
-    reference = mux.decode_image(symbol.image_bytes)
-    pixels = numpy.asarray(reference.convert("RGB"), dtype=numpy.uint8)
+    try:
+        reference, pixels = _reference_raster(symbol)
+    except (TargetRejected, TargetContractError, TargetUnsupported) as error:
+        # The seeded case asks the target for nothing, so the one failure it can translate here
+        # is the held artefact no library opens; the arm mirrors the resilience executor's.
+        return support.record_evidence(
+            ctx,
+            support.case_status_for_error(
+                DM_SEEDED,
+                case_id,
+                error,
+                request=request,
+                seed=seed,
+                duration_ms=support.elapsed_ms(started),
+            ),
+        )
     measurement = _measure(request, reading, pixels, DM_SEEDED, case_id, seed, started)
     if isinstance(measurement, CaseResult):
         return support.record_evidence(ctx, measurement, symbol=symbol)
@@ -1209,14 +1340,14 @@ def _run_seeded_case(ctx: RunContext, record: _Record, kind: str) -> CaseResult:
     )
     regenerated = mux.encode_png(_raster(damaged, reference))
     outcome = support.decode(ctx, regenerated, request)
-    duration = _elapsed(started)
+    duration = support.elapsed_ms(started)
     evidence = _damage_evidence(measurement, outcome, kind, seed, applied)
     evidence["variant"] = {
-        "regenerated_sha256": hashlib.sha256(regenerated).hexdigest(),
-        "recorded_sha256": hashlib.sha256(recorded).hexdigest(),
+        "regenerated_sha256": support.sha256_hex(regenerated),
+        "recorded_sha256": support.sha256_hex(recorded),
         "regenerated_len": len(regenerated),
         "recorded_len": len(recorded),
-        "first_difference": _first_difference(regenerated, recorded),
+        "first_difference": support.first_divergence(regenerated, recorded),
     }
     expected = _expectation(request, kind, seed, applied)
     expected["variant"] = (
@@ -1285,10 +1416,11 @@ def _seeded_case(record: _Record, kind: str) -> Case:
 def dm_resilience_cases(ctx: RunContext) -> Iterator[Case]:
     """Yield the 56 cases of ``DM-RESILIENCE``: eight records by seven damage kinds.
 
-    Enumerating clears the run-scoped memo first, and the cases are yielded in case-identifier
+    Enumerating binds the memo to this run first -- to its evidence store, seed and EC level --
+    clearing it whenever they differ from the memo's, and the cases are yielded in case-identifier
     order, so the walk never depends on the order this generator built them in.
     """
-    clear_symbol_memo()
+    _bind_run(ctx)
     for record, kind in _case_matrix(ctx):
         yield _resilience_case(record, kind)
 
@@ -1305,7 +1437,12 @@ def dm_seeded_cases(ctx: RunContext) -> Iterator[Case]:
     """Yield the 56 cases of ``DM-SEEDED``: the same matrix as ``DM-RESILIENCE``.
 
     The identifiers are the same because the cases *are* the same cases: this check re-applies
-    each one's damage to the symbol the earlier check holds and compares the bytes.
+    each one's damage to the symbol the earlier check holds and compares the bytes. Enumerating
+    binds the memo to this run first, so the cases read only a memo this run's own
+    ``DM-RESILIENCE`` could have filled: an invocation in a process that ran another run's
+    ``DM-RESILIENCE`` starts empty -- a run has its own evidence store -- and reports the
+    documented ``missing_dependency`` skip for every case.
     """
+    _bind_run(ctx)
     for record, kind in _case_matrix(ctx):
         yield _seeded_case(record, kind)

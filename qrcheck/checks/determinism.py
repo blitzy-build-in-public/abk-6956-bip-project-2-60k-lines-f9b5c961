@@ -46,7 +46,8 @@ from qrcheck.targets.base import (
     TargetUnsupported,
 )
 
-if TYPE_CHECKING:  # Annotations only: see the import-cost note in the module docstring.
+if TYPE_CHECKING:  # Annotations only: qrcheck.decode loads numpy for its decoders, and importing
+    # this module must not start a native image stack in a process that only lists checks.
     from qrcheck.decode import DecodeResult
 
 __all__ = [

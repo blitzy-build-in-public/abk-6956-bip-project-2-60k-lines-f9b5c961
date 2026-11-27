@@ -4,11 +4,12 @@ The product's contract test of a target's *refusal* behaviour (AAP §0.8.1, §0.
 generator that silently accepts an empty payload, an out-of-contract option or a payload larger than
 the symbol it was pinned to is broken in a way no round-trip assertion can see.
 
-* ``IV-EMPTY`` sends ``payload=b""`` at error level M in a PNG with a four-pixel module size and a
-  four-module quiet zone. A declared rejection **is** the expected outcome; a returned symbol is a
-  *documented success* and passes too (AAP §0.3.5: "declared rejection **or** documented success,
-  never a crash, never a partially written file"). A crash, a ``TargetContractError`` or an empty or
-  wrong-format artefact fails with ``Reason.CONTRACT_ERROR``.
+* ``IV-EMPTY`` sends ``payload=b""`` at error level M in a PNG, with nothing else pinned: the empty
+  payload is the only rule the request breaks, so a target that declares only ``png`` can serve it
+  and its own defaults decide the geometry. A declared rejection **is** the expected outcome; a
+  returned symbol is a *documented success* and passes too (AAP §0.3.5: "declared rejection **or**
+  documented success, never a crash, never a partially written file"). A crash, a
+  ``TargetContractError`` or an empty or wrong-format artefact fails with ``Reason.CONTRACT_ERROR``.
 * ``IV-OVERCAPACITY`` pins Version 10 at error level M and sends one byte more than Version 10 holds
   at level **L**. A declared rejection passes; a returned symbol is decoded once and fails with
   ``Reason.CAPACITY_VIOLATION``, recording ``requested_len``, ``capacity``, ``decoded_len`` and
@@ -85,11 +86,6 @@ _PROBE_PAYLOAD: Final[bytes] = b"qrcheck invalid-input probe"
 # The error level every probe but the invalid-level one requests.  A lawful level, so the
 # option under test is the only rule the request breaks.
 _PROBE_EC_LEVEL: Final[str] = "M"
-
-# The module size and quiet zone ``IV-EMPTY`` asks for (AAP §0.8.1): both are lawful
-# values, so the empty payload is the only thing that request breaks.
-_PROBE_MODULE_SIZE_PX: Final[int] = 4
-_PROBE_QUIET_ZONE_MODULES: Final[int] = 4
 
 # ``IV-OVERCAPACITY``'s pin and levels: the version is pinned so the capacity bound is a fact about
 # one symbol rather than a scan; the requested level is M and the payload is sized against level L,
@@ -177,9 +173,9 @@ class _Requested:
 def empty_cases(ctx: RunContext) -> Iterator[Case]:
     """Yield ``IV-EMPTY``'s single case: an empty payload at error level M.
 
-    The request is the one AAP §0.8.1 tabulates -- ``payload=b""``, error level M, a PNG with a
-    four-pixel module size and a four-module quiet zone -- so the empty payload is the only rule it
-    breaks.
+    ``payload=b""`` at error level M in a PNG, and nothing else pinned: the empty payload is the
+    only rule the request breaks, so a target declaring nothing beyond ``png`` can serve it and the
+    geometry is whatever that target renders by default.
 
     Yields:
         One case, ``synthetic:iv-empty``.
@@ -217,7 +213,19 @@ def overcapacity_cases(ctx: RunContext) -> Iterator[Case]:
     id="IV-BAD-OPTION",
     title="An option outside the request contract is refused",
     family="invalid",
-    requires=frozenset({Capability.png, Capability.ec_level}),
+    # Three of the four probes pin a field one of these capabilities owns -- module size 0, quiet
+    # zone -1, a below-floor colour pair -- and a target must accept the field before it can be
+    # asked to reject an illegal value for it. Declaring them keeps the pre-I/O gate and this
+    # table in agreement, so the probes the target can serve are never skipped case by case.
+    requires=frozenset(
+        {
+            Capability.png,
+            Capability.ec_level,
+            Capability.module_size,
+            Capability.quiet_zone,
+            Capability.color,
+        }
+    ),
     dependencies=(DEPENDENCY_PRIMARY_DECODER,),
 )
 def bad_option_cases(ctx: RunContext) -> Iterator[Case]:
@@ -241,16 +249,13 @@ def bad_option_cases(ctx: RunContext) -> Iterator[Case]:
 def _empty_request(ctx: RunContext) -> _Requested:
     """Return the empty-payload probe's request and premise.
 
-    Both outcomes are acceptable, which is why the premise records it: a declared rejection passes,
-    and a documented success passes with ``decoded["outcome"] = "documented_success"``. Only a crash
-    or an incomplete artefact fails (AAP §0.3.5).
+    Nothing but the payload is pinned, so the empty payload is the only rule the request breaks and
+    a target that declares only ``png`` can serve it. Both outcomes are acceptable, which is why the
+    premise records it: a declared rejection passes, and a documented success passes with
+    ``decoded["outcome"] = "documented_success"``. Only a crash or an incomplete artefact fails
+    (AAP §0.3.5).
     """
-    request = support.construct_out_of_contract(
-        b"",
-        _PROBE_EC_LEVEL,
-        module_size_px=_PROBE_MODULE_SIZE_PX,
-        quiet_zone_modules=_PROBE_QUIET_ZONE_MODULES,
-    )
+    request = support.construct_out_of_contract(b"", _PROBE_EC_LEVEL)
     expected: dict[str, Any] = {
         "outcome": "declared_rejection",
         "documented_success_accepted": True,

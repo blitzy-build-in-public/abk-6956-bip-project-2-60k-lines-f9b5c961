@@ -330,5 +330,5 @@ qrcheck run: configuration error: targets.mygen.returns: invalid value 'bytes'; 
 
 `run`, `doctor`, `corpus build` and `loc` all read the document and all fail the same way. `qrcheck list` reads no configuration and is unaffected.
 
-**A `capabilities` list that omits `svg`** while `RN-SVG` is selected does not fail the run: that check's cases are `skipped` with reason `unsupported_capability`, listing `svg` as the requirement to add. `counts.skipped` increments, `counts.passed` does not, and the exit code is unmoved — a run of passes and skips exits `0`. The gate that demands zero skips in a reference run is what catches it, which is exactly why that gate exists.
+**A `capabilities` list that omits `svg`** while `RN-SVG` is selected does not fail the run: the check is resolved as `skipped` with reason `unsupported_capability` before any case runs, its `missing` list naming every capability the declaration lacks — `svg` and `quiet_zone` for `RN-SVG`. `counts.skipped` increments, `counts.passed` does not, and the exit code is unmoved — a run of passes and skips exits `0`. The gate that demands zero skips in a reference run is what catches it, which is exactly why that gate exists.
 

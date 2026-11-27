@@ -148,13 +148,33 @@ _PNG_AND_EC_LEVEL: Final[frozenset[Capability]] = frozenset(
 # requirements are the whole reason a fourth adapter kind needs no check change, so they are
 # asserted per check rather than as a total: a check that lost one requirement would still total
 # the same number of capabilities if another gained one, and that pair would go unnoticed.
+#
+# Four rows are an additive clarification of that table rather than a departure from it:
+# RN-MODULE-SIZE adds ``quiet_zone``, RN-SVG adds ``quiet_zone``, RN-LOGO adds ``module_size`` and
+# IV-BAD-OPTION adds ``module_size``, ``quiet_zone`` and ``color``. AAP §0.4.2 and §0.8.1 fix the
+# request fields behind each one -- RN-MODULE-SIZE's dimension contract is stated in the request's
+# own quiet zone, RN-SVG's zero-module margin is what makes its canvas imply the module count at an
+# integral pitch, RN-LOGO sizes its overlay from the pinned edge, and each IV-BAD-OPTION probe sets
+# one option to an illegal value -- and honouring a pinned field needs the capability that owns it.
+# `support._request_capabilities` derives the pre-I/O ``TargetUnsupported`` gate from exactly those
+# fields, while ``qrcheck list`` and ``resolve()`` decide runnability from this set, so the
+# declaration must predict what that gate refuses: a check that pins a field it does not declare is
+# published as runnable and then skips every case.
 _EXPECTED_REQUIRES: Final[Mapping[str, frozenset[Capability]]] = MappingProxyType(
     {
         "CL-ARTIFACTS": frozenset(),
         "DM-RESILIENCE": _PNG_ONLY,
         "DM-SEEDED": _PNG_ONLY,
         "DT-DETERMINISTIC": _PNG_ONLY,
-        "IV-BAD-OPTION": _PNG_AND_EC_LEVEL,
+        "IV-BAD-OPTION": frozenset(
+            {
+                Capability.png,
+                Capability.ec_level,
+                Capability.module_size,
+                Capability.quiet_zone,
+                Capability.color,
+            }
+        ),
         "IV-EMPTY": _PNG_ONLY,
         "IV-OVERCAPACITY": frozenset({Capability.png, Capability.version_pin}),
         "MD-CHARSET": _PNG_ONLY,
@@ -163,11 +183,18 @@ _EXPECTED_REQUIRES: Final[Mapping[str, frozenset[Capability]]] = MappingProxyTyp
         "PF-ENCODE": _PNG_ONLY,
         "RN-CONTRAST": frozenset({Capability.png, Capability.color}),
         "RN-LOGO": frozenset(
-            {Capability.png, Capability.logo_overlay, Capability.ec_level}
+            {
+                Capability.png,
+                Capability.logo_overlay,
+                Capability.ec_level,
+                Capability.module_size,
+            }
         ),
-        "RN-MODULE-SIZE": frozenset({Capability.png, Capability.module_size}),
+        "RN-MODULE-SIZE": frozenset(
+            {Capability.png, Capability.module_size, Capability.quiet_zone}
+        ),
         "RN-QUIET-ZONE": frozenset({Capability.png, Capability.quiet_zone}),
-        "RN-SVG": frozenset({Capability.svg}),
+        "RN-SVG": frozenset({Capability.svg, Capability.quiet_zone}),
         "RT-ROUNDTRIP": _PNG_ONLY,
         "SY-EC-MATCH": _PNG_AND_EC_LEVEL,
         "SY-MASK": _PNG_ONLY,
@@ -746,7 +773,7 @@ def test_a_missing_runtime_dependency_resolves_to_a_missing_dependency_skip() ->
         f"{check_id}: a fully available host leaves nothing unmet"
     )
 
-    resolution = resolve([contract], capabilities={Capability.svg}, availability=unavailable)
+    resolution = resolve([contract], capabilities=contract.requires, availability=unavailable)
     assert resolution.runnable_ids == (), "a check missing its tool must not run"
     outcome = resolution.skipped[0]
     assert outcome.reason is Reason.MISSING_DEPENDENCY, (
@@ -767,7 +794,7 @@ def test_a_missing_dependency_skip_records_the_discovery_order_it_attempted() ->
 
     resolution = resolve(
         [contract],
-        capabilities={Capability.svg},
+        capabilities=contract.requires,
         availability=unavailable,
         attempted={DEPENDENCY_SVG_RASTERIZER: _ATTEMPTED_ORDER},
     )
@@ -829,7 +856,9 @@ def test_a_capability_shortfall_outranks_a_missing_runtime_dependency() -> None:
     assert outcome.reason is Reason.UNSUPPORTED_CAPABILITY, (
         "installing the rasterizer would not make an SVG-incapable target runnable"
     )
-    assert outcome.missing == (Capability.svg.value,)
+    assert outcome.missing == tuple(sorted(member.value for member in contract.requires)), (
+        "the skip must name every requirement the target lacks"
+    )
 
 
 def test_a_target_declaring_nothing_leaves_only_the_capability_free_checks_runnable() -> None:
@@ -910,7 +939,7 @@ def test_resolve_reads_a_declaring_target_and_an_availability_probe() -> None:
     class _DeclaringTarget:
         """An object shaped like an adapter: it publishes its capabilities."""
 
-        capabilities = frozenset({Capability.svg.value})
+        capabilities = frozenset({Capability.svg.value, Capability.quiet_zone.value})
 
     class _ProjectingProbe:
         """An availability source that projects itself to a mapping."""

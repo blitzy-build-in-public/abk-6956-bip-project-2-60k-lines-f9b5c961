@@ -68,6 +68,46 @@ MAGIC: dict[str, tuple[bytes, ...]] = {
 _UTF8_BOM: bytes = b"\xef\xbb\xbf"
 _WHITESPACE: bytes = b" \t\r\n\v\f"
 
+# Where a PNG states its own canvas: the eight-byte signature, then the four-byte length and the
+# four-byte type of the IHDR chunk, then that chunk's first two fields, the width and the height
+# as big-endian uint32 (ISO/IEC 15948 §5.6 fixes the chunk layout and §11.2.2 the IHDR field
+# order).  A conforming stream carries IHDR first, so a 24-byte prefix holds everything
+# :func:`probe_image_size` needs to answer, without the image library being consulted at all.
+_PNG_IHDR_TYPE_AT: int = 12
+_PNG_IHDR_WIDTH_AT: int = 16
+_PNG_IHDR_HEIGHT_AT: int = 20
+_PNG_IHDR_PREFIX_BYTES: int = 24
+
+
+class DeclaredCanvasTooLarge(ValueError):
+    """An artefact whose declared canvas the image library refuses to open as a decompression bomb.
+
+    A named member of the :exc:`ValueError` family, so a caller can tell "the target declares a
+    canvas no ceiling this framework holds would ever accept" from the programming errors
+    :func:`probe_image_size` raises for its own arguments. Pillow raises
+    :exc:`PIL.Image.DecompressionBombError` from inside ``Image.open`` for a header declaring more
+    than twice ``Image.MAX_IMAGE_PIXELS``, before any pixel is allocated, and
+    :func:`probe_image_size` converts it into this so a target's own bytes can never surface as a
+    library fault.
+    """
+
+
+def _png_declared_size(payload: bytes) -> tuple[int, int] | None:
+    """Return the canvas `payload`'s own IHDR chunk declares, or ``None`` when it carries none.
+
+    The dimensions are read straight out of the bytes at :data:`_PNG_IHDR_WIDTH_AT` and
+    :data:`_PNG_IHDR_HEIGHT_AT`, each a big-endian ``uint32``, so the answer is the target's own
+    declaration and no library guard can pre-empt it. ``None`` means the prefix is not a PNG header
+    in the layout this function reads, which leaves the caller to the image library.
+    """
+    if len(payload) < _PNG_IHDR_PREFIX_BYTES:
+        return None
+    if payload[_PNG_IHDR_TYPE_AT : _PNG_IHDR_TYPE_AT + 4] != b"IHDR":
+        return None
+    width = int.from_bytes(payload[_PNG_IHDR_WIDTH_AT : _PNG_IHDR_WIDTH_AT + 4], "big")
+    height = int.from_bytes(payload[_PNG_IHDR_HEIGHT_AT : _PNG_IHDR_HEIGHT_AT + 4], "big")
+    return width, height
+
 
 @dataclass(frozen=True)
 class OpenImage:
@@ -158,6 +198,44 @@ def decode_image(data: bytes) -> Image.Image:
     image = Image.open(io.BytesIO(payload))
     image.load()
     return image
+
+
+def probe_image_size(data: bytes) -> tuple[int, int]:
+    """Return the ``(width, height)`` the image bytes declare, without loading any pixels.
+
+    The header-only counterpart of :func:`decode_image`, for a caller that must decide whether the
+    pixels are worth allocating at all. A PNG's dimensions are taken from its own IHDR chunk by
+    :func:`_png_declared_size`, never from the image library: a header declaring a canvas past
+    ``PIL.Image.MAX_IMAGE_PIXELS`` would otherwise make ``Image.open`` raise its decompression-bomb
+    guard while the header is being read, so a fact about the target's own bytes would surface as a
+    library fault and pre-empt whatever ceiling the caller holds. Every other format is probed
+    through Pillow, which reads the dimensions out of its header and closes the image in the
+    ``with`` block, so no pixel buffer is created either way. ``data`` is a target's bytes and may
+    be hostile or broken, so Pillow's own exceptions propagate unchanged for the caller to
+    translate: :exc:`ValueError` when ``data`` is empty or not bytes-like,
+    :exc:`DeclaredCanvasTooLarge` (a :exc:`ValueError`) when the declared canvas is one Pillow
+    refuses to open as a decompression bomb, :exc:`PIL.UnidentifiedImageError` when Pillow cannot
+    recognise the content, and :exc:`OSError` for a truncated or otherwise broken header.
+    """
+    if not isinstance(data, (bytes, bytearray, memoryview)):
+        raise ValueError(f"probe_image_size expects bytes, got {type(data).__name__}")
+    payload = bytes(data)
+    if not payload:
+        raise ValueError("probe_image_size requires non-empty image bytes")
+    if payload.startswith(PNG_MAGIC):
+        declared = _png_declared_size(payload)
+        if declared is not None:
+            return declared
+    try:
+        with Image.open(io.BytesIO(payload)) as probe:
+            width, height = probe.size
+    except Image.DecompressionBombError as exc:
+        raise DeclaredCanvasTooLarge(
+            f"the {mime_type(payload)} artefact declares a canvas beyond the "
+            f"{Image.MAX_IMAGE_PIXELS} pixel limit PIL.Image.MAX_IMAGE_PIXELS sets, which is what "
+            f"Pillow refuses to open: {exc}"
+        ) from exc
+    return int(width), int(height)
 
 
 def composite_overlay(symbol: Image.Image, overlay: Image.Image) -> Image.Image:
@@ -264,6 +342,7 @@ def open_images() -> tuple[OpenImage, ...]:
 
 
 __all__ = [
+    "DeclaredCanvasTooLarge",
     "Image",
     "JPEG_MAGIC",
     "MAGIC",
@@ -282,5 +361,6 @@ __all__ = [
     "mime_type",
     "open_image",
     "open_images",
+    "probe_image_size",
     "to_data_uri",
 ]

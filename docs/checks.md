@@ -129,7 +129,7 @@ A failure here is a framework defect, not a target defect: no target can cause a
 | Cases | eight sampled corpus records × seven damage kinds, `corpus:<record-id>@<kind>` |
 | Cases / encodes / decodes | 56 / 8 / 64 |
 | Evidence | `symbol.png` (the pristine artefact), one `damage-<kind>-<seed>.png` per variant, and `decoded.json` with `pristine` (`version`, `ec_level_decoder`, `ec_level_format`, `matrix_sha256`, `sampling`) and `damage[]` (`kind`, `seed`, `agreement`, `decoded_len`, `applied`, `per_decoder`) |
-| Failure reasons | `value_mismatch`; `sampling_failed` |
+| Failure reasons | `value_mismatch`; `sampling_failed`; `contract_error` when the artefact the target returned is not an image any installed library can open, with its first 256 bytes in `decoded.json`; `target_rejected` and `unsupported_capability` through the shared adapter-error translation |
 | Reproduce | `qrcheck run --checks DM-RESILIENCE --seed <seed> --ec <level>` |
 
 **What it asserts.** That a symbol survives the damage its own error-correction level promises to survive. The sample is the first eight corpus records in `id` order whose payload is short enough to sit comfortably inside capacity, so the damage budget — not the payload size — is the only thing under test. Each sampled record is encoded once, and the seven variants are derived from that one symbol in the fixed kind order; the primary decoder must return the requested payload from every variant.
@@ -150,14 +150,14 @@ Two rules shape the verdict. The occlusion budget is read from the **error-corre
 | Cases | the same 56 `corpus:<record-id>@<kind>` identifiers as `DM-RESILIENCE` |
 | Cases / encodes / decodes | 56 / 0 / 56 |
 | Evidence | `damage-<kind>-<seed>.png` (the regenerated variant), and `decoded.json` with `damage_kind`, `damage_seed`, `applied`, `payload_sha256`, `payload_len`, `regenerated_sha256`, `recorded_sha256`, `regenerated_len`, `recorded_len`, `first_difference` |
-| Failure reasons | `value_mismatch`; `missing_dependency` when the prerequisite is not available in this run |
+| Failure reasons | `value_mismatch`; `missing_dependency` when the prerequisite is not available in this run; `contract_error` when a held artefact is not an image any installed library can open |
 | Reproduce | `qrcheck run --checks DM-RESILIENCE,DM-SEEDED --seed <seed> --ec <level>` |
 
 **What it asserts.** That the damage a run applied can be reproduced from what the report records, and nothing else. For each case it re-derives the seed through the product's single derivation point (`qrcheck/config/seeding.py`), re-applies the recorded damage to the symbol **it already holds**, and requires the result to be byte-identical to the variant `DM-RESILIENCE` produced in the same run. It never calls the adapter a second time — which is why its encode count is zero, and why a mask that changes between two calls cannot leak into this check.
 
 The seed travels the same path as everything else that is reproducible: it is recorded in the result, in the damage filename and in `decoded.json`, so a single damaged image can be regenerated from `(run seed, check id, case id, damage kind)` without re-running anything else. `first_difference` reports the offset of the first byte that differs when the two do not match.
 
-`missing_dependency` means the prerequisite is absent — `DM-RESILIENCE` was not part of this run, so no held symbol exists — not that a tool is missing.
+`missing_dependency` means the prerequisite is absent — `DM-RESILIENCE` was not part of this run, so no held symbol exists — not that a tool is missing. The memo those symbols live in belongs to one run: a second invocation in the same process starts with an empty memo and reports `missing_dependency` for all 56 cases whatever its target, seed and error level, so no run can compare its damage against another run's artefacts. Selecting both checks in one invocation is what makes `DM-SEEDED` a comparison at all, which is why the `Reproduce` command above names both.
 
 ### 3.4 `DT-DETERMINISTIC` — Identical requests produce identical symbols
 
@@ -181,7 +181,7 @@ A component that was read and disagreed outranks one that could not be read, so 
 | Field | Value |
 |-------|-------|
 | Family module | `qrcheck/checks/invalid.py` |
-| Requires | `png`, `ec_level` |
+| Requires | `png`, `ec_level`, `module_size`, `quiet_zone`, `color` |
 | Optional runtime dependency | `primary-decoder` |
 | Cases | four constructed probes: `synthetic:iv-bad-option-contrast`, `-ec`, `-module-size`, `-quiet-zone` |
 | Cases / encodes / decodes | 4 / 4 / 0 |
@@ -237,7 +237,7 @@ This check builds its own payload outside the corpus, so no corpus-driven check 
 | Cases | every record of the six charset coverages, `corpus:<record-id>` |
 | Cases / encodes / decodes | 74 / 74 / 74 |
 | Evidence | `symbol.png`; `decoded.json` with `payload_sha256`, `payload_len`, `expected_mode`, `first_divergence_offset` and the decoder projection |
-| Failure reasons | `value_mismatch` |
+| Failure reasons | `decoder_disagreement`; `value_mismatch` |
 | Reproduce | `qrcheck run --checks MD-CHARSET --seed <seed> --ec <level> --class '<glob>'` |
 
 **What it asserts.** That a payload survives the encode/decode round trip byte for byte whatever its character set, and that the class the corpus says it belongs to is the class that travelled. The six coverages map to the corpus classes as follows, and the mapping is asserted by `tests/unit/test_corpus_io.py` so no coverage can silently lose its records:
@@ -252,6 +252,8 @@ This check builds its own payload outside the corpus, so no corpus-driven check 
 | Four-byte code points | `emoji`, plus the `utf8-multibyte` records that carry U+10000 and above |
 
 The comparison is on bytes, never on rendered text, so a payload that is not valid UTF-8 is judged on what actually travelled. `first_divergence_offset` is what makes a truncation distinguishable from a substitution: the evidence shows the offset of the first byte at which the decoded payload departs from the requested one.
+
+Two failing outcomes are decided in a fixed order, as the round-trip check decides them: two decoders whose payloads differ are a `decoder_disagreement` before they are a payload mismatch, because the framework does not pick a winner and a check that passed such a symbol while `RT-ROUNDTRIP` failed it would describe the same decode two ways; only a payload the authority really returned is then compared with the request, and a difference is a `value_mismatch` whose `first_divergence_offset` shows where it departed.
 
 ### 3.9 `MD-MODE-OPTIMAL` — Encoding mode is optimal: no symbol larger than the payload's own charset requires
 
@@ -312,7 +314,7 @@ The measurement is one pass, never a retry: a slow outlier is reported as a p95,
 | Cases | six palettes, each requested at both polarities: `synthetic:contrast-<n>-<polarity>` |
 | Cases / encodes / decodes | 12 / 12 / 12 |
 | Evidence | `symbol.png`; `decoded.json` with `contrast_ratio_measured`, `contrast_floor`, `palette_measured`, `palette_requested`, `polarity_requested`, `inverted_request` and the decoder projection including `polarity_applied` |
-| Failure reasons | `value_mismatch` |
+| Failure reasons | `value_mismatch`; `sampling_failed` |
 | Reproduce | `qrcheck run --checks RN-CONTRAST --seed <seed>` |
 
 **What it asserts.** That the target rendered the colours it was asked for, that the rendered pair clears the luminance ratio the target itself declares in `contrast_floor`, and that the symbol still decodes — at both polarities. The inverted half is why the check exists: a light-on-dark request must decode through the framework's polarity-normalised second pass rather than depending on a decoder feature that the pinned decoders do not both have, and `polarity_applied` records which pass produced the payload (`architecture.md`).
@@ -324,12 +326,12 @@ A failure with `value_mismatch` and a low `contrast_ratio_measured` means the ta
 | Field | Value |
 |-------|-------|
 | Family module | `qrcheck/checks/render.py` |
-| Requires | `png`, `logo_overlay`, `ec_level` |
+| Requires | `png`, `logo_overlay`, `ec_level`, `module_size` |
 | Optional runtime dependency | `primary-decoder` |
 | Cases | three overlay sizes, each at error level H and error level L: `synthetic:logo-<step>-<level>` |
 | Cases / encodes / decodes | 6 / 6 / 6 |
 | Evidence | `symbol.png`, `logo.png` (the seeded overlay bitmap that was composited, so the covered area can be re-measured), and `decoded.json` with `decoded_ec_level`, `logo_area_fraction_requested`, `logo_area_fraction_measured`, `logo_area_fraction_measured_image_area`, `logo_area_fraction_basis`, `logo_side_px`, `logo_seed`, `module_px_measured`, `occlusion_margin`, `recovery_fraction`, `recovery_budget`, `assertion_applied`, `rendered_colour_count`, `symbol_module_count` and `symbol_px` |
-| Failure reasons | `value_mismatch` |
+| Failure reasons | `value_mismatch`; `sampling_failed` |
 | Reproduce | `qrcheck run --checks RN-LOGO --seed <seed>` |
 
 **What it asserts.** That the overlay was actually drawn, at the size that was asked for, and that the symbol survives it wherever the symbol's own error-correction level says it should. The overlay bitmap is derived from the run seed and recorded as `logo.png`, so the covered area is measurable from the evidence rather than taken on trust; the three sizes are fractions of the configured `logo_area_fraction` ceiling.
@@ -341,7 +343,7 @@ The decode assertion is conditional by design: it is made only when the covered 
 | Field | Value |
 |-------|-------|
 | Family module | `qrcheck/checks/render.py` |
-| Requires | `png`, `module_size` |
+| Requires | `png`, `module_size`, `quiet_zone` |
 | Optional runtime dependency | `primary-decoder` |
 | Cases | the first twelve corpus records in `id` order, `corpus:<record-id>` |
 | Cases / encodes / decodes | 12 / 12 / 0 |
@@ -375,7 +377,7 @@ The decode assertion is conditional by design: it is made only when the covered 
 | Field | Value |
 |-------|-------|
 | Family module | `qrcheck/checks/render.py` |
-| Requires | `svg` |
+| Requires | `svg`, `quiet_zone` |
 | Optional runtime dependency | `svg-rasterizer` |
 | Cases | the first twelve corpus records in `id` order, `corpus:<record-id>` |
 | Cases / encodes / decodes | 12 / 12 / 12 |
@@ -384,6 +386,8 @@ The decode assertion is conditional by design: it is made only when the covered 
 | Reproduce | `qrcheck run --checks RN-SVG --seed <seed> --class '<glob>'` |
 
 **What it asserts.** Three things about vector output, because an SVG's byte layout is the encoder's business and cannot be asserted: that the document parses; that its canvas implies the module count the decoded version implies, with a module pitch that is positive and — for a plain user-unit canvas — a whole number of units; and that rasterizing the document yields an image the primary decoder reads back as the requested payload. A canvas carrying a physical unit is held only to a positive pitch, because one module may lawfully be a fraction of a millimetre. The raster is composited onto white before decoding, since a vector canvas usually has no background rectangle.
+
+The artefact is bounded before any of that is spent on it, because it is the target's bytes: a document longer than the module's declared byte ceiling, or one carrying a `<!DOCTYPE` or an `<!ENTITY` declaration, is refused before it is parsed — the parser expands an internal entity as it reads, so a few hundred bytes can become megabytes of text ahead of any geometry guard. A declared canvas above the framework's per-side raster ceiling is then reported as `value_mismatch` with `problems: ["canvas_above_raster_ceiling"]` and the priced side in `svg_canvas_side_px`, never raised, because what a target's artefact says about itself is a verdict about that target and leaves the run's exit code at 1. Only a rasterizer or host fault — a binary that exits non-zero, times out or writes nothing — is an `error` result.
 
 When no rasterizer can be found, `qrcheck/registry/resolve.py` resolves `RN-SVG` to one whole-check `skipped` result with reason `missing_dependency` before any case runs; that result records the discovery order it attempted in `decoded.attempted` and persists its evidence like any other skip, so the report names what to install rather than merely reporting an absence. Should the check meet an absent rasterizer in its own case enumeration — the per-case half of the same gate — each case is `skipped` the same way with the order in `rasterizer.attempted` and the status in `rasterizer`. `dependencies.md` owns that discovery order and the binary that satisfies it. Discovery runs once per run, in the check's case enumeration, so all twelve cases report the same rasterizer.
 
@@ -414,10 +418,10 @@ The primary decoder is the sole authority for this and every other check. A case
 | Cases | every corpus record, `corpus:<record-id>` |
 | Cases / encodes / decodes | 240 / 240 / 240 |
 | Evidence | `symbol.png`; `decoded.json` with `ec_level_decoder`, `ec_level_format`, `request_ec_level`, `sampled_version` and `per_decoder` |
-| Failure reasons | `format_info_disagreement`; `sampling_failed`; `value_mismatch` |
+| Failure reasons | `decoder_disagreement`; `format_info_disagreement`; `sampling_failed`; `value_mismatch` |
 | Reproduce | `qrcheck run --checks SY-EC-MATCH --seed <seed> --ec <level> --class '<glob>'` |
 
-**What it asserts.** That the symbol carries the error-correction level that was requested, established from two independent sources: the level the primary decoder reports, and the level decoded out of the 15-bit format information inside the symbol. The three failing outcomes are distinct on purpose. The two sources disagreeing with each other is `format_info_disagreement`, and both values are kept verbatim; they agreeing on a level that is not the requested one is `value_mismatch`; either reading being absent is `sampling_failed`, because nothing can be concluded.
+**What it asserts.** That the symbol carries the error-correction level that was requested, established from two independent sources: the level the primary decoder reports, and the level decoded out of the 15-bit format information inside the symbol. A symbol the consensus layer classifies `disagree` fails first, with `decoder_disagreement`, before either reading is compared: the classification describes what the decoders did, which is settled before any field of the symbol is judged. The three field-level outcomes are distinct on purpose. The two sources disagreeing with each other is `format_info_disagreement`, and both values are kept verbatim; they agreeing on a level that is not the requested one is `value_mismatch`; either reading being absent is `sampling_failed`, because nothing can be concluded.
 
 This is the check that catches a generator which quietly encodes at a level other than the one it was asked for, and the evidence is what makes the finding diagnosable: `ec_level_decoder` and `ec_level_format` sit beside `request_ec_level` in one object, so the reader sees all three values without re-running anything.
 
@@ -431,10 +435,10 @@ This is the check that catches a generator which quietly encodes at a level othe
 | Cases | every corpus record, `corpus:<record-id>` |
 | Cases / encodes / decodes | 240 / 240 / 240 |
 | Evidence | `symbol.png`; `decoded.json` with `mask` (from the format information), `mask_pin`, `sampled_version` and `per_decoder` |
-| Failure reasons | `sampling_failed`; `value_mismatch` |
+| Failure reasons | `decoder_disagreement`; `sampling_failed`; `value_mismatch` |
 | Reproduce | `qrcheck run --checks SY-MASK --seed <seed> --ec <level> --class '<glob>'` |
 
-**What it asserts.** That the symbol's mask is a legal mask, and that a mask that was pinned was honoured. No decoder in the pinned pair reports a mask, so it is read from the format information alone. Mask *selection* is encoder-defined (`architecture.md`), so an unpinned request is held only to the legal range `0..7` — asserting one value would fail a conforming target — and equality is asserted only when the request carried a pin.
+**What it asserts.** That the symbol's mask is a legal mask, and that a mask that was pinned was honoured. No decoder in the pinned pair reports a mask, so it is read from the format information alone. Mask *selection* is encoder-defined (`architecture.md`), so an unpinned request is held only to the legal range `0..7` — asserting one value would fail a conforming target — and equality is asserted only when the request carried a pin. A symbol the consensus layer classifies `disagree` is a `decoder_disagreement` ahead of the mask reading, so a check here cannot pass a symbol the round-trip check fails.
 
 ### 3.20 `SY-MATRIX-EQUIV` — Module matrix equals the oracle at a pinned version, error level and mask
 
@@ -446,10 +450,10 @@ This is the check that catches a generator which quietly encodes at a level othe
 | Cases | eight constructed cases at Versions 1, 2, 7 and 10, two payloads each of at most 64 bytes: `synthetic:matrix-v<version>-<label>` |
 | Cases / encodes / decodes | 8 / 8 / 8 |
 | Evidence | `symbol.png`; `request.json` carrying `expected_module_count` and `oracle_matrix_sha256` beside the request; `decoded.json` with `expected_module_count`, `expected_version`, `oracle_matrix_sha256`, `request_ec_level`, `sampled_module_count`, `sampled_matrix_sha256`, `sampled_mask`, `sampled_version`, `sampled_version_from_dimension`, `differing_modules` and `first_difference` |
-| Failure reasons | `sampling_failed`; `value_mismatch` |
+| Failure reasons | `decoder_disagreement`; `sampling_failed`; `value_mismatch` |
 | Reproduce | `qrcheck run --checks SY-MATRIX-EQUIV --seed <seed> --ec <level>` |
 
-**What it asserts.** That the symbol's module matrix is the oracle's module matrix, module for module, at a pinned version, error level and mask. The pinning is the whole assertion: mask selection is a property of the encoder, so two encoders are only required to agree when every parameter that decides the matrix has been fixed, and this check therefore uses eight small payloads at four versions instead of the corpus. The four failure paths are checked in order — no sampled grid is `sampling_failed`; a module count that is not the pinned version's is `value_mismatch`; a grid whose dimension implies a version other than the pinned one is `value_mismatch`; and any differing module is `value_mismatch` with `differing_modules` counting them and `first_difference` giving the row and column of the first.
+**What it asserts.** That the symbol's module matrix is the oracle's module matrix, module for module, at a pinned version, error level and mask. The pinning is the whole assertion: mask selection is a property of the encoder, so two encoders are only required to agree when every parameter that decides the matrix has been fixed, and this check therefore uses eight small payloads at four versions instead of the corpus. The failure paths are checked in order — a symbol the consensus layer classifies `disagree` is `decoder_disagreement`, ahead of every comparison below; no sampled grid is `sampling_failed`; a module count that is not the pinned version's is `value_mismatch`; a grid whose dimension implies a version other than the pinned one is `value_mismatch`; and any differing module is `value_mismatch` with `differing_modules` counting them and `first_difference` giving the row and column of the first.
 
 To read a failure here, open `request.json` first: it holds the oracle digest and the expected module count, so the expectation can be regenerated from what the evidence records without reading the check's source. Then open `decoded.json` and compare `sampled_matrix_sha256` and `differing_modules` with it.
 
@@ -465,10 +469,10 @@ On the `defective` target this check fails too, and section 4 says why that is a
 | Cases | every corpus record, `corpus:<record-id>` |
 | Cases / encodes / decodes | 240 / 240 / 240 |
 | Evidence | `symbol.png`; `decoded.json` with `expected_version`, `oracle_version`, `module_count_for_expected_version`, `request_ec_level`, `sampled_version` and `per_decoder` |
-| Failure reasons | `sampling_failed`; `value_mismatch` |
+| Failure reasons | `decoder_disagreement`; `sampling_failed`; `value_mismatch` |
 | Reproduce | `qrcheck run --checks SY-VERSION-MIN --seed <seed> --ec <level> --class '<glob>'` |
 
-**What it asserts.** That the symbol is no larger than it needs to be. Neither decoder in the pinned pair reports a version, so the version is recovered from the symbol itself: the sampled grid dimension `N` implies the version through `N = 4V + 17`, and that version must equal the smallest version the oracle needs for the payload at the requested error level — or the version that was pinned, when the request carried a pin, because honouring a pin is the target's contract and not a size defect. `oracle_version` and `sampled_version` sit together in the evidence, so a symbol that is one version too large is visible as a number rather than as a message.
+**What it asserts.** That the symbol is no larger than it needs to be. Neither decoder in the pinned pair reports a version, so the version is recovered from the symbol itself: the sampled grid dimension `N` implies the version through `N = 4V + 17`, and that version must equal the smallest version the oracle needs for the payload at the requested error level — or the version that was pinned, when the request carried a pin, because honouring a pin is the target's contract and not a size defect. `oracle_version` and `sampled_version` sit together in the evidence, so a symbol that is one version too large is visible as a number rather than as a message. A symbol the consensus layer classifies `disagree` is a `decoder_disagreement` before the sampled version is compared at all.
 
 `ec_level` is a required capability for a reason: the smallest fitting version depends on the level, so a target that cannot be asked for a level cannot be held to a version.
 
@@ -596,10 +600,10 @@ Each row is a state a reader will actually meet, the result it produces, and the
 | State | What the result looks like | Gate that asserts it |
 |-------|---------------------------|----------------------|
 | A decoder returns nothing | That decoder's `per_decoder` entry has `status` `undetected` with its own "no symbol" text in `error_text`. An `undetected` decoder is **never** a disagreement; when the primary decoder is the silent one, the round-trip check fails with `value_mismatch`, because the authority produced nothing to compare. The result's `secondary_comparable` is `null`, which is what tells this state apart from a `primary_only` result whose secondary answer existed but could not be compared (`secondary_comparable` `false`, section 8.2). | `tests/unit/test_decoder_consensus.py::test_silence_in_both_decoders_is_undetected_and_never_a_disagreement` |
-| The two decoders disagree | `failed` with reason `decoder_disagreement`; `per_decoder` holds both decoders' payloads and metadata blocks verbatim, and both are kept in `decoded.json`. The framework does not pick a winner. | `tests/unit/test_decoder_consensus.py::test_payload_disagreement_fails_roundtrip_with_decoder_disagreement` |
+| The two decoders disagree | `failed` with reason `decoder_disagreement`; `per_decoder` holds both decoders' payloads and metadata blocks verbatim, and both are kept in `decoded.json`. The framework does not pick a winner. Every check that consumes a decoded payload reports it — `RT-ROUNDTRIP`, `MD-CHARSET` and the four `SY-*` checks — so one symbol cannot pass one check and fail another on the consensus classification alone. | `tests/unit/test_decoder_consensus.py::test_payload_disagreement_fails_roundtrip_with_decoder_disagreement` |
 | The format information disagrees with the decoder's level | `failed` with reason `format_info_disagreement`, `ec_level_decoder` and `ec_level_format` both recorded beside `request_ec_level`. | `tests/unit/test_decoder_consensus.py::test_sym_ec_match_fails_with_format_info_disagreement_and_keeps_both_values` |
 | The target returns an image that will not decode | The case fails: `value_mismatch` for the round-trip check, whose `per_decoder` entry keeps the decoder's own "no symbol" text verbatim, and `value_mismatch` with `problems` naming `raster_does_not_decode` for `RN-SVG`. The artefact is kept as `symbol.png`, so the symbol can be looked at rather than only described. | `tests/unit/test_checks_negative.py` (the `undecodable-but-measured` round), `tests/unit/test_decoder_consensus.py::test_silence_in_both_decoders_is_undetected_and_never_a_disagreement` |
-| The target returns non-image bytes | The adapter raises `TargetContractError`; the case fails with `contract_error` and `decoded.json` carries `error_text` plus `hex_prefix`, the first 256 bytes of the unusable body as 512 hexadecimal characters (fewer when the body is shorter, empty when there is no body). | `tests/unit/test_targets_errors.py::test_library_adapter_non_image_bytes_record_the_full_hex_prefix` |
+| The target returns non-image bytes | The adapter raises `TargetContractError`; the case fails with `contract_error` and `decoded.json` carries `error_text` plus `hex_prefix`, the first 256 bytes of the unusable body as 512 hexadecimal characters (fewer when the body is shorter, empty when there is no body). A check that has to open the artefact itself — the damage family reads the pixels it damages — reports the same `contract_error` result for the same reason and never lets the image library's exception abort the run. | `tests/unit/test_targets_errors.py::test_library_adapter_non_image_bytes_record_the_full_hex_prefix` |
 | The target lacks a capability the check requires | `skipped` with reason `unsupported_capability`, resolved before execution: `counts.skipped` increments and `counts.passed` is unchanged, so the run cannot look green. | `tests/unit/test_registry_contract.py::test_a_capability_shortfall_resolves_to_a_skip_and_never_to_a_pass` |
 | No module grid can be recovered | `failed` with reason `sampling_failed` — a stated inability to observe, never a wrong verdict about the target. The recording carries the module-count estimate: the estimated count, the pitch, the finder run in pixels, the snapped legal dimension and the timing-pattern transition counts that refused it. | `tests/unit/test_matrix_sampling.py::test_both_paths_refusing_yields_sampling_failed`, `::test_version_min_reports_sampling_failed_when_no_grid_is_recovered`, `::test_quiet_zone_reports_sampling_failed_when_no_pitch_can_be_measured` |
 | The target is unreachable or times out | Exactly one `error` result per affected check, filed under `synthetic:target` with reason `target_unavailable` or `target_timeout` — not one per corpus record. Checks that need nothing from the target still run and still pass, and the process exits with the internal-error code. | `tests/unit/test_runner_target_loss.py::test_an_unreachable_target_files_one_error_per_affected_check`, `::test_a_timed_out_target_files_one_error_per_affected_check_naming_the_timeout`, `::test_the_run_continues_to_the_checks_that_need_no_target` |

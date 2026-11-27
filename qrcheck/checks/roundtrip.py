@@ -27,9 +27,9 @@ duration and no path, and only :mod:`qrcheck.targets.base` is imported from ``qr
 
 from __future__ import annotations
 
-import hashlib
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
 from qrcheck.checks import support
@@ -60,21 +60,16 @@ CHECK_ID: Final[str] = "RT-ROUNDTRIP"
 # tests/unit/test_checks_negative.py compares the invocations it observes against it (AAP §0.4.3).
 _EXPECTED_ENCODES_PER_RUN: Final[int] = 240
 
-# The expected adapter-invocation count of every check this module registers, keyed by
-# check identifier (AAP §0.4.3).
-EXPECTED_ENCODES: dict[str, int] = {CHECK_ID: _EXPECTED_ENCODES_PER_RUN}
-
-# The case-identifier prefix AAP §0.3.4 fixes for a corpus-driven case, composed here as well as in
-# the support helper because the execute callable receives only the run context.
-_CORPUS_CASE_PREFIX: Final[str] = "corpus:"
+# The expected adapter-invocation count of every check this module registers, keyed by check
+# identifier and read-only: no run can mutate the declaration (AAP §0.4.3, §0.14.1).
+EXPECTED_ENCODES: Final[Mapping[str, int]] = MappingProxyType(
+    {CHECK_ID: _EXPECTED_ENCODES_PER_RUN}
+)
 
 # The one ``Agreement`` value that is a finding in its own right (AAP §0.3.2): two payloads that
 # differ.  ``qrcheck.decode.base`` publishes the vocabulary as a ``Literal``, so the value is named
 # here rather than spelled out at the comparison.
 _DISAGREE: Final[str] = "disagree"
-
-# Milliseconds in a second: the unit ``CaseResult.duration_ms`` is recorded in.
-_MS_PER_SECOND: Final[float] = 1000.0
 
 # The expected outcome, recorded beside every case's measurements so a reader of
 # ``summary.json`` sees what was asserted next to what happened.
@@ -117,7 +112,7 @@ def _case_for_record(record: CorpusRecord) -> Callable[[RunContext], CaseResult]
     The callable receives only the run's context, so the record and its identifier are bound here
     rather than looked up when the case runs.
     """
-    case_id = f"{_CORPUS_CASE_PREFIX}{record.id}"
+    case_id = support.corpus_case_id(record.id)
 
     def execute(ctx: RunContext) -> CaseResult:
         """Run this record's round-trip case against the run's target."""
@@ -152,7 +147,7 @@ def _execute_case(ctx: RunContext, record: CorpusRecord, case_id: str) -> CaseRe
             case_id,
             error,
             request=request,
-            duration_ms=_elapsed_ms(started),
+            duration_ms=support.elapsed_ms(started),
             seed=ctx.seed,
         )
         # No artefact exists for a rejection or a contract failure, and a skip is a real
@@ -160,7 +155,7 @@ def _execute_case(ctx: RunContext, record: CorpusRecord, case_id: str) -> CaseRe
         # text are persisted either way (AAP §0.3.4 evidence policy).
         return support.record_evidence(ctx, translated)
 
-    duration_ms = _elapsed_ms(started)
+    duration_ms = support.elapsed_ms(started)
     evidence = _evidence(request, result)
     expected = {
         "ec_level": request.ec_level,
@@ -221,41 +216,7 @@ def _evidence(request: GenerateRequest, result: DecodeResult) -> dict[str, Any]:
     decoded = result.payload_bytes
     evidence = result.as_dict()
     evidence["decoded_len"] = None if decoded is None else len(decoded)
-    evidence["first_divergence_offset"] = _first_divergence(decoded, request.payload)
-    evidence["payload_sha256"] = None if decoded is None else _sha256(decoded)
-    evidence["requested_payload_sha256"] = _sha256(request.payload)
+    evidence["first_divergence_offset"] = support.first_divergence(request.payload, decoded)
+    evidence["payload_sha256"] = None if decoded is None else support.sha256_hex(decoded)
+    evidence["requested_payload_sha256"] = support.sha256_hex(request.payload)
     return evidence
-
-
-def _first_divergence(decoded: bytes | None, requested: bytes) -> int | None:
-    """Return the index of the first byte at which the two payloads differ.
-
-    A truncation shows up as the length of the shorter side rather than as a differing byte, which
-    is why that index is reported as a divergence instead of ``None``: it is where the two payloads
-    stop agreeing. Equal payloads, and a payload that was never read, have no offset.
-    """
-    if decoded is None:
-        return None
-    shared = min(len(decoded), len(requested))
-    for index in range(shared):
-        if decoded[index] != requested[index]:
-            return index
-    return None if len(decoded) == len(requested) else shared
-
-
-def _sha256(data: bytes) -> str:
-    """Return the lower-case hexadecimal SHA-256 digest of `data`.
-
-    ``hashlib`` rather than the builtin ``hash()``, because a digest recorded in evidence must be
-    stable across processes and machines; ``hash()`` of a bytes object is salted per process and
-    would make two evidence files differ for the same payload (AAP §0.5.1).
-    """
-    return hashlib.sha256(data).hexdigest()
-
-
-def _elapsed_ms(started: float) -> float:
-    """Return the milliseconds elapsed since `started`, a ``perf_counter`` reading.
-
-    The result records the value and no assertion reads it.
-    """
-    return (time.perf_counter() - started) * _MS_PER_SECOND

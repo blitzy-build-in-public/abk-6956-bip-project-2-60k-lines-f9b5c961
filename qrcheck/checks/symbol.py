@@ -9,9 +9,11 @@ Counts: 240 corpus cases for each of the first three checks, 8 synthetic pinned 
 fourth -- 728 cases, 728 adapter invocations and 728 primary decodes, which is what
 :data:`EXPECTED_ENCODES` declares.
 
-Reasons this family emits: ``sampling_failed`` when no grid, level or mask could be read;
-``value_mismatch`` when a version, level, mask or module differs from the expectation;
-``format_info_disagreement`` when the decoder's level and the format information disagree.
+Reasons this family emits: ``decoder_disagreement`` when the two decoders returned differing
+payloads, which every judge reports ahead of its own comparisons (AAP §0.3.2);
+``sampling_failed`` when no grid, level or mask could be read; ``value_mismatch`` when a version,
+level, mask or module differs from the expectation; ``format_info_disagreement`` when the
+decoder's level and the format information disagree.
 Rejection, unusable response and unsupported request are translated by
 :func:`qrcheck.checks.support.case_status_for_error`; ``TargetUnavailable`` and
 ``TargetTimeout`` propagate so the runner owns the one-error-result-per-check policy.
@@ -29,11 +31,7 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, NamedTuple
 
-import segno
-
 import qrcheck.checks.support as support
-from qrcheck.decode import DecodeResult, Matrix, matrix_sha256
-from qrcheck.decode.matrix import module_count_for_version, version_from_dimension
 from qrcheck.registry.check import DEPENDENCY_PRIMARY_DECODER, Case, RunContext, check
 from qrcheck.report.model import CaseResult, Reason
 from qrcheck.targets.base import (
@@ -44,8 +42,17 @@ from qrcheck.targets.base import (
     TargetUnsupported,
 )
 
-if TYPE_CHECKING:  # Type-only: the corpus builder imports numpy for its payload generators.
+if TYPE_CHECKING:  # Type-only: the corpus builder imports numpy, and segno must not load here.
+    import segno
+
     from qrcheck.corpus.builder import CorpusRecord
+    from qrcheck.decode import DecodeResult, Matrix
+
+    # A judge reads one decoded symbol and returns the failure reason (``None`` for a pass) with
+    # the measurements the family adds to the evidence -- kept apart from result construction so no
+    # judge decides a duration, an evidence path or a status the model does not own.  Declared here
+    # because the alias itself names a decoded symbol, which must not load with this module.
+    _Judge = Callable[[DecodeResult, GenerateRequest], tuple[Reason | None, dict[str, Any]]]
 
 __all__ = [
     "EXPECTED_ENCODES",
@@ -67,11 +74,15 @@ _MATRIX_EQUIV_ID: Final[str] = "SY-MATRIX-EQUIV"
 # the JUnit ``classname`` suffix, so it is a stable output surface.
 _FAMILY: Final[str] = "symbol"
 
-# Case-identifier prefixes.  AAP §0.3.4 fixes both: a corpus-driven case is named after its
-# record, a constructed one after the name its family gave it.  The corpus form is repeated here
-# because a case's callable is not handed its own identifier.
-_CORPUS_PREFIX: Final[str] = "corpus:"
+# The ``synthetic:`` case-identifier prefix AAP §0.3.4 fixes for a constructed case, which carries
+# the name its family gave it.  The ``corpus:`` form of a corpus-driven case belongs to
+# :func:`qrcheck.checks.support.corpus_case_id`, so no second spelling of it lives here.
 _SYNTHETIC_PREFIX: Final[str] = "synthetic:"
+
+# The one consensus classification that is a finding in its own right (AAP §0.3.2): two decoder
+# payloads that differ.  The decoders' disagreement is decided before any field of the symbol is
+# compared, so every judge reports it first rather than folding it into a field verdict.
+_DISAGREE: Final[str] = "disagree"
 
 # ISO/IEC 18004 §7.8 defines exactly eight mask patterns, numbered 0-7.  The range is a
 # property of the standard rather than a threshold this product chooses, which is why it
@@ -136,11 +147,6 @@ EXPECTED_ENCODES: Final[Mapping[str, int]] = MappingProxyType(
 )
 
 
-# A judge reads one decoded symbol and returns the failure reason (``None`` for a pass) with the
-# measurements the family adds to the evidence -- kept apart from result construction so no judge
-# decides a duration, an evidence path or a status the model does not own.
-_Judge = Callable[[DecodeResult, GenerateRequest], tuple[Reason | None, dict[str, Any]]]
-
 # What a case does with the context and the argument its `cases` generator bound to it.
 _CaseHandler = Callable[[RunContext, Any], CaseResult]
 
@@ -163,6 +169,9 @@ def _oracle(
         ValueError: segno refuses the payload or a parameter -- a case-definition defect here rather
             than a target's fault.
     """
+    # Deferred: importing this module starts no image stack in a process that only lists checks.
+    import segno
+
     return segno.make_qr(
         payload,
         error=ec_level,
@@ -239,15 +248,6 @@ def _bound(handler: _CaseHandler, argument: Any) -> Callable[[RunContext], CaseR
     return execute
 
 
-def _elapsed_ms(started: float) -> float:
-    """Return milliseconds elapsed since `started`, to three decimals.
-
-    Recorded on every result and asserted by nothing here: AAP §0.5.5 excludes durations from
-    every correctness assertion, and ``PF-*`` alone reads time.
-    """
-    return round((time.perf_counter() - started) * 1000.0, 3)
-
-
 def _evidence(decoded: DecodeResult, **measurements: Any) -> dict[str, Any]:
     """Return the decoded-evidence mapping: the projection plus this check's findings.
 
@@ -301,10 +301,10 @@ def _run_case(
             case_id,
             error,
             request=request,
-            duration_ms=_elapsed_ms(started),
+            duration_ms=support.elapsed_ms(started),
             seed=ctx.seed,
         )
-    duration_ms = _elapsed_ms(started)
+    duration_ms = support.elapsed_ms(started)
     reason, measurements = judge(decoded, request)
     evidence = _evidence(decoded, **measurements)
     projection = request.as_dict()
@@ -332,16 +332,6 @@ def _run_case(
     # The store owns the persistence policy and returns a passing result untouched, so the
     # artefact travels with every case and only a non-passing one is written.
     return support.record_evidence(ctx, result, symbol=symbol, request_extra=request_extra)
-
-
-
-def _corpus_case_id(record: CorpusRecord) -> str:
-    """Return the ``corpus:<record-id>`` identifier AAP §0.3.4 fixes for this case.
-
-    A case's callable is not handed its own identifier, so the one spelling the registry also
-    uses is repeated here rather than guessed at.
-    """
-    return f"{_CORPUS_PREFIX}{record.id}"
 
 
 def _expected_version(request: GenerateRequest, oracle_version: int) -> int:
@@ -382,15 +372,19 @@ def SY_VERSION_MIN(ctx: RunContext) -> Iterator[Case]:
 def _version_min_case(ctx: RunContext, record: CorpusRecord) -> CaseResult:
     """Assert that one corpus record's symbol is the smallest version that fits it.
 
-    Returns ``value_mismatch`` when the sampled version differs from the expectation,
-    ``sampling_failed`` when no grid could be recovered, and a pass otherwise.
+    Returns ``decoder_disagreement`` when the two decoders returned differing payloads, ahead of
+    every field comparison (AAP §0.3.2), ``value_mismatch`` when the sampled version differs from
+    the expectation, ``sampling_failed`` when no grid could be recovered, and a pass otherwise.
 
     Raises:
         TargetUnavailable, TargetTimeout: Exactly as :func:`_run_case`.
         ValueError: The payload does not fit even Version 40 at the run's level, which would be a
             corpus defect rather than a target's.
     """
-    case_id = _corpus_case_id(record)
+    # Deferred: importing this module starts no image stack in a process that only lists checks.
+    from qrcheck.decode.matrix import module_count_for_version
+
+    case_id = support.corpus_case_id(record.id)
     payload = record.payload_bytes
     request = support.build(payload, ctx.ec_level)
     oracle_version = _oracle_version(payload, ctx.ec_level)
@@ -408,12 +402,15 @@ def _version_min_case(ctx: RunContext, record: CorpusRecord) -> CaseResult:
     ) -> tuple[Reason | None, dict[str, Any]]:
         """Compare the symbol's own version with the expectation."""
         measurements: dict[str, Any] = {
+            "agreement": decoded.agreement,
             "expected_version": expected_version,
             "module_count_for_expected_version": module_count_for_version(expected_version),
             "oracle_version": oracle_version,
             "request_ec_level": request.ec_level,
             "sampled_version": decoded.version,
         }
+        if decoded.agreement == _DISAGREE:
+            return Reason.DECODER_DISAGREEMENT, measurements
         if decoded.version is None:
             # No grid could be recovered, so the symbol has no measured version: a reason
             # rather than a verdict, which is what AAP §0.8.1 requires of this path.
@@ -455,16 +452,19 @@ def SY_EC_MATCH(ctx: RunContext) -> Iterator[Case]:
 def _ec_match_case(ctx: RunContext, record: CorpusRecord) -> CaseResult:
     """Assert the error-correction level of one corpus record's symbol.
 
-    The two sources are compared **with each other** first, so a disagreement is
-    ``format_info_disagreement`` rather than a mismatch against the request (AAP §0.4.5's reason
-    order), and only then is the agreed level compared with the request. A missing reading is a
-    failure of its own: an absent source can never be read as agreement.
+    A disagreement between the two decoders' payloads is reported first, as
+    ``decoder_disagreement``, because the consensus classification describes what the decoders did
+    before any field of the symbol is compared (AAP §0.3.2). The two level sources are then
+    compared **with each other**, so a disagreement is ``format_info_disagreement`` rather than a
+    mismatch against the request (AAP §0.4.5's reason order), and only then is the agreed level
+    compared with the request. A missing reading is a failure of its own: an absent source can
+    never be read as agreement.
 
     Raises:
         TargetUnavailable, TargetTimeout: Exactly as :func:`_run_case`.
         ValueError: The payload does not fit even Version 40 at the run's level.
     """
-    case_id = _corpus_case_id(record)
+    case_id = support.corpus_case_id(record.id)
     request = support.build(record.payload_bytes, ctx.ec_level)
     expected = {
         "ec_level": request.ec_level,
@@ -476,11 +476,18 @@ def _ec_match_case(ctx: RunContext, record: CorpusRecord) -> CaseResult:
     ) -> tuple[Reason | None, dict[str, Any]]:
         """Compare both readings of the level with each other, then with the request."""
         measurements: dict[str, Any] = {
+            "agreement": decoded.agreement,
             "ec_level_decoder": decoded.ec_level_decoder,
             "ec_level_format": decoded.ec_level_format,
             "request_ec_level": request.ec_level,
             "sampled_version": decoded.version,
         }
+        if decoded.agreement == _DISAGREE:
+            # Ahead of both ``sampling_failed`` and ``format_info_disagreement``: the consensus
+            # classification describes what the decoders did, which is settled before any field of
+            # the symbol is compared (AAP §0.3.2).  A symbol whose payloads differ is reported as
+            # the disagreement it is rather than as a reason read off one of its fields.
+            return Reason.DECODER_DISAGREEMENT, measurements
         if decoded.ec_level_decoder is None or decoded.ec_level_format is None:
             return Reason.SAMPLING_FAILED, measurements
         if decoded.ec_level_decoder != decoded.ec_level_format:
@@ -520,14 +527,16 @@ def _mask_case(ctx: RunContext, record: CorpusRecord) -> CaseResult:
     """Assert the mask pattern of one corpus record's symbol.
 
     The mask is only ever the format information's reading: the framework's own sampling, never a
-    decoder and never the target's metadata. Reasons: ``sampling_failed`` when it could not be read,
-    ``value_mismatch`` when the mask is outside ``0..7`` or contradicts a pin, a pass otherwise.
+    decoder and never the target's metadata. Reasons: ``decoder_disagreement`` when the two
+    decoders' payloads differ, which outranks the mask reading (AAP §0.3.2), ``sampling_failed``
+    when it could not be read, ``value_mismatch`` when the mask is outside ``0..7`` or contradicts a
+    pin, a pass otherwise.
 
     Raises:
         TargetUnavailable, TargetTimeout: Exactly as :func:`_run_case`.
         ValueError: The payload does not fit even Version 40 at the run's level.
     """
-    case_id = _corpus_case_id(record)
+    case_id = support.corpus_case_id(record.id)
     request = support.build(record.payload_bytes, ctx.ec_level)
     expected = {
         "legal_range": [_MASK_MINIMUM, _MASK_MAXIMUM],
@@ -539,9 +548,12 @@ def _mask_case(ctx: RunContext, record: CorpusRecord) -> CaseResult:
     ) -> tuple[Reason | None, dict[str, Any]]:
         """Compare the format information's mask with the legal range and any pin."""
         measurements: dict[str, Any] = {
+            "agreement": decoded.agreement,
             "mask_pin": request.mask,
             "sampled_version": decoded.version,
         }
+        if decoded.agreement == _DISAGREE:
+            return Reason.DECODER_DISAGREEMENT, measurements
         if decoded.mask is None:
             return Reason.SAMPLING_FAILED, measurements
         if not _MASK_MINIMUM <= decoded.mask <= _MASK_MAXIMUM:
@@ -588,13 +600,18 @@ def _matrix_case(ctx: RunContext, spec: _MatrixCase) -> CaseResult:
     Three assertions, in order: the grid's dimension is exactly ``4V + 17``;
     ``version_from_dimension`` reads the pinned version back off it; and every one of the ``N x N``
     modules equals the oracle's. The first differing ``(row, column)`` and the differing module
-    count are recorded. Reasons: ``sampling_failed`` when no grid could be recovered,
-    ``value_mismatch`` otherwise.
+    count are recorded. Reasons: ``decoder_disagreement`` when the two decoders' payloads differ,
+    which outranks the matrix comparison (AAP §0.3.2), ``sampling_failed`` when no grid could be
+    recovered, ``value_mismatch`` otherwise.
 
     Raises:
         TargetUnavailable, TargetTimeout: Exactly as :func:`_run_case`.
         ValueError: The payload does not fit the pinned version at the run's level.
     """
+    # Deferred: importing this module starts no image stack in a process that only lists checks.
+    from qrcheck.decode import matrix_sha256
+    from qrcheck.decode.matrix import module_count_for_version, version_from_dimension
+
     payload = spec.payload
     request = support.build(payload, ctx.ec_level, version=spec.version, mask=spec.mask)
     oracle = _oracle_grid(
@@ -621,11 +638,14 @@ def _matrix_case(ctx: RunContext, spec: _MatrixCase) -> CaseResult:
     ) -> tuple[Reason | None, dict[str, Any]]:
         """Compare the sampled grid with the oracle's matrix at the pinned parameters."""
         measurements: dict[str, Any] = {
+            "agreement": decoded.agreement,
             "expected_module_count": expected_module_count,
             "expected_version": spec.version,
             "oracle_matrix_sha256": oracle_digest,
             "request_ec_level": request.ec_level,
         }
+        if decoded.agreement == _DISAGREE:
+            return Reason.DECODER_DISAGREEMENT, measurements
         if decoded.matrix is None:
             return Reason.SAMPLING_FAILED, measurements
         sampled = _grid(decoded.matrix)

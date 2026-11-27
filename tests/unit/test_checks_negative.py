@@ -36,8 +36,10 @@ from __future__ import annotations
 import contextlib
 import dataclasses
 import io
+import math
 import sys
 import tempfile
+import zlib
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -99,6 +101,17 @@ _DAMAGE_KINDS_PER_RECORD: Final[int] = 7
 # from, used only to translate "the first N records in id order" into a slice.  It is a case
 # parameter, not a threshold: no check reads it.
 _RECORDS_PER_CHECK: Final[int] = 2
+
+# The canvases the artefact-ceiling rounds declare.  Each ceiling is read from the render family's
+# own constant rather than restated here, and the margin only has to be large enough that a refusal
+# cannot be an off-by-one, so neither number is a threshold any check reads from this module.
+_CEILING_MARGIN_PX: Final[int] = 1000
+_OVERSIZED_ARTEFACT_PX: Final[int] = render_family._MAX_ARTEFACT_SIDE_PX + _CEILING_MARGIN_PX
+_OVERSIZED_RASTER_PX: Final[int] = render_family._MAX_RASTER_SIDE_PX + _CEILING_MARGIN_PX
+# The canvas the library-refusal round declares: above twice ``PIL.Image.MAX_IMAGE_PIXELS``, which
+# is where Pillow's own header probe raises instead of answering, derived from that value so the
+# round cannot go stale.  It is the library's rule, not a ceiling this framework holds.
+_ABOVE_LIBRARY_LIMIT_PX: Final[int] = math.isqrt(2 * int(Image.MAX_IMAGE_PIXELS)) + 1
 
 # The name of the temporary entry the ``CL-ARTIFACTS`` negative round leaves behind.  It carries
 # the product-wide ``qrcheck-`` prefix the check scans for, which is what makes it a leak rather
@@ -355,6 +368,18 @@ NEGATIVE_CASES: Final[dict[str, NegativeSpec]] = {
                 case_limit=2,
                 symbol_defect="short-quiet-zone",
             ),
+            NegativeRound(
+                label="the PNG's own header declares a canvas above the measurement ceiling",
+                reason=Reason.SAMPLING_FAILED,
+                case_limit=1,
+                symbol_defect="png-canvas-above-measurement-ceiling",
+            ),
+            NegativeRound(
+                label="the image library refuses the declared canvas for its size",
+                reason=Reason.SAMPLING_FAILED,
+                case_limit=1,
+                symbol_defect="raster-canvas-above-library-limit",
+            ),
         ),
     ),
     "RN-MODULE-SIZE": NegativeSpec(
@@ -419,6 +444,24 @@ NEGATIVE_CASES: Final[dict[str, NegativeSpec]] = {
                 reason=Reason.MISSING_DEPENDENCY,
                 case_limit=2,
                 config={"render": models.RenderConfig(svg_rasterizer="none")},
+            ),
+            NegativeRound(
+                label="the document declares a canvas above the raster ceiling",
+                reason=Reason.VALUE_MISMATCH,
+                case_limit=1,
+                symbol_defect="svg-canvas-above-raster-ceiling",
+            ),
+            NegativeRound(
+                label="the document declares an internal entity, which is refused unparsed",
+                reason=Reason.VALUE_MISMATCH,
+                case_limit=1,
+                symbol_defect="svg-entity-declaration",
+            ),
+            NegativeRound(
+                label="the same declaration carried in UTF-16, which the scan also refuses",
+                reason=Reason.VALUE_MISMATCH,
+                case_limit=1,
+                symbol_defect="svg-utf16-entity-declaration",
             ),
             NegativeRound(
                 label=(
@@ -774,8 +817,13 @@ _SYMBOL_DEFECT_NAMES: Final[tuple[str, ...]] = (
     "changing-mask",
     "lightened-dark-palette",
     "logo-not-composited",
+    "png-canvas-above-measurement-ceiling",
+    "raster-canvas-above-library-limit",
     "short-quiet-zone",
+    "svg-canvas-above-raster-ceiling",
     "svg-canvas-not-module-multiple",
+    "svg-entity-declaration",
+    "svg-utf16-entity-declaration",
     "wrong-module-size",
 )
 
@@ -904,6 +952,82 @@ def _decode_defect(name: str) -> DecodeDefect:
     )
 
 
+# Where a PNG states its own canvas: the IHDR chunk's type, width, height and CRC (ISO/IEC 15948
+# §5.6).  A round rewrites the declaration and leaves every pixel as the conforming stub drew it.
+_PNG_TYPE_AT: Final[int] = 12
+_PNG_WIDTH_AT: Final[int] = 16
+_PNG_HEIGHT_AT: Final[int] = 20
+_PNG_CRC_AT: Final[int] = 29
+
+# The internal entities a billion-laughs document carries: each level references the one below it
+# ten times, so a few hundred bytes of source become a million characters while the parser reads
+# them (CWE-776).  The framework refuses the declaration before the parse, so none is expanded here.
+_ENTITY_DECLARATION: Final[bytes] = (
+    b"<!DOCTYPE svg [\n"
+    b'  <!ENTITY a "aaaaaaaaaa">\n'
+    b'  <!ENTITY b "&a;&a;&a;&a;&a;&a;&a;&a;&a;&a;">\n'
+    b'  <!ENTITY c "&b;&b;&b;&b;&b;&b;&b;&b;&b;&b;">\n'
+    b'  <!ENTITY d "&c;&c;&c;&c;&c;&c;&c;&c;&c;&c;">\n'
+    b"]>\n"
+)
+
+
+def _png_declaring_canvas(png_bytes: bytes, side: int) -> bytes:
+    """Return `png_bytes` with its IHDR declaring a `side` x `side` canvas.
+
+    The declared canvas is the artefact's own statement about itself, which is what a measurement
+    ceiling is read from, so only the header changes: the pixels stay the ones the conforming stub
+    drew. The IHDR chunk's CRC is recomputed, so the refusal is about the declared size and never
+    about a corrupt header.
+    """
+    payload = bytearray(png_bytes)
+    payload[_PNG_WIDTH_AT : _PNG_WIDTH_AT + 4] = side.to_bytes(4, "big")
+    payload[_PNG_HEIGHT_AT : _PNG_HEIGHT_AT + 4] = side.to_bytes(4, "big")
+    payload[_PNG_CRC_AT : _PNG_CRC_AT + 4] = (
+        zlib.crc32(bytes(payload[_PNG_TYPE_AT : _PNG_CRC_AT])) & 0xFFFFFFFF
+    ).to_bytes(4, "big")
+    return bytes(payload)
+
+
+def _pnm_declaring_canvas(side: int) -> bytes:
+    """Return a binary Netpbm image whose header declares a `side` x `side` canvas.
+
+    The one artefact form whose canvas this framework never reads for itself: Pillow parses a PNM's
+    dimensions out of its header, so the library's own size guard is what meets the declaration, and
+    one pixel of body is all the header needs beside it.
+    """
+    return f"P6\n{side} {side}\n255\n".encode("ascii") + b"\x00\x00\x00"
+
+
+def _svg_with_entity_declaration(svg_bytes: bytes) -> bytes:
+    """Return `svg_bytes` carrying :data:`_ENTITY_DECLARATION` after its XML declaration."""
+    marker = b"?>"
+    closing = svg_bytes.find(marker)
+    if not svg_bytes.startswith(b"<?xml") or closing < 0:
+        return _ENTITY_DECLARATION + svg_bytes
+    split_at = closing + len(marker)
+    return svg_bytes[:split_at] + b"\n" + _ENTITY_DECLARATION + svg_bytes[split_at:].lstrip(b"\r\n")
+
+
+def _svg_in_utf16_with_entity_declaration(svg_bytes: bytes) -> bytes:
+    """Return `svg_bytes` with an entity declaration, encoded as UTF-16 with a byte-order mark.
+
+    A UTF-16 document spells ``<!ENTITY`` two bytes per character, so a scan of the raw bytes that
+    knew only the single-byte spelling would hand the declaration to the parser intact; the refusal
+    reaches every encoding the parser decodes, which is what this artefact proves.
+    """
+    text = svg_bytes.decode("utf-8", "replace")
+    closing = text.find("?>")
+    if text.startswith("<?xml") and closing >= 0:
+        text = text[closing + len("?>"):].lstrip()
+    document = (
+        '<?xml version="1.0" encoding="UTF-16"?>\n'
+        '<!DOCTYPE svg [<!ENTITY e0 "AAAAAAAAAA">]>\n'
+        f"{text}"
+    )
+    return document.encode("utf-16")
+
+
 def _symbol_defect(name: str) -> SymbolDefect:
     """Return the artefact defect registered under `name`, built fresh for one run."""
 
@@ -917,6 +1041,53 @@ def _symbol_defect(name: str) -> SymbolDefect:
         del symbol
         requested = _DEFAULT_SCALE_PX if request.module_size_px is None else request.module_size_px
         return _render_with(request, scale=requested + 2)
+
+    def png_canvas_above_measurement_ceiling(
+        request: GenerateRequest, symbol: GeneratedSymbol
+    ) -> GeneratedSymbol:
+        """Declare a canvas above the measurement ceiling in the artefact's own PNG header."""
+        del request
+        return GeneratedSymbol(
+            image_bytes=_png_declaring_canvas(symbol.image_bytes, _OVERSIZED_ARTEFACT_PX),
+            output_format=symbol.output_format,
+        )
+
+    def raster_canvas_above_library_limit(
+        request: GenerateRequest, symbol: GeneratedSymbol
+    ) -> GeneratedSymbol:
+        """Answer with bytes whose declared canvas the image library refuses to open."""
+        del symbol
+        return GeneratedSymbol(
+            image_bytes=_pnm_declaring_canvas(_ABOVE_LIBRARY_LIMIT_PX),
+            output_format=request.output_format,
+        )
+
+    def svg_canvas_above_raster_ceiling(
+        request: GenerateRequest, symbol: GeneratedSymbol
+    ) -> GeneratedSymbol:
+        """Draw the same document onto a canvas above the ceiling a rasterizer may allocate."""
+        del symbol
+        return _render_with(request, scale=_OVERSIZED_RASTER_PX)
+
+    def svg_entity_declaration(
+        request: GenerateRequest, symbol: GeneratedSymbol
+    ) -> GeneratedSymbol:
+        """Carry an internal entity declaration, which this framework refuses before it parses."""
+        del request
+        return GeneratedSymbol(
+            image_bytes=_svg_with_entity_declaration(symbol.image_bytes),
+            output_format=symbol.output_format,
+        )
+
+    def svg_utf16_entity_declaration(
+        request: GenerateRequest, symbol: GeneratedSymbol
+    ) -> GeneratedSymbol:
+        """Carry the same declaration encoded as UTF-16, which the byte scan must also refuse."""
+        del request
+        return GeneratedSymbol(
+            image_bytes=_svg_in_utf16_with_entity_declaration(symbol.image_bytes),
+            output_format=symbol.output_format,
+        )
 
     def canvas_not_module_multiple(
         request: GenerateRequest, symbol: GeneratedSymbol
@@ -932,10 +1103,10 @@ def _symbol_defect(name: str) -> SymbolDefect:
         """Draw the symbol with the darker of the two requested colours one step lighter, so the
         measured palette is not the requested one and the pair stays above the floor.
 
-        The channel sum orders the two colours, the same key ``_measure_colours`` clusters the
-        rendered pixels by, so "the darker one" means the same thing here and in the check. A swap
-        of the pair would not do: the check compares the two measured colours as a set, which a swap
-        leaves unchanged."""
+        The channel sum orders the two colours, the same key the check's colour measurement clusters
+        the rendered pixels by, so "the darker one" means the same thing here and in the check. A
+        swap of the pair would not do: the check compares the two measured colours as a set, which a
+        swap leaves unchanged."""
         del symbol
         foreground = tuple(request.foreground_rgb)
         background = tuple(request.background_rgb)
@@ -970,12 +1141,22 @@ def _symbol_defect(name: str) -> SymbolDefect:
         return short_quiet_zone
     if name == "wrong-module-size":
         return wrong_module_size
-    if name == "svg-canvas-not-module-multiple":
-        return canvas_not_module_multiple
     if name == "lightened-dark-palette":
         return lightened_dark_palette
     if name == "logo-not-composited":
         return logo_not_composited
+    if name == "png-canvas-above-measurement-ceiling":
+        return png_canvas_above_measurement_ceiling
+    if name == "raster-canvas-above-library-limit":
+        return raster_canvas_above_library_limit
+    if name == "svg-canvas-above-raster-ceiling":
+        return svg_canvas_above_raster_ceiling
+    if name == "svg-canvas-not-module-multiple":
+        return canvas_not_module_multiple
+    if name == "svg-entity-declaration":
+        return svg_entity_declaration
+    if name == "svg-utf16-entity-declaration":
+        return svg_utf16_entity_declaration
     if name == "changing-mask":
         return changing_mask_factory()
     raise KeyError(
@@ -1313,9 +1494,14 @@ def stub_svg_rasterizer(monkeypatch: pytest.MonkeyPatch) -> None:
         """Report the one rasterizer this module's stub provides."""
         return name == _STUB_RASTERIZER
 
-    def rasterize(svg_bytes: bytes, status: Any) -> bytes:
-        """Answer every vector artefact with the stub's valid PNG."""
-        del svg_bytes, status
+    def rasterize(svg_bytes: bytes, status: Any, canvas: Any = None) -> bytes:
+        """Answer every vector artefact with the stub's valid PNG.
+
+        `canvas` is the ``(width, height, unit)`` the check already parsed from the document and
+        hands to the real `rasterize_svg` so its guard need not parse it again; the stub allocates
+        nothing, so it takes and ignores it.
+        """
+        del svg_bytes, status, canvas
         return _STUB_RASTER
 
     monkeypatch.setattr(render_family, "_probe_rasterizer", probe)
@@ -1471,6 +1657,37 @@ def test_every_negative_round_fails_with_the_reason_it_documents(
                 f"{check_id} / {outcome.round.label!r} / {result.case_id}: expected reason "
                 f"{outcome.round.reason!r}, got {result.reason!r}"
             )
+
+
+# What an unmeasurable artefact records: the ceiling it was refused against, and no invented canvas
+
+
+def test_an_unmeasurable_artefact_records_the_ceiling_and_never_an_invented_canvas(
+    harness: _Harness,
+) -> None:
+    """A canvas this framework refuses records the dimensions the header declared; one the image
+    library refuses for its size records none, because those dimensions were never read out. Neither
+    is an ``error`` result, which is what the two rounds exist to prove."""
+    run = _drive("RN-QUIET-ZONE", harness)
+    by_defect = {
+        outcome.round.symbol_defect: outcome
+        for outcome in run.rounds
+        if outcome.round.symbol_defect is not None
+    }
+    declared = by_defect["png-canvas-above-measurement-ceiling"].results[0]
+    refused = by_defect["raster-canvas-above-library-limit"].results[0]
+    for result in (declared, refused):
+        assert result.status is Status.FAILED, (
+            f"{result.case_id}: a refused canvas must never become an error result, got "
+            f"{result.status.value}/{result.reason!r}"
+        )
+        assert result.reason is Reason.SAMPLING_FAILED, result.reason
+        assert result.decoded["reason"] == "artefact_canvas_above_measurement_ceiling"
+        assert result.decoded["artefact_side_ceiling_px"] == render_family._MAX_ARTEFACT_SIDE_PX
+    assert declared.decoded["artefact_px"] == [_OVERSIZED_ARTEFACT_PX, _OVERSIZED_ARTEFACT_PX]
+    assert declared.decoded["artefact_side_px"] == _OVERSIZED_ARTEFACT_PX
+    assert refused.decoded["artefact_px"] is None, "a canvas never read out must not be invented"
+    assert refused.decoded["artefact_side_px"] is None
 
 
 # The declared invocation counts: an exact equality, so a retry is visible

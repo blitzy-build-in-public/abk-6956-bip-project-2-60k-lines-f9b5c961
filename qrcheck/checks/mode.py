@@ -24,8 +24,10 @@ byte``) 6, plus ``four-byte-code-points`` from the ``emoji`` and ``utf8-multibyt
 code points reach U+10000 and above, which the predicate decides rather than the class. Each case
 asserts byte-exact preservation of the request.
 
-Reasons emitted: ``value_mismatch`` from both checks and ``sampling_failed`` from
-``MD-MODE-OPTIMAL`` when no module grid could be recovered. Adapter errors are not classified here:
+Reasons emitted: ``decoder_disagreement`` from ``MD-CHARSET`` when the two decoders returned
+differing payloads, which it reports ahead of its byte comparison (AAP §0.3.2);
+``value_mismatch`` from both checks and ``sampling_failed`` from ``MD-MODE-OPTIMAL`` when no module
+grid could be recovered. Adapter errors are not classified here:
 both checks route every one through :func:`qrcheck.checks.support.case_status_for_error`, and
 ``TargetUnavailable``/``TargetTimeout`` are re-raised for the runner's target-loss policy, and a
 declared rejection or an unusable artefact becomes a failure with ``target_rejected`` or
@@ -35,7 +37,6 @@ and no image library, encoder or concrete adapter is imported.
 
 from __future__ import annotations
 
-import hashlib
 import time
 from collections.abc import Callable, Iterator, Mapping
 from types import MappingProxyType
@@ -61,7 +62,6 @@ __all__ = [
     "candidate_minimal_versions",
     "charset_cases",
     "coverages_for_record",
-    "first_divergence",
     "mode_of",
     "mode_optimal_cases",
     "payload_length_in_mode",
@@ -133,10 +133,10 @@ _ALPHANUMERIC_CHARSET: Final[frozenset[str]] = frozenset(
 # ``four-byte-code-points`` coverage asserts (U+10000 and above).
 _FOUR_BYTE_CODE_POINT_MIN: Final[int] = 0x10000
 
-# The prefix of a corpus-driven case identifier: ``corpus:<record-id>`` (AAP §0.3.4).
-# Repeated from the shared support module because this module composes the identifier
-# its own executor reports, and the support module keeps its copy private.
-_CORPUS_CASE_PREFIX: Final[str] = "corpus:"
+# The one consensus classification that is a finding in its own right (AAP §0.3.2): two decoder
+# payloads that differ.  ``qrcheck.decode.base`` publishes the vocabulary as a ``Literal``, so the
+# value is named here rather than spelled out at the comparison.
+_DISAGREE: Final[str] = "disagree"
 
 
 @check(
@@ -217,7 +217,7 @@ def execute_mode_optimal(ctx: RunContext, record: CorpusRecord) -> CaseResult:
         record contradicts itself -- its declared mode does not admit its payload, or the payload
         does not fit any version at this level. Both are corpus defects.
     """
-    case_id = _corpus_case_id(record)
+    case_id = support.corpus_case_id(record.id)
     payload = record.payload_bytes
     request = support.build(payload, ctx.ec_level)
     expected_version = _own_charset_minimal_version(record, payload, ctx.ec_level)
@@ -226,7 +226,7 @@ def execute_mode_optimal(ctx: RunContext, record: CorpusRecord) -> CaseResult:
         symbol, decoded = support.generate_and_decode(ctx, request)
     except TargetError as error:
         return _translated_failure(ctx, MODE_OPTIMAL_CHECK, case_id, error, request, started)
-    duration_ms = _elapsed_ms(started)
+    duration_ms = support.elapsed_ms(started)
     evidence = _mode_evidence(decoded, record, payload, ctx.ec_level)
     expected: Mapping[str, Any] = {
         "assertion": "decoded version at or below the payload's own-charset minimum",
@@ -373,9 +373,12 @@ def execute_charset(ctx: RunContext, record: CorpusRecord) -> CaseResult:
     One encode and one decode through the shared path. The comparison is between the payload bytes
     the record requested and the bytes the authoritative decoder returned: not the decoded text,
     which a decoder may re-render, and never the secondary decoder's answer, which corroborates but
-    never decides. The evidence records both digests and the offset of the first divergent byte, so
-    a truncation shows an offset equal to the decoded length. Returns ``passed`` on an exact match,
-    ``failed`` with ``value_mismatch`` otherwise.
+    never decides. Two payloads the decoders reported that differ are reported first, as
+    ``decoder_disagreement`` (AAP §0.3.2), because the consensus classification describes what the
+    decoders did before any byte of the payload is compared. The evidence records both digests and
+    the offset of the first divergent byte, so a truncation shows an offset equal to the decoded
+    length. Returns ``passed`` on an exact match, ``failed`` with ``decoder_disagreement`` or
+    ``value_mismatch`` otherwise.
 
     Raises:
         TargetUnsupported: The target does not declare ``png``; a skip with reason
@@ -383,7 +386,7 @@ def execute_charset(ctx: RunContext, record: CorpusRecord) -> CaseResult:
         unchanged for the runner's target-loss policy. TargetRejected, TargetContractError:
         Translated into a failing result carrying the target's own text verbatim.
     """
-    case_id = _corpus_case_id(record)
+    case_id = support.corpus_case_id(record.id)
     payload = record.payload_bytes
     request = support.build(payload, ctx.ec_level)
     started = time.perf_counter()
@@ -391,25 +394,42 @@ def execute_charset(ctx: RunContext, record: CorpusRecord) -> CaseResult:
         symbol, decoded = support.generate_and_decode(ctx, request)
     except TargetError as error:
         return _translated_failure(ctx, CHARSET_CHECK, case_id, error, request, started)
-    duration_ms = _elapsed_ms(started)
+    duration_ms = support.elapsed_ms(started)
     received = decoded.payload_bytes
     evidence = decoded.as_dict()
     evidence["expected_mode"] = record.expected_mode
     evidence["payload_len_requested"] = len(payload)
-    evidence["payload_sha256_requested"] = _digest(payload)
-    evidence["payload_sha256_decoded"] = _digest(received)
-    evidence["first_divergence_offset"] = (
-        None if received is None else first_divergence(payload, received)
+    evidence["payload_sha256_requested"] = support.sha256_hex(payload)
+    evidence["payload_sha256_decoded"] = (
+        None if received is None else support.sha256_hex(received)
     )
+    evidence["first_divergence_offset"] = support.first_divergence(payload, received)
     evidence["coverages"] = list(coverages_for_record(record))
     expected: Mapping[str, Any] = {
         "assertion": "decoded payload equals the requested payload byte for byte",
         "ec_level": ctx.ec_level,
         "expected_mode": record.expected_mode,
         "payload_len": len(payload),
-        "payload_sha256": _digest(payload),
+        "payload_sha256": support.sha256_hex(payload),
     }
     projection = request.as_dict()
+    if decoded.agreement == _DISAGREE:
+        # Two payloads that differ are a finding in their own right, ahead of the byte comparison
+        # (AAP §0.3.2): the consensus classification describes what the decoders did, which is
+        # settled before any byte of the payload is compared. The result is persisted through the
+        # shared evidence call exactly as the mismatch path persists it, so the case still carries
+        # symbol.png, request.json and a decoded.json holding both decoders' payloads verbatim.
+        result = support.fail(
+            CHARSET_CHECK,
+            case_id,
+            reason=Reason.DECODER_DISAGREEMENT,
+            request=projection,
+            decoded=evidence,
+            expected=expected,
+            duration_ms=duration_ms,
+            seed=ctx.seed,
+        )
+        return support.record_evidence(ctx, result, symbol=symbol)
     if received == payload:
         return support.pass_(
             CHARSET_CHECK,
@@ -460,7 +480,7 @@ def _translated_failure(
         case_id,
         error,
         request=request,
-        duration_ms=_elapsed_ms(started),
+        duration_ms=support.elapsed_ms(started),
         seed=ctx.seed,
     )
     return support.record_evidence(ctx, translated)
@@ -549,19 +569,6 @@ def coverages_for_record(record: CorpusRecord) -> tuple[str, ...]:
     return tuple(sorted(covered))
 
 
-def first_divergence(requested: bytes, received: bytes) -> int | None:
-    """Return the offset of the first byte at which `received` differs from `requested`.
-
-    ``None`` when the two are equal, the offset of the first differing byte, or the length of the
-    shorter payload when one is a prefix of the other -- the offset a truncation produces.
-    """
-    shared = min(len(requested), len(received))
-    for offset in range(shared):
-        if requested[offset] != received[offset]:
-            return offset
-    return None if len(requested) == len(received) else shared
-
-
 def _admits(payload: bytes, mode: str) -> bool:
     """Return whether `payload` fits the character set `mode` encodes.
 
@@ -585,30 +592,3 @@ def _holds_four_byte_code_point(payload: bytes) -> bool:
     except UnicodeDecodeError:
         return False
     return any(ord(character) >= _FOUR_BYTE_CODE_POINT_MIN for character in text)
-
-
-def _digest(payload: bytes | None) -> str | None:
-    """Return the SHA-256 hex digest of `payload`, or ``None`` when there is no payload.
-
-    A content digest, never ``hash()``: it is stable across processes and machines, which lets a
-    reader compare two evidence files from two runs.
-    """
-    return None if payload is None else hashlib.sha256(payload).hexdigest()
-
-
-def _elapsed_ms(started: float) -> float:
-    """Return the milliseconds elapsed since `started`, a :func:`time.perf_counter` value.
-
-    Measured and recorded, never asserted: a duration is the one volatile quantity this family
-    reports, and no comparison in this module reads it.
-    """
-    return (time.perf_counter() - started) * 1000.0
-
-
-def _corpus_case_id(record: CorpusRecord) -> str:
-    """Return `record`'s case identifier, ``corpus:<record-id>``.
-
-    The identifier the shared case builder also derives for the same record, so the result the
-    executor reports and the case the runner walks share one name.
-    """
-    return f"{_CORPUS_CASE_PREFIX}{record.id}"

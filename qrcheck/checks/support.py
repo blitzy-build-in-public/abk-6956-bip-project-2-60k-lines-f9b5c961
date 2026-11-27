@@ -2,8 +2,11 @@
 
 Case iteration over corpus records, request construction through the port's builder, the
 deterministic sampling helpers, the documented-recovery budget helper, the ``CaseResult`` factories,
-and the single translation of an adapter error into a status. This module is **not** a check family:
-it registers nothing, owns no check ID and asserts nothing about a symbol.
+and the single translation of an adapter error into a status. It also owns the four helpers a family
+would otherwise copy -- :func:`corpus_case_id`, :func:`first_divergence`, :func:`sha256_hex` and
+:func:`elapsed_ms` -- because AAP §0.8.1 makes this module the home of every cross-cutting concern
+the check families share and allows no second implementation of one. This module is **not** a check
+family: it registers nothing, owns no check ID and asserts nothing about a symbol.
 
 It never owns request validation (the port's :func:`~qrcheck.targets.base.build_request`), the
 result vocabulary and failure identifier (:mod:`qrcheck.report.model`), the evidence layout
@@ -16,8 +19,9 @@ results, and ``TargetUnavailable`` and ``TargetTimeout`` are propagated unchange
 :mod:`qrcheck.runner` owns the one-error-result-per-check target-loss policy. No bare ``except``, no
 retry and no swallowed exception exists here (AAP §0.5.6).
 
-Nothing here reads a clock, a random source, ``hash()``, ``id()`` or the filesystem, and nothing
-sorts by anything but an identifier. Two names differ from the plan's prose and the owners win: the
+Nothing here reads a clock except :func:`elapsed_ms`, whose value is recorded and never asserted;
+nothing here reads a random source, ``hash()``, ``id()`` or the filesystem, and nothing sorts by
+anything but an identifier. Two names differ from the plan's prose and the owners win: the
 evidence store is :attr:`qrcheck.registry.check.RunContext.evidence`, and
 :meth:`qrcheck.report.evidence.EvidenceStore.record` returns ``None`` for a passing case, so
 :func:`record_evidence` returns a passing result unchanged. :mod:`qrcheck.decode` and
@@ -27,7 +31,9 @@ evidence store is :attr:`qrcheck.registry.check.RunContext.evidence`, and
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import math
+import time
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from pathlib import Path
 from types import MappingProxyType
@@ -57,9 +63,12 @@ __all__ = [
     "build",
     "case_status_for_error",
     "construct_out_of_contract",
+    "corpus_case_id",
     "corpus_cases",
     "decode",
+    "elapsed_ms",
     "fail",
+    "first_divergence",
     "first_records",
     "generate",
     "generate_and_decode",
@@ -67,6 +76,7 @@ __all__ = [
     "record_evidence",
     "records_by_class",
     "recovery_fraction",
+    "sha256_hex",
     "skip",
     "synthetic_case",
 ]
@@ -188,6 +198,24 @@ def construct_out_of_contract(
     )
 
 
+def corpus_case_id(record_id: str) -> str:
+    """Return the case identifier of a corpus record: ``corpus:<record-id>``.
+
+    The single definition of the identifier form AAP §0.3.4 fixes for a corpus-driven case, and the
+    single owner of the ``corpus:`` prefix. :func:`corpus_cases` names the case it yields with it,
+    and each family's executor names the result it reports with it, so the case the runner walks,
+    the result it records and the evidence directory it writes cannot drift apart.
+
+    Args:
+        record_id: The stable identifier the corpus builder assigned the record, such as
+            ``boundary-numeric-001``. :attr:`qrcheck.corpus.builder.CorpusRecord.id` is the source.
+
+    Returns:
+        The case identifier, exactly ``corpus:`` followed by `record_id`.
+    """
+    return f"{_CORPUS_CASE_PREFIX}{record_id}"
+
+
 def corpus_cases(
     ctx: RunContext,
     check_id: str,
@@ -215,7 +243,7 @@ def corpus_cases(
         )
     seen: set[str] = set()
     for record in sorted(records, key=_by_record_id):
-        case_id = f"{_CORPUS_CASE_PREFIX}{record.id}"
+        case_id = corpus_case_id(record.id)
         if case_id in seen:
             raise ValueError(
                 f"check {check_id!r} would register case {case_id!r} twice; corpus record "
@@ -415,6 +443,57 @@ def recovery_fraction(ec_level: str) -> float:
             f"no documented error-correction recovery fraction for error level "
             f"{ec_level!r}; expected one of {', '.join(sorted(_RECOVERY_FRACTIONS))}"
         ) from None
+
+
+def first_divergence(requested: bytes, received: bytes | None) -> int | None:
+    """Return the offset at which `received` stops agreeing with `requested`, or ``None``.
+
+    The single definition of the offset the evidence records as ``first_divergence_offset`` (AAP
+    §0.4.5): the point at which the payload the decoder returned departs from the payload that was
+    asked for. The requested payload is always the first argument, so every call reads the same way.
+
+    ``None`` when `received` was never read -- there is nothing to compare -- and when the two
+    payloads are equal; otherwise the index of the first differing byte; and the length of the
+    common prefix when one payload is a prefix of the other, which is the offset a truncation
+    produces. That last case is reported as a divergence rather than as ``None`` because it is where
+    the two payloads stop agreeing, which is exactly what a reader diagnosing a truncated symbol
+    needs.
+
+    The comparison is on bytes, never on rendered text: a payload that is not valid UTF-8 is judged
+    on what actually travelled.
+    """
+    if received is None:
+        return None
+    shared = min(len(requested), len(received))
+    for offset in range(shared):
+        if requested[offset] != received[offset]:
+            return offset
+    return None if len(requested) == len(received) else shared
+
+
+def sha256_hex(data: bytes) -> str:
+    """Return the lower-case hexadecimal SHA-256 digest of `data`.
+
+    The single definition of a payload digest in the check layer, so two families cannot report the
+    same bytes under two spellings. ``hashlib`` rather than the builtin ``hash()``: a digest
+    recorded in evidence has to be stable across processes and machines, and ``hash()`` of a bytes
+    object is salted per process, which would make two evidence files differ for the same payload
+    (AAP §0.5.1).
+    """
+    return hashlib.sha256(data).hexdigest()
+
+
+def elapsed_ms(started: float) -> float:
+    """Return the milliseconds elapsed since `started`, a :func:`time.perf_counter` reading.
+
+    Measurement only. The value becomes a result's ``duration_ms``, which every report masks and
+    which no comparison in the check layer reads: AAP §0.5.5 admits a duration into an assertion
+    only in the ``PF-*`` thresholds and the run ceiling, and neither is measured here.
+
+    Clamped at ``0.0``. A monotonic ``perf_counter`` makes a negative delta unreachable, so the
+    clamp changes no reachable value; it keeps the stored field non-negative by construction.
+    """
+    return max((time.perf_counter() - started) * 1000.0, 0.0)
 
 
 def case_status_for_error(

@@ -7,8 +7,11 @@ one failing selection -- the same sorted evidence listing with byte-identical ``
 and ``decoded.json`` (§0.5.3 row 8, §0.5.4) -- observed through the damage module's public seam,
 never a second copy of a transform. A clean run writes no evidence, so the artefact half is
 observed by a probe whose ``[checks.damage]`` values are strictly harsher than the committed
-defaults, which can only add damage and so cannot mask a defect. Marker ``e2e``: the matrix needs
-both checks, so ``-m "not e2e"`` deselects it, and nothing here skips, retries or mocks.
+defaults, which can only add damage and so cannot mask a defect. The memo the two checks share is
+proven run-scoped as well: a ``DM-SEEDED`` invocation whose own run holds no ``DM-RESILIENCE``
+reports the documented ``missing_dependency`` skip for all 56 cases instead of comparing another
+run's artefacts (``docs/checks.md`` §3.3). Marker ``e2e``: the matrix needs both checks, so
+``-m "not e2e"`` deselects it, and nothing here marks a test skipped, retries it or mocks anything.
 """
 
 from __future__ import annotations
@@ -39,7 +42,7 @@ from qrcheck.evidence.naming import (
     damage_artifact_name,
 )
 from qrcheck.registry.selection import parse_selection
-from qrcheck.report.model import CaseResult, RunResult, Status
+from qrcheck.report.model import CaseResult, Reason, RunResult, Status
 from qrcheck.runner import run_suite
 from qrcheck.targets import ADAPTER_TYPES
 from qrcheck.targets.base import Adapter, Capability, GenerateRequest, GeneratedSymbol
@@ -177,16 +180,22 @@ class _CountingAdapter:
 
 @dataclass(frozen=True, slots=True)
 class _DamageRun:
-    """One ``DM-RESILIENCE`` run, its symbol memo, and the ``DM-SEEDED`` run over it."""
+    """One run of both damage checks: its symbol memo and each check's results split out.
+
+    One run rather than two, because ``DM-SEEDED`` compares against the symbols *its own* run's
+    ``DM-RESILIENCE`` holds: a second invocation in this process starts with an empty memo and
+    reports the documented ``missing_dependency`` skip instead (``docs/checks.md`` §3.3). ``calls``
+    is that run's whole adapter count, so it carries DM-RESILIENCE's encodes and nothing from
+    DM-SEEDED.
+    """
 
     config: Config
     seed: int
     cases: Mapping[str, tuple[str, str]]
     variants: Mapping[tuple[str, str], bytes]
-    resilience: RunResult
-    resilience_calls: int
-    seeded: RunResult
-    seeded_calls: int
+    resilience: tuple[CaseResult, ...]
+    seeded: tuple[CaseResult, ...]
+    calls: int
 
 
 def _reference_adapter(config: Config) -> Adapter:
@@ -218,7 +227,11 @@ def _probe_config(
 
 
 def _run_one_check(config: Config, selector: str, seed: int) -> tuple[RunResult, int]:
-    """Run one selected check over a counting wrapper; return ``(run_result, generate_calls)``."""
+    """Run the check(s) `selector` names over a counting wrapper.
+
+    Returns:
+        ``(run_result, generate_calls)``, the count covering every check the selector runs.
+    """
     adapter = _CountingAdapter(_reference_adapter(config))
     assert isinstance(adapter, Adapter), (
         "the counting wrapper is not an Adapter, so its call count says nothing about the "
@@ -243,9 +256,25 @@ def _case_index(result: RunResult) -> dict[str, tuple[str, str]]:
     return {case.case_id: _split_case(case.case_id) for case in result.results}
 
 
-def _by_case(result: RunResult) -> dict[str, CaseResult]:
-    """Return the run's results keyed by case identifier."""
-    return {case.case_id: case for case in result.results}
+def _by_case(results: Sequence[CaseResult]) -> dict[str, CaseResult]:
+    """Return the given results keyed by case identifier."""
+    return {case.case_id: case for case in results}
+
+
+def _of_check(results: Sequence[CaseResult], check_id: str) -> tuple[CaseResult, ...]:
+    """Return one check's cases out of a run's results, failing when the run holds none.
+
+    Raises:
+        AssertionError: the run reported no case for `check_id`, so the selection that produced it
+            never executed that check and nothing about it can be asserted.
+    """
+    selected = tuple(case for case in results if case.check_id == check_id)
+    if not selected:
+        raise AssertionError(
+            f"the run reported no {check_id} result, so the selection that produced it never "
+            f"executed that check"
+        )
+    return selected
 
 
 def _by_case_id(summary: Mapping[str, Any], check_id: str) -> dict[str, dict[str, Any]]:
@@ -288,21 +317,24 @@ def _damage_pair(
     seed: int,
     damage: Mapping[str, Any] | None = None,
 ) -> _DamageRun:
-    """Run ``DM-RESILIENCE`` then ``DM-SEEDED`` in this process and capture both."""
+    """Run ``DM-RESILIENCE`` and ``DM-SEEDED`` in one invocation and capture both.
+
+    One ``run_suite`` call, because the memo the two checks share belongs to the run: selecting
+    only ``DM-SEEDED`` afterwards would start empty and report the documented
+    ``missing_dependency`` skip instead of re-applying any damage.
+    """
     config = _probe_config(factory, write, label=label, seed=seed, damage=damage)
-    resilience, resilience_calls = _run_one_check(config, _RESILIENCE, config.seed)
-    cases = _case_index(resilience)
+    combined, calls = _run_one_check(config, f"{_RESILIENCE},{_SEEDED}", config.seed)
+    cases = _case_index(combined)
     variants = _capture_variants(cases)
-    seeded, seeded_calls = _run_one_check(config, _SEEDED, config.seed)
     return _DamageRun(
         config=config,
         seed=config.seed,
         cases=cases,
         variants=variants,
-        resilience=resilience,
-        resilience_calls=resilience_calls,
-        seeded=seeded,
-        seeded_calls=seeded_calls,
+        resilience=_of_check(combined.results, _RESILIENCE),
+        seeded=_of_check(combined.results, _SEEDED),
+        calls=calls,
     )
 
 
@@ -587,11 +619,16 @@ def test_dm_seeded_issues_zero_adapter_calls(damage_runs: _DamageRun) -> None:
         f"the damage family declares {declared} encodes for DM-SEEDED; this test asserts "
         f"zero, so the two disagree about the contract"
     )
-    assert damage_runs.seeded_calls == 0, (
-        f"DM-SEEDED called the target {damage_runs.seeded_calls} time(s); it must re-apply "
-        f"the recorded damage to the symbol it already holds and never encode again"
+    # Both checks run in one invocation, so the run's count is their sum: DM-RESILIENCE's declared
+    # encodes and DM-SEEDED's zero. A DM-SEEDED that asked the target for a symbol would show up
+    # here as a count past that budget, because it already holds every symbol the memo carries.
+    budget = damage_checks.EXPECTED_ENCODES[_RESILIENCE]
+    assert damage_runs.calls == budget, (
+        f"the run over both damage checks called the target {damage_runs.calls} time(s), while "
+        f"DM-RESILIENCE declares {budget} encodes and DM-SEEDED {declared}: the surplus is a "
+        f"DM-SEEDED that re-encoded a symbol it must already hold"
     )
-    results = damage_runs.seeded.results
+    results = damage_runs.seeded
     assert len(results) == _EXPECTED_CASES, (
         f"DM-SEEDED reported {len(results)} cases, expected {_EXPECTED_CASES}"
     )
@@ -616,12 +653,12 @@ def test_dm_resilience_encodes_one_symbol_per_record(damage_runs: _DamageRun) ->
         f"the damage family declares {declared} encodes for DM-RESILIENCE; the matrix "
         f"samples {_EXPECTED_RECORDS} records, so the two disagree"
     )
-    assert damage_runs.resilience_calls == _EXPECTED_RECORDS, (
-        f"DM-RESILIENCE called the target {damage_runs.resilience_calls} time(s) for "
-        f"{len(damage_runs.cases)} cases; one symbol per sampled record is "
-        f"{_EXPECTED_RECORDS}"
+    assert damage_runs.calls == _EXPECTED_RECORDS, (
+        f"the run over both damage checks called the target {damage_runs.calls} time(s) for "
+        f"{len(damage_runs.cases)} DM-RESILIENCE cases; one symbol per sampled record is "
+        f"{_EXPECTED_RECORDS}, and DM-SEEDED contributes none of them"
     )
-    results = damage_runs.resilience.results
+    results = damage_runs.resilience
     assert len(results) == _EXPECTED_CASES, (
         f"DM-RESILIENCE reported {len(results)} cases, expected {_EXPECTED_CASES}"
     )
@@ -650,6 +687,8 @@ def test_dm_resilience_encodes_one_symbol_per_record(damage_runs: _DamageRun) ->
 # Test 7 - the artefacts on disk carry the derived seed and the bytes. A clean run writes no
 # evidence, so this test makes its own with a bounded `run --checks DM-RESILIENCE` whose
 # [checks.damage] values are strictly harsher: it exists to produce files, not to judge a verdict.
+# It then selects both checks in one second invocation, so DM-SEEDED re-derives those files from
+# inside a run that encodes rather than from the earlier invocation's memo.
 
 
 def _read_summary(report_root: Path) -> dict[str, Any]:
@@ -813,7 +852,9 @@ def test_on_disk_damage_artefacts_match_their_names_and_re_derivation(
     )
 
     # -- DM-SEEDED's own re-application reproduces the file on disk -------------------
-    # A second run over the same memo re-applies each variant; its digest must equal the artefact.
+    # A second invocation selects both checks, so DM-SEEDED re-applies each variant inside the run
+    # that encodes it -- it reads only its own run's memo -- and the digest it regenerates must be
+    # the artefact the DM-RESILIENCE-only probe above wrote to disk.
     seeded_config = _probe_config(
         tmp_path_factory,
         write_config,
@@ -828,7 +869,7 @@ def test_on_disk_damage_artefacts_match_their_names_and_re_derivation(
         "--ec",
         _EC_LEVEL,
         "--checks",
-        _SEEDED,
+        f"{_RESILIENCE},{_SEEDED}",
         config=seeded_config.path,
         in_process=True,
     )
@@ -1067,3 +1108,41 @@ def test_evidence_listing_and_bodies_are_byte_identical_across_two_runs(
                 f"level {_EC_LEVEL}: {len(first_body)} vs {len(second_body)} bytes"
             )
 
+
+# The run-scoped memo: DM-SEEDED re-applies the symbols of the run it belongs to, so an invocation
+# whose own run held no DM-RESILIENCE has nothing to re-apply and reports the documented skip.
+
+
+def test_dm_seeded_without_its_own_run_reports_missing_dependency(damage_runs: _DamageRun) -> None:
+    """Catch a memo that outlives its run, letting ``DM-SEEDED`` compare another run's artefacts.
+
+    ``missing_dependency`` means the prerequisite is absent -- ``DM-RESILIENCE`` was not part of
+    this run, so no held symbol exists (``docs/checks.md`` §3.3). This invocation follows the
+    fixture's run in one process at the same target, seed and EC level, which is exactly the case a
+    memo keyed on those values rather than on the run's own evidence store would answer with the
+    earlier run's symbols: a false pass when the parameters coincide, a false failure when they do
+    not. It makes no adapter call either, because a symbol it never held is not its to encode.
+    """
+    seeded, calls = _run_one_check(damage_runs.config, _SEEDED, damage_runs.seed)
+    assert calls == 0, (
+        f"the DM-SEEDED-only run called the target {calls} time(s); with no symbol of its own to "
+        f"re-apply it must report the prerequisite absent rather than encode one"
+    )
+    results = _of_check(seeded.results, _SEEDED)
+    assert len(results) == _EXPECTED_CASES, (
+        f"the DM-SEEDED-only run reported {len(results)} cases, expected {_EXPECTED_CASES}"
+    )
+    passed = [result.case_id for result in results if result.status is Status.PASSED]
+    assert not passed, (
+        f"the DM-SEEDED-only run passed {len(passed)} of {len(results)} case(s) without a "
+        f"DM-RESILIENCE of its own, so it compared another run's artefacts: {passed[:5]}"
+    )
+    not_the_documented_skip = [
+        (result.case_id, result.status.value, result.reason)
+        for result in results
+        if (result.status, result.reason) != (Status.SKIPPED, Reason.MISSING_DEPENDENCY)
+    ]
+    assert not not_the_documented_skip, (
+        f"{len(not_the_documented_skip)} case(s) of the DM-SEEDED-only run are not the documented "
+        f"skipped/missing_dependency outcome: {not_the_documented_skip[:5]}"
+    )

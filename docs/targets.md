@@ -269,7 +269,7 @@ A path that resolves to nothing — a missing segment, a `null` value, or a valu
 | `metadata_mask` | report the symbol's mask in its metadata |
 | `metadata_mode` | report the symbol's encoding mode in its metadata |
 
-Which checks each member unlocks is the other half of the same contract: `RT-ROUNDTRIP` requires `png`; `SY-EC-MATCH` requires `png` and `ec_level`; `RN-QUIET-ZONE` requires `png` and `quiet_zone`; `SY-MATRIX-EQUIV` requires `png`, `ec_level`, `version_pin` and `mask_pin`; `RN-SVG` requires `svg`. `qrcheck list --json` prints the exact requirement set of every check on this installation, which is the authoritative answer for any of them.
+Which checks each member unlocks is the other half of the same contract: `RT-ROUNDTRIP` requires `png`; `SY-EC-MATCH` requires `png` and `ec_level`; `RN-QUIET-ZONE` requires `png` and `quiet_zone`; `SY-MATRIX-EQUIV` requires `png`, `ec_level`, `version_pin` and `mask_pin`; `RN-SVG` requires `svg` and `quiet_zone`. `qrcheck list --json` prints the exact requirement set of every check on this installation, which is the authoritative answer for any of them.
 
 **Under-declaring is a skip, not an error.** A selected check whose requirements your declared set does not cover reports `skipped` with reason `unsupported_capability`, counted separately in `summary.json` and never counted as a pass. A shortfall is not a configuration error because whether a set is sufficient depends on the run-time `--checks` selection: the same file would be wrong for one selection and correct for the next. Only an unknown **member** exits 2, because a name outside the thirteen is wrong whoever selects what.
 

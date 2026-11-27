@@ -34,6 +34,22 @@ the decoded payload instead of asserting it, since fidelity is ``RT-ROUNDTRIP``'
 MODULE-SIZE`` asserts a legal-module-count dimension contract needing no decoder; ``RN-LOGO`` sizes
 its overlay from the smallest legal symbol. The one temporary file written is the logo bitmap, named
 with the ``qrcheck-`` prefix ``CL-ARTIFACTS`` scans for and removed in a ``finally`` block.
+
+A vector artefact is a target's bytes and is bounded before the framework spends anything on it: a
+document longer than :data:`_MAX_SVG_BYTES`, or one that declares a document type definition or an
+entity, is refused rather than parsed, because the parser expands an internal entity as it reads
+(CWE-776). A declared canvas above :data:`_MAX_RASTER_SIDE_PX` per side is then priced from the one
+parse of the document and reported as ``value_mismatch``, because what an artefact says about itself
+is a verdict about the target; only a rasterizer or host fault stays an ``error`` result (AAP
+§0.3.4's exit codes).
+
+A raster artefact is bounded the same way before it is read: its header is probed first, and one
+declaring more than :data:`_MAX_ARTEFACT_SIDE_PX` per side is reported as ``sampling_failed``
+instead of being decoded. A PNG's declared canvas is read from its own IHDR, and a header the image
+library itself refuses for its size is reported the same way with no dimensions recorded, so no
+artefact a target returns turns a measuring case into an ``error`` result. Each measuring case
+opens its artefact once, through one :class:`_ArtefactMeasurements` record, so every arithmetic
+measurement that case takes reads the same decoded image.
 """
 
 from __future__ import annotations
@@ -55,8 +71,6 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
-import numpy
-
 from qrcheck.checks import support
 from qrcheck.config.models import (
     DEFAULT_DECODE_IMAGE_PX,
@@ -65,9 +79,6 @@ from qrcheck.config.models import (
     TargetConfig,
 )
 from qrcheck.config.seeding import derive_seed
-from qrcheck.decode.consensus import contrast_ratio, is_inverted_request
-from qrcheck.decode.matrix import module_count_for_version, version_from_dimension
-from qrcheck.evidence.mux import decode_image, encode_png
 from qrcheck.evidence.naming import LOGO_PNG
 from qrcheck.registry.check import (
     DEPENDENCY_PRIMARY_DECODER,
@@ -80,12 +91,16 @@ from qrcheck.report.model import CaseResult, Reason
 from qrcheck.targets.base import (
     Capability,
     GenerateRequest,
+    GeneratedSymbol,
     TargetContractError,
     TargetRejected,
     TargetUnsupported,
 )
 
-if TYPE_CHECKING:  # Annotation resolution only: no runtime edge into the corpus builder.
+if TYPE_CHECKING:  # Annotation resolution only: no runtime edge into the corpus builder,
+    # and no image library in this module's import graph.
+    import numpy
+
     from qrcheck.corpus.builder import CorpusRecord
 
 __all__ = [
@@ -144,6 +159,46 @@ RASTERIZER_TIMEOUT_S: Final[float] = 60.0
 # decode pipeline applies, from ``[checks.performance] decode_image_px`` (AAP §0.6.2).  A
 # target's SVG is untrusted and ``rsvg-convert`` allocates the canvas it is told to draw.
 _MAX_RASTER_SIDE_PX: Final[int] = 8 * DEFAULT_DECODE_IMAGE_PX
+
+# The largest raster artefact this module measures, per side, in pixels: the same per-side ceiling
+# :mod:`qrcheck.decode.consensus` applies, derived the same way from the one configuration default
+# (``[checks.performance] decode_image_px``, AAP §0.6.2) because that module owns the pixel
+# ceiling for the decode path.  A target's PNG is the same untrusted bytes whether it is decoded or
+# measured, so it is priced from the image header and refused before any pixel is allocated.  The
+# two values are equal by construction, and neither is written as a literal.
+_MAX_ARTEFACT_SIDE_PX: Final[int] = 8 * DEFAULT_DECODE_IMAGE_PX
+
+# The largest byte length of a target-supplied SVG this module will parse.  A target artefact is
+# untrusted twice over: a rasterizer allocates the canvas it is told to draw, and the XML parser
+# expands every internal entity as it reads, so a few hundred bytes can become megabytes of text
+# before any geometry guard runs (CWE-776).  The length is therefore bounded before the parse.  A
+# conforming vector canvas of at most ``_MAX_RASTER_SIDE_PX`` per side is a few kilobytes of path
+# data whatever its scale, because the path is drawn with a transform, so this ceiling is generous.
+_MAX_SVG_BYTES: Final[int] = 4 * 1024 * 1024
+
+# The two XML declarations a target's SVG may not carry: an internal entity is expanded while the
+# document is read, and a document type definition is what gives it something to expand.  Each is
+# matched before the parse, in every spelling a document the XML parser accepts can carry it in --
+# the single-byte form ASCII, Latin-1 and UTF-8 share, and UTF-16 in both byte orders -- because a
+# scan of the raw bytes that knew only the single-byte spelling would let a UTF-16 document through
+# to the parser with its declaration intact.
+_REFUSED_XML_DECLARATIONS: Final[tuple[str, ...]] = ("<!DOCTYPE", "<!ENTITY")
+
+
+def _declaration_spellings(name: str) -> tuple[bytes, ...]:
+    """Return the lower-cased byte spellings of one refused XML declaration.
+
+    One spelling per encoding the parser can decode: the single-byte one (ASCII, Latin-1 and UTF-8
+    agree on these characters) and UTF-16 in each byte order. ``bytes.lower()`` folds the ASCII
+    letters inside a UTF-16 stream as well, so one lower-cased scan sees all three.
+    """
+    folded = name.lower()
+    return (folded.encode("ascii"), folded.encode("utf-16-le"), folded.encode("utf-16-be"))
+
+
+_REFUSED_XML_DECLARATION_SPELLINGS: Final[tuple[tuple[str, tuple[bytes, ...]], ...]] = tuple(
+    (name, _declaration_spellings(name)) for name in _REFUSED_XML_DECLARATIONS
+)
 
 # CSS pixels per SVG length unit at the 96 dpi every rasterizer defaults to; a unit outside this
 # table (a percentage, say) has no absolute extent, so no ceiling applies.
@@ -420,7 +475,11 @@ def _rasterizer_command(name: str) -> tuple[str, ...]:
     )
 
 
-def rasterize_svg(svg_bytes: bytes, status: RasterizerStatus) -> bytes:
+def rasterize_svg(
+    svg_bytes: bytes,
+    status: RasterizerStatus,
+    canvas: tuple[float, float, str] | None = None,
+) -> bytes:
     """Rasterize an SVG artefact to PNG bytes with the discovered rasterizer.
 
     The product's only rasterization: ``cairosvg`` is driven through its module when discovery found
@@ -428,12 +487,21 @@ def rasterize_svg(svg_bytes: bytes, status: RasterizerStatus) -> bytes:
     the PNG to stdout, with :data:`RASTERIZER_TIMEOUT_S` as the backstop. Nothing is written to
     disk.
 
+    ``canvas`` is the ``(width, height, unit)`` the caller already parsed from `svg_bytes` with
+    :func:`_svg_canvas`; passing it keeps this function's declared-canvas guard from parsing the
+    document a second time, and ``None`` parses it here for the guard alone, so a caller that hands
+    an artefact straight in is still protected.
+
     Raises:
         RuntimeError: No rasterizer is available, the configured one emitted nothing, exited non-
-        zero, timed out or could not be executed; the message names the command, its exit status and
-        its stderr, and the runner records an ``error`` result rather than a verdict about the
-        target. ValueError: ``svg_bytes`` is not bytes-like, or `status` names a rasterizer this
-        module cannot drive.
+            zero, timed out or could not be executed; the message names the command, its exit status
+            and its stderr, and the runner records an ``error`` result rather than a verdict about
+            the target. A declared canvas above :data:`_MAX_RASTER_SIDE_PX` is the one RuntimeError
+            a target's own artefact can provoke, and it is defence in depth: a check prices the
+            canvas it parsed before calling here and reports that case as ``value_mismatch``, so
+            this raise reaches only a caller that skipped the pricing and it is then a framework
+            fault. ValueError: ``svg_bytes`` is not bytes-like, or `status` names a rasterizer this
+            module cannot drive.
     """
     if not isinstance(svg_bytes, (bytes, bytearray, memoryview)):
         raise ValueError(f"svg_bytes must be bytes; got {type(svg_bytes).__name__}")
@@ -443,10 +511,12 @@ def rasterize_svg(svg_bytes: bytes, status: RasterizerStatus) -> bytes:
             f"{status.configured!r}; discovery attempted {list(status.attempted)}"
         )
     payload = bytes(svg_bytes)
-    oversized = _oversized_canvas(payload)
-    if oversized is not None:
+    declared_side_px = (
+        _declared_canvas_side_px(payload) if canvas is None else _canvas_side_px(*canvas)
+    )
+    if declared_side_px is not None and declared_side_px > _MAX_RASTER_SIDE_PX:
         raise RuntimeError(
-            f"the SVG declares a canvas of {oversized:g} px per side, above the "
+            f"the SVG declares a canvas of {declared_side_px:g} px per side, above the "
             f"{_MAX_RASTER_SIDE_PX} px per-side ceiling this framework rasterizes: a "
             f"target's vector artefact is untrusted and the rasterizer allocates it"
         )
@@ -519,47 +589,237 @@ def _rasterize_with_cairosvg(svg_bytes: bytes) -> bytes:
 # Pixels, through the one image boundary
 
 
-def _grey_levels(image_bytes: bytes) -> numpy.ndarray:
-    """Return the artefact as an ``H x W`` ``uint8`` grey array.
+class _ArtefactTooLarge(ValueError):
+    """A target artefact whose declared canvas this framework will not measure.
 
-    The reduction is Pillow's own ``convert("L")`` -- the ITU-R BT.601 weighting the decoder path
-    also reads -- so this module states no luminance formula. A fully transparent pixel becomes the
-    light level, because a transparent background shows the page rather than the colour its bands
-    store; a half-transparent edge pixel is a real blend and is left as measured.
+    A named member of the :exc:`ValueError` family rather than a bare exception, so a measuring case
+    catches exactly this refusal and every other fault still escapes: the artefact is a target's own
+    bytes, and refusing to measure it is a verdict about that target rather than a framework defect.
+    ``width`` and ``height`` are the canvas the header declares, which is what the case records as
+    its evidence, or ``None`` for both when the declaration is one the image library refuses to open
+    for its size -- the dimensions of such a canvas are never read out, so none is invented for it.
+    """
+
+    def __init__(self, width: int | None, height: int | None) -> None:
+        """Hold the refused canvas' declared dimensions, in pixels, when they could be read."""
+        self.width = width
+        self.height = height
+        if width is None or height is None:
+            declared = "declares a canvas the image library itself refuses to open for its size"
+        else:
+            declared = (
+                f"declares {width}x{height} pixels, above the {_MAX_ARTEFACT_SIDE_PX} px per-side "
+                f"ceiling this framework measures"
+            )
+        super().__init__(
+            f"the artefact {declared}: a target artefact is untrusted and every measurement of it "
+            f"would allocate the canvas"
+        )
+
+    @property
+    def declared_px(self) -> tuple[int, int] | None:
+        """Return the ``(width, height)`` the header declared, or ``None`` when it declared none."""
+        if self.width is None or self.height is None:
+            return None
+        return self.width, self.height
+
+    @property
+    def longer_side_px(self) -> int | None:
+        """Return the artefact's longer declared side in pixels, or ``None`` when it has none."""
+        declared = self.declared_px
+        return None if declared is None else max(declared)
+
+
+def _transparent_as_page(image: Any, pixels: numpy.ndarray) -> numpy.ndarray:
+    """Return `pixels` with every fully transparent pixel set to the page's light level.
+
+    A transparent background shows the page rather than the colour its bands store, so it measures
+    as white; a half-transparent edge pixel is a real blend and is left as measured. One rule, and
+    the same one for the grey and the RGB reduction.
+    """
+    # Deferred: importing this module starts no image stack in a process that only lists checks.
+    import numpy
+
+    if "A" in image.getbands():
+        alpha = numpy.array(image.getchannel("A"), dtype=numpy.uint8, copy=True)
+        pixels[alpha == 0] = 255
+    return pixels
+
+
+class _ArtefactMeasurements:
+    """One target artefact, opened once, with every measurement derived at most once.
+
+    Every ``RN-*`` assertion is arithmetic over the same produced image -- its pixel size, the grey
+    levels the module geometry is measured in, the RGB pixels the palette is read from, the module
+    pitch, the quiet zone at that pitch, the darkest and lightest colours and the distinct-colour
+    count -- so all of them are derived here from the one image :func:`_measure_artefact` opened,
+    rather than from a fresh open and conversion per measurement. Each value is computed on first
+    use and kept, so a case that asks twice pays once, and a record is usable only inside the
+    ``with`` block that created it: its image is closed when that block ends.
+
+    The reductions are Pillow's own ``convert("L")`` and ``convert("RGB")`` -- the ITU-R BT.601
+    weighting the decoder path also reads -- so this module states no luminance formula, and
+    transparency is read as the page on both (see :func:`_transparent_as_page`).
+
+    ``image`` is the loaded image :func:`qrcheck.evidence.mux.decode_image` returns. Its type is
+    left to Pillow because this module never imports it: :mod:`qrcheck.evidence.mux` is the
+    product's only Pillow importer (AAP §0.8.1), and every pixel here crosses that boundary once,
+    when the record is opened.
+    """
+
+    __slots__ = ("_image", "_derived")
+
+    def __init__(self, image: Any) -> None:
+        """Hold `image` for measurement; nothing is computed until a measurement asks for it."""
+        self._image = image
+        # A derived value is kept under its own key, and ``None`` is a real answer here -- an
+        # artefact with no measurable geometry has no pitch -- so presence in the mapping, never
+        # truth, decides whether a value has already been computed.
+        self._derived: dict[object, Any] = {}
+
+    @property
+    def size(self) -> tuple[int, int]:
+        """Return the artefact's ``(width, height)`` in pixels."""
+        if "size" not in self._derived:
+            width, height = self._image.size
+            self._derived["size"] = (int(width), int(height))
+        return self._derived["size"]
+
+    @property
+    def grey(self) -> numpy.ndarray:
+        """Return the artefact as an ``H x W`` ``uint8`` grey array."""
+        # Deferred: importing this module starts no image stack in a process that only lists checks.
+        import numpy
+
+        if "grey" not in self._derived:
+            levels = numpy.array(self._image.convert("L"), dtype=numpy.uint8, copy=True)
+            self._derived["grey"] = _transparent_as_page(self._image, levels)
+        return self._derived["grey"]
+
+    @property
+    def rgb(self) -> numpy.ndarray:
+        """Return the artefact as an ``H x W x 3`` ``uint8`` RGB array."""
+        # Deferred: importing this module starts no image stack in a process that only lists checks.
+        import numpy
+
+        if "rgb" not in self._derived:
+            pixels = numpy.array(self._image.convert("RGB"), dtype=numpy.uint8, copy=True)
+            self._derived["rgb"] = _transparent_as_page(self._image, pixels)
+        return self._derived["rgb"]
+
+    @property
+    def dark(self) -> numpy.ndarray | None:
+        """Return the dark-module mask of the grey array, or ``None`` when there is none."""
+        if "dark" not in self._derived:
+            self._derived["dark"] = _dark_mask(self.grey)
+        return self._derived["dark"]
+
+    @property
+    def module_px(self) -> float | None:
+        """Return the module edge in pixels, or ``None`` when the geometry cannot be established."""
+        if "module_px" not in self._derived:
+            dark = self.dark
+            self._derived["module_px"] = None if dark is None else _module_pitch(dark)
+        return self._derived["module_px"]
+
+    def quiet_zone(self, module_px: float) -> dict[str, float]:
+        """Return the rendered quiet zone on all four sides, in modules, at `module_px`.
+
+        Raises:
+            ValueError: `module_px` is not positive, the artefact has no dark/light separation, or
+                it holds no dark pixel at all.
+        """
+        key = ("quiet_zone", module_px)
+        if key not in self._derived:
+            dark = self.dark
+            if dark is None:
+                raise ValueError(
+                    "the artefact has no dark/light separation to measure a quiet zone in"
+                )
+            self._derived[key] = _quiet_zone_from(dark, module_px)
+        return dict(self._derived[key])
+
+    @property
+    def colours(self) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
+        """Return the artefact's darkest and lightest rendered colours.
+
+        Every pixel sharing the minimum channel sum is averaged for the dark reading and every pixel
+        sharing the maximum for the light one, so a single antialiased outlier cannot move either
+        value. The channel sum only orders the pixels -- it is a clustering key, never a luminance,
+        and the ratio itself is :func:`qrcheck.decode.consensus.contrast_ratio`'s -- and both
+        readings are equal when the image is one flat colour.
+        """
+        # Deferred: importing this module starts no image stack in a process that only lists checks.
+        import numpy
+
+        if "colours" not in self._derived:
+            pixels = self.rgb.reshape(-1, 3).astype(numpy.int32)
+            key = pixels.sum(axis=1)
+            self._derived["colours"] = (
+                _mean_colour(pixels[key == key.min()]),
+                _mean_colour(pixels[key == key.max()]),
+            )
+        return self._derived["colours"]
+
+    @property
+    def distinct_colours(self) -> int:
+        """Return how many distinct colours the artefact holds.
+
+        A two-colour symbol renders exactly its foreground and background; one carrying a composited
+        overlay carries the overlay's colours as well. That difference is how ``RN-LOGO`` observes
+        that the ``logo_overlay`` capability has behaviour behind it.
+        """
+        # Deferred: importing this module starts no image stack in a process that only lists checks.
+        import numpy
+
+        if "distinct_colours" not in self._derived:
+            self._derived["distinct_colours"] = int(
+                numpy.unique(self.rgb.reshape(-1, 3), axis=0).shape[0]
+            )
+        return self._derived["distinct_colours"]
+
+
+@contextlib.contextmanager
+def _measure_artefact(image_bytes: bytes) -> Iterator[_ArtefactMeasurements]:
+    """Open one target artefact for measurement and close it when the block ends.
+
+    The header is probed first, so an artefact that declares more than :data:`_MAX_ARTEFACT_SIDE_PX`
+    per side is refused before a pixel is allocated -- the ceiling :mod:`qrcheck.decode.consensus`
+    applies to the same untrusted bytes on the decode path. The image itself is then opened exactly
+    once, through :func:`qrcheck.evidence.mux.decode_image` -- the product's one image boundary --
+    and closed in a ``finally`` block, so every measurement a case takes reads one decoded image and
+    no handle outlives the case. A caller that needs a single measurement reaches
+    :func:`measure_module_px` or :func:`measure_quiet_zone`, which open a record of their own.
 
     Raises:
+        _ArtefactTooLarge: The header declares a canvas above the per-side ceiling, or declares one
+            the image library refuses to open for its size. Either is a fact about the target's own
+            output, which every measuring case reports as ``sampling_failed``.
         UnidentifiedImageError: Pillow cannot recognise the bytes; the adapters convert that into
             ``TargetContractError`` first, so a raise here means a framework artefact.
+        OSError: The header is truncated or otherwise broken.
     """
+    # Deferred: importing this module starts no image stack in a process that only lists checks.
+    from qrcheck.evidence.mux import DeclaredCanvasTooLarge
+    from qrcheck.evidence.mux import decode_image
+    from qrcheck.evidence.mux import probe_image_size
+
+    try:
+        width, height = probe_image_size(image_bytes)
+    except DeclaredCanvasTooLarge as error:
+        # A PNG is priced from its own IHDR, above, without the library being consulted; any other
+        # format is priced by the library's header probe, and a canvas the library refuses for its
+        # size is the same fact about the same untrusted bytes, so it is refused the same way
+        # instead of escaping the check as a framework fault.  The refused dimensions were never
+        # read out, so the refusal carries none rather than an invented pair.
+        raise _ArtefactTooLarge(None, None) from error
+    if max(width, height) > _MAX_ARTEFACT_SIDE_PX:
+        raise _ArtefactTooLarge(width, height)
     image = decode_image(image_bytes)
     try:
-        levels = numpy.array(image.convert("L"), dtype=numpy.uint8, copy=True)
-        if "A" in image.getbands():
-            alpha = numpy.array(image.getchannel("A"), dtype=numpy.uint8, copy=True)
-            levels[alpha == 0] = 255
+        yield _ArtefactMeasurements(image)
     finally:
         image.close()
-    return levels
-
-
-def _rgb_pixels(image_bytes: bytes) -> numpy.ndarray:
-    """Return the artefact as an ``H x W x 3`` ``uint8`` array, transparency read as the page.
-
-    The colour counterpart of :func:`_grey_levels`, with the same transparency rule: the array the
-    palette and overlay-visibility measurements read.
-
-    Raises:
-        UnidentifiedImageError: Pillow cannot recognise the bytes.
-    """
-    image = decode_image(image_bytes)
-    try:
-        pixels = numpy.array(image.convert("RGB"), dtype=numpy.uint8, copy=True)
-        if "A" in image.getbands():
-            alpha = numpy.array(image.getchannel("A"), dtype=numpy.uint8, copy=True)
-            pixels[alpha == 0] = 255
-    finally:
-        image.close()
-    return pixels
 
 
 def _dark_mask(levels: numpy.ndarray) -> numpy.ndarray | None:
@@ -648,6 +908,9 @@ def _module_pitch(dark: numpy.ndarray) -> float | None:
     finder's middle row and column, and the returned pitch is measured across those, where the full
     1:1:3:1:1 signature is confirmed by :func:`_finder_pitch`; both axes are averaged.
     """
+    # Deferred: importing this module starts no image stack in a process that only lists checks.
+    import numpy
+
     rows = numpy.flatnonzero(dark.any(axis=1))
     columns = numpy.flatnonzero(dark.any(axis=0))
     if rows.size == 0 or columns.size == 0:
@@ -688,6 +951,9 @@ def _quiet_zone_from(dark: numpy.ndarray, module_px: float) -> dict[str, float]:
     Raises:
         ValueError: `module_px` is not positive, or the artefact holds no dark pixel at all.
     """
+    # Deferred: importing this module starts no image stack in a process that only lists checks.
+    import numpy
+
     if not module_px > 0:
         raise ValueError(f"module_px must be positive; got {module_px!r}")
     rows = numpy.flatnonzero(dark.any(axis=1))
@@ -706,44 +972,37 @@ def _quiet_zone_from(dark: numpy.ndarray, module_px: float) -> dict[str, float]:
 def measure_module_px(image_bytes: bytes) -> float | None:
     """Return the artefact's module edge in pixels, or ``None`` if it cannot be measured.
 
-    The public form of :func:`_module_pitch`, so a caller that only needs the pitch reaches no
-    private helper. ``None`` is the honest answer when the geometry cannot be established, and the
-    checks report ``sampling_failed`` for it rather than a verdict built on a guess.
+    The public form of one :class:`_ArtefactMeasurements` record: the artefact is opened once for
+    this call and closed before it returns. ``None`` is the honest answer when the geometry cannot
+    be established, and the checks report ``sampling_failed`` for it rather than a verdict built on
+    a guess.
+
+    Raises:
+        _ArtefactTooLarge: The header declares a canvas this framework refuses to measure, either
+            above :data:`_MAX_ARTEFACT_SIDE_PX` per side or one the image library refuses to open
+            for its size, so the artefact is not measured at all.
+        UnidentifiedImageError: Pillow cannot recognise the bytes.
     """
-    dark = _dark_mask(_grey_levels(image_bytes))
-    return None if dark is None else _module_pitch(dark)
+    with _measure_artefact(image_bytes) as artefact:
+        return artefact.module_px
 
 
 def measure_quiet_zone(image_bytes: bytes, module_px: float) -> dict[str, float]:
     """Return the artefact's rendered quiet zone on all four sides, in modules.
 
-    The public form of :func:`_quiet_zone_from` for one measurement.
+    The public form of one :class:`_ArtefactMeasurements` record for one measurement: the artefact
+    is opened once for this call and closed before it returns.
 
     Raises:
         ValueError: `module_px` is not positive, the artefact has no measurable geometry, or it
             holds no dark pixel at all.
+        _ArtefactTooLarge: The header declares a canvas this framework refuses to measure, either
+            above :data:`_MAX_ARTEFACT_SIDE_PX` per side or one the image library refuses to open
+            for its size, so the artefact is not measured at all.
+        UnidentifiedImageError: Pillow cannot recognise the bytes.
     """
-    dark = _dark_mask(_grey_levels(image_bytes))
-    if dark is None:
-        raise ValueError("the artefact has no dark/light separation to measure a quiet zone in")
-    return _quiet_zone_from(dark, module_px)
-
-
-def _measure_colours(image_bytes: bytes) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
-    """Return the artefact's darkest and lightest rendered colours.
-
-    Every pixel sharing the minimum channel sum is averaged for the dark reading and every pixel
-    sharing the maximum for the light one, so a single antialiased outlier cannot move either value.
-    The channel sum only orders the pixels -- it is a clustering key, never a luminance, and the
-    ratio itself is :func:`qrcheck.decode.consensus.contrast_ratio`'s -- and both readings are equal
-    when the image is one flat colour.
-    """
-    pixels = _rgb_pixels(image_bytes).reshape(-1, 3).astype(numpy.int32)
-    key = pixels.sum(axis=1)
-    return (
-        _mean_colour(pixels[key == key.min()]),
-        _mean_colour(pixels[key == key.max()]),
-    )
+    with _measure_artefact(image_bytes) as artefact:
+        return artefact.quiet_zone(module_px)
 
 
 def _mean_colour(group: numpy.ndarray) -> tuple[int, int, int]:
@@ -754,27 +1013,6 @@ def _mean_colour(group: numpy.ndarray) -> tuple[int, int, int]:
         int(round(float(means[1]))),
         int(round(float(means[2]))),
     )
-
-
-def _distinct_colours(image_bytes: bytes) -> int:
-    """Return how many distinct colours the artefact holds.
-
-    A two-colour symbol renders exactly its foreground and background; one carrying a composited
-    overlay carries the overlay's colours as well. That difference is how ``RN-LOGO`` observes that
-    the ``logo_overlay`` capability has behaviour behind it.
-    """
-    pixels = _rgb_pixels(image_bytes).reshape(-1, 3)
-    return int(numpy.unique(pixels, axis=0).shape[0])
-
-
-def _image_size(image_bytes: bytes) -> tuple[int, int]:
-    """Return the artefact's ``(width, height)`` in pixels."""
-    image = decode_image(image_bytes)
-    try:
-        width, height = image.size
-    finally:
-        image.close()
-    return int(width), int(height)
 
 
 # The vector canvas
@@ -804,6 +1042,27 @@ def _svg_length(value: str | None, field_name: str) -> tuple[float, str]:
     return float(match.group(1)), match.group(2)
 
 
+def _refused_declaration(svg_bytes: bytes) -> str | None:
+    """Return the XML declaration in `svg_bytes` this module refuses, or ``None`` for a clean one.
+
+    The scan is case-insensitive, encoding-aware and runs before the parse, because an internal
+    entity is expanded while the document is read: the point of the refusal is to spend neither the
+    memory nor the time on the expansion, so a check after the parse would be too late. Every
+    encoding the parser can decode is covered by :data:`_REFUSED_XML_DECLARATION_SPELLINGS`, so a
+    document cannot carry its declaration past this scan by choosing UTF-16 over the single-byte
+    form. A declaration spelled inside a comment or a CDATA section is refused as well -- a
+    conforming encoder emits neither declaration at all, so the conservative reading costs no
+    legitimate artefact.
+    """
+    lowered = svg_bytes.lower()
+    found = sorted(
+        name
+        for name, spellings in _REFUSED_XML_DECLARATION_SPELLINGS
+        if any(spelling in lowered for spelling in spellings)
+    )
+    return found[0] if found else None
+
+
 def _svg_canvas(svg_bytes: bytes) -> tuple[float, float, str]:
     """Return the vector canvas as ``(width, height, unit)``.
 
@@ -812,11 +1071,31 @@ def _svg_canvas(svg_bytes: bytes) -> tuple[float, float, str]:
     Nothing else about the document is inspected: element names, attribute sets and byte layout are
     encoder-defined and AAP §0.3.5 forbids asserting them.
 
+    The artefact is untrusted, so it is bounded before it is parsed: a document longer than
+    :data:`_MAX_SVG_BYTES`, or one that declares a ``<!DOCTYPE`` or an ``<!ENTITY``, is refused
+    rather than read -- an internal entity is expanded as the document is read, before any geometry
+    a caller could check (CWE-776).
+
     Raises:
         ElementTree.ParseError: The bytes are not well-formed XML. ValueError: The canvas cannot be
-        read, is not square, or its sides disagree about their unit.
+            read, is not square, or its sides disagree about their unit; the artefact is longer than
+            :data:`_MAX_SVG_BYTES`; or it carries a :data:`_REFUSED_XML_DECLARATIONS` declaration.
     """
-    root = ElementTree.fromstring(svg_bytes)
+    payload = bytes(svg_bytes)
+    if len(payload) > _MAX_SVG_BYTES:
+        raise ValueError(
+            f"the SVG artefact is {len(payload)} bytes, above the {_MAX_SVG_BYTES}-byte ceiling "
+            f"this framework parses: a target's vector artefact is untrusted and is bounded before "
+            f"it is read"
+        )
+    declaration = _refused_declaration(payload)
+    if declaration is not None:
+        raise ValueError(
+            f"the SVG artefact declares {declaration}, which this framework refuses to parse: an "
+            f"internal entity is expanded while the document is read, before any canvas guard "
+            f"applies, so a target's vector artefact may not carry one"
+        )
+    root = ElementTree.fromstring(payload)
     view_box = root.get("viewBox")
     if view_box:
         parts = [part for part in _SVG_SEPARATORS.split(view_box.strip()) if part]
@@ -843,23 +1122,35 @@ def _svg_canvas(svg_bytes: bytes) -> tuple[float, float, str]:
     return width, height, unit
 
 
-def _oversized_canvas(svg_bytes: bytes) -> float | None:
-    """Return the declared canvas side in pixels when it exceeds the raster ceiling.
+def _canvas_side_px(width: float, height: float, unit: str) -> float | None:
+    """Return the canvas' longer side in pixels, or ``None`` when its unit has no absolute extent.
 
     A vector artefact is untrusted input and a rasterizer allocates the canvas it is told to draw,
-    so the declared side is priced in pixels before any rasterizer runs. A document whose canvas
-    cannot be read, or whose unit has no absolute extent, is left to the rasterizer: this is a
-    resource guard, not a geometry assertion.
+    so the declared side is priced in pixels before any rasterizer runs. This is the pure arithmetic
+    half of that guard: a caller that has already parsed the document hands the canvas in, so one
+    case never parses its artefact twice. A unit outside :data:`_UNIT_TO_PX` (a percentage, say) has
+    no absolute extent and is left to the rasterizer -- this is a resource guard, not a geometry
+    assertion.
+    """
+    factor = _UNIT_TO_PX.get(unit)
+    if factor is None:
+        return None
+    return max(width, height) * factor
+
+
+def _declared_canvas_side_px(svg_bytes: bytes) -> float | None:
+    """Return the canvas side `svg_bytes` declares, in pixels, or ``None`` when it declares none.
+
+    The parsing form of :func:`_canvas_side_px`, for a caller that has not read the document yet --
+    :func:`rasterize_svg`'s own guard. A document whose canvas cannot be read is left to the
+    rasterizer: it is a geometry question the rasterizer answers, while the ceiling here is a
+    resource question this module answers first.
     """
     try:
         width, height, unit = _svg_canvas(svg_bytes)
     except (ElementTree.ParseError, ValueError):
         return None
-    factor = _UNIT_TO_PX.get(unit)
-    if factor is None:
-        return None
-    side = max(width, height) * factor
-    return side if side > _MAX_RASTER_SIDE_PX else None
+    return _canvas_side_px(width, height, unit)
 
 
 # The one temporary artefact: the logo overlay bitmap
@@ -884,6 +1175,9 @@ def _logo_side_px(fraction: float) -> int:
     the covered fraction is measured from the produced image. Sizing from an estimate instead could
     push a case past the error-correction budget and fail a conforming target.
     """
+    # Deferred: importing this module starts no image stack in a process that only lists checks.
+    from qrcheck.decode.matrix import module_count_for_version
+
     smallest_symbol_px = (
         module_count_for_version(1) + 2 * _PINNED_QUIET_ZONE_MODULES
     ) * _LOGO_MODULE_SIZE_PX
@@ -902,6 +1196,11 @@ def _logo_bitmap(seed: int, side_px: int) -> bytes:
     Raises:
         ValueError: `side_px` is not positive, or the encoded bitmap is empty.
     """
+    # Deferred: importing this module starts no image stack in a process that only lists checks.
+    from qrcheck.evidence.mux import decode_image
+    from qrcheck.evidence.mux import encode_png
+    import numpy
+
     if side_px < 1:
         raise ValueError(f"side_px must be at least 1; got {side_px}")
     generator = numpy.random.Generator(numpy.random.PCG64(seed))
@@ -991,6 +1290,61 @@ def _translate(
     )
 
 
+def _unmeasurable(
+    ctx: RunContext,
+    check_id: str,
+    case_id: str,
+    request: Mapping[str, object],
+    expected: Mapping[str, object],
+    symbol: GeneratedSymbol,
+    error: _ArtefactTooLarge,
+    started: float,
+    request_extra: Mapping[str, object],
+    seed: int | None = None,
+    *,
+    logo: bytes | None = None,
+) -> CaseResult:
+    """Return the documented "this artefact cannot be measured" outcome for one case.
+
+    A target artefact whose header declares a canvas this framework refuses to measure -- one above
+    :data:`_MAX_ARTEFACT_SIDE_PX` per side, or one the image library itself refuses to open for its
+    size -- is a fact about the target's own output, not a framework fault, so it is reported the
+    way the ``module_px is None`` branch already reports an unmeasurable artefact:
+    ``sampling_failed``, with the declared side and the ceiling in ``decoded`` and the symbol
+    persisted as evidence. The mismatched measurement is neither asserted nor called a
+    ``value_mismatch``, because no pixel was read to contradict the request. A refusal the image
+    library made never reads the dimensions out, so ``artefact_px`` and ``artefact_side_px`` are
+    then recorded as ``null`` rather than guessed at. `logo` is the overlay bitmap ``RN-LOGO``
+    composited, which that check persists as ``logo.png`` for every case it records, so a case it
+    could not measure keeps the artefact set the evidence layout documents.
+
+    Raises:
+        TypeError: A mapping holds a value the result model rejects.
+        ValueError: An identifier, a duration or a seed is outside its documented range.
+    """
+    declared = error.declared_px
+    decoded: dict[str, object] = {
+        "assertion": "artefact_measurable",
+        "reason": "artefact_canvas_above_measurement_ceiling",
+        "artefact_px": None if declared is None else list(declared),
+        "artefact_side_px": error.longer_side_px,
+        "artefact_side_ceiling_px": _MAX_ARTEFACT_SIDE_PX,
+    }
+    result = support.fail(
+        check_id,
+        case_id,
+        reason=Reason.SAMPLING_FAILED,
+        request=request,
+        decoded=decoded,
+        expected=expected,
+        duration_ms=_elapsed_ms(started),
+        seed=seed,
+    )
+    return support.record_evidence(
+        ctx, result, symbol=symbol, logo=logo, request_extra=request_extra
+    )
+
+
 # RN-QUIET-ZONE
 
 
@@ -1046,10 +1400,12 @@ def _run_quiet_zone(
     ``missing_quiet_zone`` defect.
     """
     started = time.perf_counter()
+    # The module size is deliberately left unset, so the request asks for the one thing this
+    # check is about: the pitch it measures is whatever the target chose, and pinning an edge
+    # would make the request need a capability this check does not declare.
     request = support.build(
         record.payload_bytes,
         ctx.ec_level,
-        module_size_px=_MODULE_SIZE_CHOICES[0],
         quiet_zone_modules=requested,
     )
     expected: dict[str, object] = {
@@ -1062,8 +1418,24 @@ def _run_quiet_zone(
     except (TargetRejected, TargetContractError, TargetUnsupported) as error:
         return _translate(RN_QUIET_ZONE, case_id, error, request, started)
 
-    module_px = measure_module_px(symbol.image_bytes)
-    if module_px is None:
+    try:
+        with _measure_artefact(symbol.image_bytes) as artefact:
+            module_px = artefact.module_px
+            measured = None if module_px is None else artefact.quiet_zone(module_px)
+            width, height = artefact.size
+    except _ArtefactTooLarge as error:
+        return _unmeasurable(
+            ctx,
+            RN_QUIET_ZONE,
+            case_id,
+            request.as_dict(),
+            expected,
+            symbol,
+            error,
+            started,
+            {"quiet_zone_modules": requested},
+        )
+    if module_px is None or measured is None:
         result = support.fail(
             RN_QUIET_ZONE,
             case_id,
@@ -1080,8 +1452,6 @@ def _run_quiet_zone(
             ctx, result, symbol=symbol, request_extra={"quiet_zone_modules": requested}
         )
 
-    measured = measure_quiet_zone(symbol.image_bytes, module_px)
-    width, height = _image_size(symbol.image_bytes)
     short = sorted(
         side
         for side, value in measured.items()
@@ -1133,7 +1503,11 @@ def _run_quiet_zone(
     id=RN_MODULE_SIZE,
     title="Module size: the rendered module edge matches the requested pixel size",
     family=_FAMILY,
-    requires=frozenset({Capability.png, Capability.module_size}),
+    # The request pins the quiet zone as well as the edge: AAP §0.4.2 states the dimension
+    # contract in the request's own quiet zone, so honouring the pin needs the capability and
+    # this declaration must say so, or a target declaring only ``module_size`` is resolved as
+    # runnable and then skips every case at the pre-I/O gate.
+    requires=frozenset({Capability.png, Capability.module_size, Capability.quiet_zone}),
     dependencies=(DEPENDENCY_PRIMARY_DECODER,),
     corpus_driven=True,
 )
@@ -1184,6 +1558,9 @@ def _run_module_size(
     that cannot be decoded. Emits ``sampling_failed`` when the geometry cannot be established and
     ``value_mismatch`` when either assertion fails.
     """
+    # Deferred: importing this module starts no image stack in a process that only lists checks.
+    from qrcheck.decode.matrix import version_from_dimension
+
     started = time.perf_counter()
     request = support.build(
         record.payload_bytes,
@@ -1203,7 +1580,22 @@ def _run_module_size(
     except (TargetRejected, TargetContractError, TargetUnsupported) as error:
         return _translate(RN_MODULE_SIZE, case_id, error, request, started)
 
-    module_px = measure_module_px(symbol.image_bytes)
+    try:
+        with _measure_artefact(symbol.image_bytes) as artefact:
+            module_px = artefact.module_px
+            width, height = artefact.size
+    except _ArtefactTooLarge as error:
+        return _unmeasurable(
+            ctx,
+            RN_MODULE_SIZE,
+            case_id,
+            request.as_dict(),
+            expected,
+            symbol,
+            error,
+            started,
+            {"module_size_px": requested},
+        )
     if module_px is None:
         result = support.fail(
             RN_MODULE_SIZE,
@@ -1221,7 +1613,6 @@ def _run_module_size(
             ctx, result, symbol=symbol, request_extra={"module_size_px": requested}
         )
 
-    width, height = _image_size(symbol.image_bytes)
     deviation = abs(module_px - requested)
     # The canvas in module pitches, and the module count left once the requested quiet zone is
     # taken off both sides; a canvas that is not a whole number of pitches is already broken.
@@ -1345,17 +1736,22 @@ def _run_contrast(
     ``value_mismatch`` for any of the three and the translated adapter reasons through
     :func:`_translate`.
     """
+    # Deferred: importing this module starts no image stack in a process that only lists checks.
+    from qrcheck.decode.consensus import contrast_ratio
+    from qrcheck.decode.consensus import is_inverted_request
+
     started = time.perf_counter()
     if polarity not in _CONTRAST_POLARITIES:
         raise ValueError(f"polarity must be one of {list(_CONTRAST_POLARITIES)}; got {polarity!r}")
     foreground, background = palette
     if polarity == "inverted":
         foreground, background = background, foreground
+    # The colours are the subject of this check, so the geometry is left at the target's own
+    # defaults: pinning a module size or a quiet zone would make the request need capabilities
+    # this check does not declare, and nothing here measures either.
     request = support.build(
         _contrast_payload(index),
         ctx.ec_level,
-        module_size_px=_MODULE_SIZE_CHOICES[0],
-        quiet_zone_modules=_PINNED_QUIET_ZONE_MODULES,
         foreground_rgb=foreground,
         background_rgb=background,
     )
@@ -1372,7 +1768,21 @@ def _run_contrast(
     except (TargetRejected, TargetContractError, TargetUnsupported) as error:
         return _translate(RN_CONTRAST, case_id, error, request, started)
 
-    measured_dark, measured_light = _measure_colours(symbol.image_bytes)
+    try:
+        with _measure_artefact(symbol.image_bytes) as artefact:
+            measured_dark, measured_light = artefact.colours
+    except _ArtefactTooLarge as error:
+        return _unmeasurable(
+            ctx,
+            RN_CONTRAST,
+            case_id,
+            request.as_dict(),
+            expected,
+            symbol,
+            error,
+            started,
+            {"contrast_floor": floor, "polarity": polarity},
+        )
     ratio = contrast_ratio(measured_dark, measured_light)
     decoded: dict[str, object] = {
         "contrast_ratio_measured": ratio,
@@ -1433,7 +1843,10 @@ def _run_contrast(
     id=RN_SVG,
     title="SVG: the vector canvas carries the module count and rasterizes to a decodable symbol",
     family=_FAMILY,
-    requires=frozenset({Capability.svg}),
+    # The request pins a zero-module quiet zone, which is what lets the canvas imply the module
+    # count at one integral pitch, so the capability is genuinely needed: declared here, a target
+    # that cannot honour the pin is resolved as skipped instead of skipping case by case.
+    requires=frozenset({Capability.svg, Capability.quiet_zone}),
     dependencies=(DEPENDENCY_SVG_RASTERIZER,),
     corpus_driven=True,
 )
@@ -1473,17 +1886,25 @@ def _run_svg(
     """Rasterize one vector artefact and assert the geometry and the symbol it carries.
 
     Emits ``missing_dependency`` when no rasterizer was discovered, ``value_mismatch`` when the
-    document does not parse, its canvas is not a positive square carrying the module count at one
-    integral pitch, or the raster carries no decodable symbol, and ``sampling_failed`` when no
-    module count could be implied. A rasterizer that fails outright raises, so the runner records an
-    ``error`` result. The decoded payload is recorded rather than asserted: fidelity is ``RT-
-    ROUNDTRIP``'s assertion.
+    document does not parse or is refused before the parse, its declared canvas is above
+    :data:`_MAX_RASTER_SIDE_PX` per side, its canvas is not a positive square carrying the module
+    count at one integral pitch, or the raster carries no decodable symbol, and ``sampling_failed``
+    when no module count could be implied. What a target's own artefact says is a verdict, so the
+    declared canvas is priced here from the one parse of the document and an oversized canvas is
+    ``value_mismatch`` with ``canvas_above_raster_ceiling``, leaving the run's exit code at 1
+    (AAP §0.3.4). A rasterizer or host fault -- a binary that exits non-zero, times out or writes
+    nothing -- raises, and the runner records an ``error`` result, which is exit 3. The decoded
+    payload is recorded rather than asserted: fidelity is ``RT-ROUNDTRIP``'s assertion.
     """
+    # Deferred: importing this module starts no image stack in a process that only lists checks.
+    from qrcheck.decode.matrix import module_count_for_version
+
     expected: dict[str, object] = {
         "output_format": "svg",
         "quiet_zone_modules": _SVG_QUIET_ZONE_MODULES,
         "assertion": "canvas_carries_module_count_and_raster_decodes",
         "rasterizer_configured": status.configured,
+        "svg_canvas_ceiling_px": _MAX_RASTER_SIDE_PX,
     }
     if not status.available:
         # A skipped-with-reason case is persisted like a failure (AAP §0.3.4), so the
@@ -1540,7 +1961,28 @@ def _run_svg(
 
     decoded["svg_canvas_side"] = canvas_width
     decoded["svg_canvas_unit"] = canvas_unit
-    rasterized = rasterize_svg(symbol.image_bytes, status)
+    declared_side_px = _canvas_side_px(canvas_width, canvas_height, canvas_unit)
+    if declared_side_px is not None and declared_side_px > _MAX_RASTER_SIDE_PX:
+        # The declared canvas is what the target's own artefact says about itself, so a canvas no
+        # rasterizer may allocate is a verdict about the target -- exit 1 -- and never the framework
+        # error exit 3 reserves. The priced side, its unit and the ceiling are the evidence.
+        decoded["svg_canvas_side_px"] = declared_side_px
+        decoded["svg_canvas_ceiling_px"] = _MAX_RASTER_SIDE_PX
+        decoded["problems"] = ["canvas_above_raster_ceiling"]
+        result = support.fail(
+            RN_SVG,
+            case_id,
+            reason=Reason.VALUE_MISMATCH,
+            request=request.as_dict(),
+            decoded=decoded,
+            expected=expected,
+            duration_ms=_elapsed_ms(started),
+        )
+        return support.record_evidence(ctx, result, symbol=symbol)
+
+    rasterized = rasterize_svg(
+        symbol.image_bytes, status, canvas=(canvas_width, canvas_height, canvas_unit)
+    )
     decoded["rasterized_bytes"] = len(rasterized)
     decoded_result = support.decode(ctx, rasterized, request)
     decoded.update(decoded_result.as_dict())
@@ -1613,7 +2055,13 @@ def _run_svg(
     id=RN_LOGO,
     title="Logo overlay: the composite is applied and survives its error-correction budget",
     family=_FAMILY,
-    requires=frozenset({Capability.png, Capability.logo_overlay, Capability.ec_level}),
+    # The request pins a module size and the overlay is sized from it before the target is
+    # called, so a target that cannot render at that edge cannot serve this check. The quiet zone
+    # is deliberately not pinned -- the covered fraction is measured on the symbol's own module
+    # area -- so the capability is not part of what this check asks for.
+    requires=frozenset(
+        {Capability.png, Capability.logo_overlay, Capability.ec_level, Capability.module_size}
+    ),
     dependencies=(DEPENDENCY_PRIMARY_DECODER,),
 )
 def logo_cases(ctx: RunContext) -> Iterator[Case]:
@@ -1665,6 +2113,9 @@ def _run_logo(ctx: RunContext, case_id: str, level: str, step: int) -> CaseResul
     decoded from the symbol, never the requested one (AAP §0.4.2). Emits ``value_mismatch`` for
     either assertion.
     """
+    # Deferred: importing this module starts no image stack in a process that only lists checks.
+    from qrcheck.decode.matrix import module_count_for_version
+
     started = time.perf_counter()
     fraction = _logo_area_fraction(ctx, step)
     seed = derive_seed(ctx.seed, RN_LOGO, case_id, "logo")
@@ -1685,7 +2136,6 @@ def _run_logo(ctx: RunContext, case_id: str, level: str, step: int) -> CaseResul
             _logo_payload(level, step),
             level,
             module_size_px=_LOGO_MODULE_SIZE_PX,
-            quiet_zone_modules=_PINNED_QUIET_ZONE_MODULES,
             logo_overlay_path=overlay_path,
         )
         try:
@@ -1693,8 +2143,33 @@ def _run_logo(ctx: RunContext, case_id: str, level: str, step: int) -> CaseResul
         except (TargetRejected, TargetContractError, TargetUnsupported) as error:
             return _translate(RN_LOGO, case_id, error, request, started)
 
-    width, height = _image_size(symbol.image_bytes)
-    module_px = measure_module_px(symbol.image_bytes)
+    projection = request.as_dict()
+    # The overlay reached the target through a temporary file whose name must not reach an
+    # artefact (AAP §0.5.5 forbids absolute paths); the bitmap is persisted as ``logo.png``.
+    projection["logo_overlay_path"] = LOGO_PNG
+    try:
+        with _measure_artefact(symbol.image_bytes) as artefact:
+            width, height = artefact.size
+            module_px = artefact.module_px
+            distinct = artefact.distinct_colours
+    except _ArtefactTooLarge as error:
+        return _unmeasurable(
+            ctx,
+            RN_LOGO,
+            case_id,
+            projection,
+            expected,
+            symbol,
+            error,
+            started,
+            {
+                "logo_area_fraction_requested": fraction,
+                "logo_seed": seed,
+                "logo_side_px": side_px,
+            },
+            seed=seed,
+            logo=bitmap,
+        )
     modules = (
         None
         if decoded_result.version is None
@@ -1717,7 +2192,6 @@ def _run_logo(ctx: RunContext, case_id: str, level: str, step: int) -> CaseResul
     recovery = support.recovery_fraction(decoded_ec)
     budget = recovery - margin
     asserted = covered <= budget
-    distinct = _distinct_colours(symbol.image_bytes)
     palette_size = len({tuple(request.foreground_rgb), tuple(request.background_rgb)})
     decoded: dict[str, object] = {
         "assertion_applied": asserted,
@@ -1744,10 +2218,6 @@ def _run_logo(ctx: RunContext, case_id: str, level: str, step: int) -> CaseResul
     if asserted and decoded_result.payload_bytes != request.payload:
         problems.append("payload_not_carried")
     duration = _elapsed_ms(started)
-    projection = request.as_dict()
-    # The overlay reached the target through a temporary file whose name must not reach an
-    # artefact (AAP §0.5.5 forbids absolute paths); the bitmap is persisted as ``logo.png``.
-    projection["logo_overlay_path"] = LOGO_PNG
     if problems:
         decoded["problems"] = problems
         result = support.fail(
