@@ -1,10 +1,10 @@
 """The two performance checks: encode latency with throughput, and decode latency.
 
 Plan item served: AAP §0.8.1's row ``checks/performance.py`` -> ``PF-ENCODE``, ``PF-DECODE``, with
-the case matrix it fixes -- 1 synthetic case, **105 encodes** and 0 decodes for ``PF-ENCODE``; 1
-synthetic case, **0 encodes** and **205 decodes** of one fixed 500 x 500 PNG for ``PF-DECODE`` --
-and the budgets of AAP §0.6.2 with their environment in §0.6.3 (CPython 3.11, Linux x86_64, 2
-vCPU, the pinned lock).
+the case matrix it fixes -- 1 synthetic case per check: ``warmup + encode_samples`` encodes and no
+decode for ``PF-ENCODE``; no encode and ``warmup + decode_samples`` decodes of one fixed
+``decode_image_px``-square PNG for ``PF-DECODE`` -- and the budgets of AAP §0.6.2 with their
+environment in §0.6.3 (CPython 3.11, Linux x86_64, 2 vCPU, the pinned lock).
 
 These are the **only** two checks permitted to assert on a duration (AAP §0.12). Every other case's
 ``duration_ms`` is recorded and never compared, because timing is environment-bound (AAP §0.5.5);
@@ -18,14 +18,15 @@ and ``decode_image_px`` -- are read from :attr:`qrcheck.config.models.Config.per
 What each check measures: ``PF-ENCODE`` asks the target for one symbol of a declared fixed payload
 ``warmup`` times unmeasured and then ``encode_samples`` times measured, asserting the nearest-rank
 95th percentile against ``encode_p95_ms`` and the throughput against ``min_symbols_per_minute``; its
-invocation count is exactly ``warmup + encode_samples`` (5 + 100 = 105). ``PF-DECODE`` draws its
-probe image **inside the framework** with no adapter call -- a declared payload encoded by segno at
-the run's level, the grid scaled by nearest neighbour to exactly ``decode_image_px`` pixels square,
-the PNG encoded through :mod:`qrcheck.evidence.mux` -- so it declares no capability and runs against
-a target that cannot encode or cannot be reached; it makes ``warmup + decode_samples`` (5 + 200 =
-205) primary decodes, the first of which must return the payload before any sample is timed. The
-percentile rule is nearest-rank: samples sorted ascending, the value at index ``ceil(0.95 * n) -
-1``.
+invocation count is exactly ``warmup + encode_samples``, the figure :data:`EXPECTED_ENCODES`
+declares. ``PF-DECODE`` draws its probe image **inside the framework** with no adapter call -- a
+declared payload encoded by segno at the run's level, the grid scaled by nearest neighbour to
+exactly ``decode_image_px`` pixels square, the PNG encoded through :mod:`qrcheck.evidence.mux` -- so
+it declares no capability and runs against a target that cannot encode or cannot be reached; it
+makes ``warmup + decode_samples`` primary decodes -- the count :data:`EXPECTED_DECODES` declares and
+``tests/unit/test_checks_negative.py`` asserts -- the first of which must return the payload before
+any sample is timed. The percentile rule is nearest-rank: samples sorted ascending, the value at
+index ``ceil(0.95 * n) - 1``.
 
 Reasons emitted: ``Reason.VALUE_MISMATCH`` when a floor is breached or the probe does not decode,
 with the measured value and the configured threshold in ``decoded["message"]``, plus
@@ -441,8 +442,9 @@ def _probe_png(image_px: int, ec_level: str) -> bytes:
     index = (numpy.arange(image_px) * side) // image_px
     scaled = padded[numpy.ix_(index, index)]
     pixels = numpy.where(scaled, _PROBE_DARK_PIXEL, _PROBE_LIGHT_PIXEL).astype(numpy.uint8)
-    # Pillow is reached only through the image boundary: ``mux`` is the one module that imports it,
-    # and its ``Image`` supplies the single conversion that boundary has no function for.
+    # The image boundary declares ``Image`` as a name of its public surface rather than leaving it
+    # an incidental module attribute, and its ``Image`` supplies the single conversion the boundary
+    # has no function for.
     return mux.encode_png(mux.Image.fromarray(pixels))
 
 

@@ -33,6 +33,12 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
+# ``Image`` is a declared name of this module's public surface rather than an incidental import:
+# the name is Pillow's image module -- the namespace whose ``fromarray`` builds a pixel array into
+# an image -- and it is the boundary's surface for that one conversion, which a caller that
+# computed its own pixels (``qrcheck.checks.performance``'s decode probe) needs to make. A
+# constructor function for those pixels would add a second API, which the Scope paragraph above
+# rules out; the declared name is the surface.
 from PIL import Image
 
 # The three byte signatures this product ever sees: PNG, JPEG and SVG.  A target's bytes are
@@ -258,6 +264,7 @@ def open_images() -> tuple[OpenImage, ...]:
 
 
 __all__ = [
+    "Image",
     "JPEG_MAGIC",
     "MAGIC",
     "MIME_JPEG",

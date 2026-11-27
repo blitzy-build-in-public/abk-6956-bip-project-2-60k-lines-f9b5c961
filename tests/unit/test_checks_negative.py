@@ -11,7 +11,10 @@ The decoders are stubs because a negative case must *put* a specific defect in f
 and a real decoder cannot be asked for one. :data:`EXPECTED_INVOCATIONS` declares the
 ``generate`` calls each check makes for ``n`` cases and the observed count is asserted **equal**
 to it, so a retry registers as the declared count plus one; each check drives a documented prefix
-of its own ascending case order (:attr:`NegativeSpec.case_limit`).
+of its own ascending case order (:attr:`NegativeSpec.case_limit`). The decode half is asserted
+the same way: the ``decode_symbol`` calls a performance case makes are held **equal** to the
+count :data:`qrcheck.checks.performance.EXPECTED_DECODES` declares for it, so a retried decode is
+visible too.
 
 Three reasons are asserted as the owning module documents them: ``SY-MASK``, ``IV-BAD-OPTION``
 and ``CL-ARTIFACTS`` report ``value_mismatch``, and ``RN-SVG``'s round too rather than
@@ -39,8 +42,10 @@ from PIL import Image
 from qrcheck.checks import FAMILY_MODULE_OBJECTS, load_families
 from qrcheck.checks import cleanup as cleanup_family
 from qrcheck.checks import damage as damage_family
+from qrcheck.checks import performance as performance_family
 from qrcheck.config import models
 from qrcheck.decode.base import DecodeResult
+from qrcheck.evidence import mux
 from qrcheck.registry.check import (
     CHECK_IDS,
     Case,
@@ -894,6 +899,7 @@ class _Outcome:
     results: tuple[CaseResult, ...]
     case_objects: tuple[Case, ...]
     invocations: int
+    decodes: int
     config: models.Config
 
     @property
@@ -930,10 +936,14 @@ class _Harness:
 
 
 def _decode_stub(
-    harness: _Harness, round_spec: NegativeRound
+    harness: _Harness,
+    round_spec: NegativeRound,
+    decode_calls: dict[str, int],
 ) -> Callable[..., DecodeResult]:
     """Return the decode entry one round runs against; the two invalid-input probes get the constant
-    *undetected* result, because an over-capacity payload has no symbol to describe."""
+    *undetected* result, because an over-capacity payload has no symbol to describe. Every call is
+    counted into ``decode_calls``, so the round reports how many decodes its case asked the one
+    decode seam for."""
     echo = _echo_factory(harness.make_decode_result)
     defect = None if round_spec.decode_defect is None else _decode_defect(round_spec.decode_defect)
     if round_spec.adapter_symbol is None:
@@ -954,8 +964,9 @@ def _decode_stub(
         *,
         secondary: bool | None = None,
     ) -> DecodeResult:
-        """Return this round's decoded evidence for `request`."""
+        """Return this round's decoded evidence for `request`, counting the decode it answered."""
         del image_bytes, secondary
+        decode_calls["calls"] += 1
         result = base(request)
         return result if defect is None else defect(request, result)
 
@@ -975,11 +986,14 @@ def _drive_round(
     ctx = harness.make_run_context(adapter=adapter, config=config, corpus=harness.corpus)
     if not prerequisite_cases:
         damage_family.clear_symbol_memo()
+    # What the case asks the decode layer for, counted at the one seam every image check decodes
+    # through, so a retried decode registers as one more call (AAP §0.4.3).
+    decode_calls = {"calls": 0}
     # The dotted form, because ``monkeypatch.setattr`` reads a bare string as a whole import
     # path: it resolves the module itself and remembers the previous value, so the patcher's
     # own installation is restored when this test ends.
     harness.monkeypatch.setattr(
-        "qrcheck.decode.decode_symbol", _decode_stub(harness, round_spec)
+        "qrcheck.decode.decode_symbol", _decode_stub(harness, round_spec, decode_calls)
     )
     contract = get_check(check_id)
     enumerated = tuple(contract.cases(ctx))
@@ -1000,6 +1014,7 @@ def _drive_round(
         results=results,
         case_objects=selected,
         invocations=adapter.count,
+        decodes=decode_calls["calls"],
         config=config,
     )
 
@@ -1214,6 +1229,24 @@ def test_declared_invocations_match_the_family_tables(
     )
 
 
+def test_decode_invocations_match_the_declared_count(harness: _Harness) -> None:
+    """The decode half of the accounting, asserted as a strict equality: ``PF-ENCODE`` decodes
+    nothing and ``PF-DECODE`` decodes its probe ``warmup + decode_samples`` times, as
+    :data:`qrcheck.checks.performance.EXPECTED_DECODES` declares, so a retry on the decode path
+    registers as one more call and fails here (AAP §0.4.3)."""
+    for check_id, declared in performance_family.EXPECTED_DECODES.items():
+        run = _drive(check_id, harness)
+        for outcome in run.all:
+            assert outcome.cases == 1, (
+                f"{check_id} / {outcome.round.label!r}: {outcome.cases} case(s) executed, but "
+                "each performance check is one constructed case"
+            )
+            assert outcome.decodes == declared, (
+                f"{check_id} / {outcome.round.label!r}: the case asked the decode layer for "
+                f"{outcome.decodes} decode(s); the family module declares {declared}"
+            )
+
+
 # Thresholds come from the resolved configuration, never from a literal here
 
 
@@ -1267,3 +1300,16 @@ def test_a_skipped_round_is_never_counted_as_a_pass(harness: _Harness) -> None:
     )
     assert control.skipped == 0, f"the control must not skip anything: {control!r}"
 
+
+# The image boundary the decode probe builds its image through
+
+
+def test_the_image_boundary_declares_the_pillow_module_the_probe_builds_with() -> None:
+    """``PF-DECODE``'s probe builds its image through ``mux.Image``, so that module is a declared
+    name of the boundary's public surface: renaming the Pillow import inside ``mux`` must fail here
+    rather than at a probe's construction."""
+    assert "Image" in tuple(mux.__all__), (
+        "qrcheck.evidence.mux must declare the Pillow image module PF-DECODE's probe builds with; "
+        f"__all__ declares {sorted(mux.__all__)}"
+    )
+    assert mux.Image is Image, f"mux.Image must be PIL.Image itself, got {mux.Image!r}"
