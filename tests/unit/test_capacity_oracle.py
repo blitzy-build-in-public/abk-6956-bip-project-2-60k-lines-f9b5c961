@@ -18,8 +18,7 @@ from segno import consts as segno_consts
 
 from qrcheck.corpus import builder, capacity
 
-# ISO/IEC 18004 §7.5: Model 2 QR carries Versions 1-40; Micro QR and Structured Append are
-# excluded.
+# ISO/IEC 18004 §7.5: Model 2 QR carries Versions 1-40; Micro QR and Structured Append are excluded.
 FIRST_MODEL2_VERSION: int = 1
 LAST_MODEL2_VERSION: int = 40
 
@@ -283,4 +282,3 @@ def test_boundary_corpus_payloads_sit_on_capacity_boundaries() -> None:
         if record.class_name in builder.BOUNDARY_CLASSES
     ]
     assert other_seed == [(record.expected_mode, _payload_length(record)) for record in records]
-

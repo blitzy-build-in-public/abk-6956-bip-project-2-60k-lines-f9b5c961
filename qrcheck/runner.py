@@ -40,15 +40,14 @@ report, raised for exactly four conditions: the blocking primary decoder (``zxin
 unusable, another pinned runtime dependency cannot be imported, the configured corpus file cannot be
 read or is malformed, or the ``--class`` filter leaves zero records -- the message always naming the
 offending dependency, path or glob.  An ``error`` result, created here and only here, for an
-exception that escaped a case's ``execute``, a check's case generator or an evidence write --
-each contained with its traceback while the run continues, the evidence one also keeping every
-result the walk had already accumulated, which is what lets the writer path stream them when the
-report directory turns out to be unwritable -- or for a lost target, a fact about the run rather
-than a verdict on a case.  A ``skipped``
-result, built by :func:`qrcheck.registry.resolve.skip_case_results`, one per check the target's
-capabilities or the host's dependencies cannot serve, counted separately and never folded into
-``passed``.  And a ``passed`` or ``failed`` result, produced by a check and accumulated
-verbatim.
+exception that escaped a case's ``execute``, a check's case generator or an evidence write -- each
+contained with its traceback while the run continues, the evidence one also keeping every result the
+walk had already accumulated, which is what lets the writer path stream them when the report
+directory turns out to be unwritable -- or for a lost target, a fact about the run rather than a
+verdict on a case.  A ``skipped`` result, built by
+:func:`qrcheck.registry.resolve.skip_case_results`, one per check the target's capabilities or the
+host's dependencies cannot serve, counted separately and never folded into ``passed``.  And a
+``passed`` or ``failed`` result, produced by a check and accumulated verbatim.
 
 Target loss is a run-level condition, not a per-case one:
 :class:`~qrcheck.targets.base.TargetUnavailable` and
@@ -65,9 +64,8 @@ that pair before they leave; ``run_id`` is a content hash over the target name, 
 level, the selected check identifiers and a digest of the filtered corpus, so a ``--class`` run has
 a different identity from a whole-corpus one.  Nothing here reads ``hash()``, ``id()``, the
 environment, a locale, a set's iteration order or a filesystem listing, and the only wall-clock
-readings are the two run timestamps and the ``time.perf_counter`` deltas that become
-``duration_ms`` -- the fields every determinism comparison masks because the result model requires
-them.
+readings are the two run timestamps and the ``time.perf_counter`` deltas that become ``duration_ms``
+-- the fields every determinism comparison masks because the result model requires them.
 """
 
 from __future__ import annotations
@@ -513,9 +511,8 @@ def _filtered_corpus(config: Config, selection: Selection) -> tuple[CorpusRecord
     runner's rather than the loader's, because both depend on the run and neither can be decided
     from the configuration alone: the corpus file itself, which
     :func:`qrcheck.corpus.io.load_corpus` reads but whose absence means no run can happen, and
-    the ``--class`` filter, which only this layer applies.  A filter that leaves nothing must
-    never be reported as a completed run: the suite would look clean while covering no record
-    at all.
+    the ``--class`` filter, which only this layer applies.  A filter that leaves nothing must never
+    be reported as a completed run: the suite would look clean while covering no record at all.
 
     Args:
         config: The resolved configuration; its ``corpus_path`` names the file.
@@ -607,10 +604,9 @@ def _walk(
     Three run-level policies live here:
 
     * **Target loss.** Once any check has lost the target, every later check that requires a
-      capability gets exactly one ``synthetic:target`` error and is never asked to produce a
-      case, so one dead target yields one result per affected check rather than one per
-      corpus record.  A check that requires no capability is target-independent and still
-      runs.
+      capability gets exactly one ``synthetic:target`` error and is never asked to produce a case,
+      so one dead target yields one result per affected check rather than one per corpus record.  A
+      check that requires no capability is target-independent and still runs.
     * **``--fail-fast``.** After a check finishes, a ``failed`` or ``error`` result stops
       further checks from launching.  The check that produced it always finished all of its
       cases, and the pre-execution skip results are kept, because they were decided before
@@ -869,12 +865,11 @@ def _persist(store: EvidenceStore, result: CaseResult) -> CaseResult:
     written -- or, when the report directory itself is what failed, still streamed as JSON lines,
     so the run continues and the process still exits 3 at the end.
 
-    A containment and never a retry: the store is called exactly once per result whether it
-    succeeds or fails, so no check's declared adapter-invocation count changes and no retry
-    path appears.  Every result this layer builds takes this path -- the
-    two error builders and the pre-execution skips -- and a result a check built is persisted by
-    the check itself, inside its own case, where the same refusal reaches :func:`_run_check`
-    as a case fault.
+    A containment and never a retry: the store is called exactly once per result whether it succeeds
+    or fails, so no check's declared adapter-invocation count changes and no retry path appears.
+    Every result this layer builds takes this path -- the two error builders and the pre-execution
+    skips -- and a result a check built is persisted by the check itself, inside its own case, where
+    the same refusal reaches :func:`_run_check` as a case fault.
 
     Args:
         store: The run's evidence store.
@@ -1024,13 +1019,12 @@ def _run_identifier(
 ) -> str:
     """Return the run's content hash: the same inputs always give the same identifier.
 
-    The identity is over what the run *was*, never over what it produced: the target name,
-    the seed, the EC level, the selected check identifiers and a digest of the filtered
-    corpus.  A ``--class`` run therefore has a different identity from a whole-corpus one with
-    the same seed, and two runs of one configuration agree field for field.  Nothing here
-    reads a clock, a UUID source, ``hash()`` or a random generator, and the canonical encoding
-    fixes the JSON form (sorted keys, no whitespace, ASCII-escaped) so the digest cannot
-    depend on a Python version's separators.
+    The identity is over what the run *was*, never over what it produced: the target name, the seed,
+    the EC level, the selected check identifiers and a digest of the filtered corpus.  A ``--class``
+    run therefore has a different identity from a whole-corpus one with the same seed, and two runs
+    of one configuration agree field for field.  Nothing here reads a clock, a UUID source,
+    ``hash()`` or a random generator, and the canonical encoding fixes the JSON form (sorted keys,
+    no whitespace, ASCII-escaped) so the digest cannot depend on a Python version's separators.
 
     Args:
         adapter_name: The name the adapter reports.
@@ -1104,4 +1098,3 @@ def _close_adapter(adapter: Adapter) -> None:
         adapter.close()
     except Exception:  # See the docstring: it must not replace the run.
         return
-

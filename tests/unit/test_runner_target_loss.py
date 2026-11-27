@@ -2,10 +2,9 @@
 
 The run contract fixes what a consumer reports when a target is unreachable or times out --
 "``error`` result, ``case_id`` ``synthetic:target``, message naming the transport failure; one
-such result per affected check, not per corpus record" -- and this module is the gate that holds
-it. The defect it prevents is quadratic noise: ``RT-ROUNDTRIP`` alone has one case per corpus
-record, so a policy applied per case would turn one dead target into two hundred and forty
-identical errors.
+such result per affected check, not per corpus record" -- and this module is the gate that holds it.
+The defect it prevents is quadratic noise: ``RT-ROUNDTRIP`` alone has one case per corpus record, so
+a policy applied per case would turn one dead target into two hundred and forty identical errors.
 
 Five properties are pinned: **exactly one error per affected check**, counted from the
 selection's own capability requirements rather than typed; **the diagnostic names the cause** --
@@ -723,4 +722,3 @@ def test_fail_fast_stops_launching_checks_and_still_returns_a_complete_model(
     )
     assert_summary_schema_complete(stopped)
     assert exit_code_for(stopped) == EXIT_INTERNAL
-

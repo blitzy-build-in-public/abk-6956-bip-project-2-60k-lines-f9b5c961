@@ -744,4 +744,3 @@ def test_summary_schema_is_exact(
             f"{field} is {timestamp!r}, which is not a UTC timestamp; the report writes explicit "
             f"UTC so no reader has to guess a zone"
         )
-

@@ -180,8 +180,7 @@ def run_with_tallies(
 ) -> RunResult:
     """Return a run whose four tallies are exactly the requested counts.
     :class:`~qrcheck.report.model.RunResult` recomputes its tallies from its results and
-    refuses a record whose counts disagree with them, so results are the only way to state a
-    tally.
+    refuses a record whose counts disagree with them, so results are the only way to state a tally.
     """
     plan: tuple[tuple[int, Status, Reason | None], ...] = (
         (passed, Status.PASSED, None),
@@ -816,14 +815,13 @@ def test_exit_two_when_a_configuration_the_schema_accepts_cannot_build_an_adapte
     offending_key: str,
 ) -> None:
     """A configuration fault the adapter finds at construction is exit 2, not exit 3. Both
-    documents below are decided from the file alone -- one names a request field the framework
-    does not have, the other makes two keys read one stream -- so they belong to the exit-2
-    class the moment they are refused, even though the loader cannot see either. The key
-    assertion is the one that keeps the test honest: the message has to name the mapping's own
-    dotted key, because a diagnostic that named some other key would still exit 2 while telling
-    the reader to edit the wrong line. Nothing is imported, spawned or decoded here: the fault
-    is raised before the adapter resolves its callable, and no report may be written for a run
-    that never started.
+    documents below are decided from the file alone -- one names a request field the framework does
+    not have, the other makes two keys read one stream -- so they belong to the exit-2 class the
+    moment they are refused, even though the loader cannot see either. The key assertion is the one
+    that keeps the test honest: the message has to name the mapping's own dotted key, because a
+    diagnostic that named some other key would still exit 2 while telling the reader to edit the
+    wrong line. Nothing is imported, spawned or decoded here: the fault is raised before the adapter
+    resolves its callable, and no report may be written for a run that never started.
     """
     config = toml_config_file(text=document)
 
@@ -1170,14 +1168,13 @@ def test_exit_three_when_a_case_evidence_cannot_be_written(
 ) -> None:
     """A store that cannot write costs each case its evidence, never the run its results.
 
-    Every case of the selected class fails on the stubbed payload and then cannot have that
-    failure recorded, which is the full disk a mid-walk write failure stands for: the fault has
-    to become one ``error`` result per case, filed in that case's own place so the run never
-    holds two results for one ``(check_id, case_id)`` pair, while the walk finishes, all three
-    artefacts are written and the command exits 3. A run that let the ``OSError`` escape would
-    write no report, stream an empty stdout and state that the run produced no result -- the one
-    outcome the exit-code contract rules out for an internal fault, and for a report directory
-    that turns unusable.
+    Every case of the selected class fails on the stubbed payload and then cannot have that failure
+    recorded, which is the full disk a mid-walk write failure stands for: the fault has to become
+    one ``error`` result per case, filed in that case's own place so the run never holds two results
+    for one ``(check_id, case_id)`` pair, while the walk finishes, all three artefacts are written
+    and the command exits 3. A run that let the ``OSError`` escape would write no report, stream an
+    empty stdout and state that the run produced no result -- the one outcome the exit-code contract
+    rules out for an internal fault, and for a report directory that turns unusable.
     """
 
     def fail_to_record(*args: object, **kwargs: object) -> str | None:

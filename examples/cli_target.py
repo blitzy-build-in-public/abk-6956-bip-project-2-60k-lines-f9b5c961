@@ -22,11 +22,10 @@ capabilities = ["png"]
 
 Exactly one payload source is given -- ``--payload-b64 <BASE64>`` (``-`` reads stdin),
 ``--payload-utf8 <TEXT>``, ``--payload-stdin`` or a positional text payload -- always with
-``--output <PATH>``. A template produces one argv word, so the table conveys the payload and
-the artefact path alone and ``capabilities`` lists ``png`` and nothing else: declaring an
-operation it cannot transmit would make the dependent check resolve as runnable. A bare
-``python`` may lack ``segno``, whose exit 1 with a traceback the adapter correctly reports as
-a contract error.
+``--output <PATH>``. A template produces one argv word, so the table conveys the payload and the
+artefact path alone and ``capabilities`` lists ``png`` and nothing else: declaring an operation it
+cannot transmit would make the dependent check resolve as runnable. A bare ``python`` may lack
+``segno``, whose exit 1 with a traceback the adapter correctly reports as a contract error.
 
 A request-shaped fault prints one JSON line ``{"error": "<message>"}`` to stdout and exits 2
 (``TargetRejected``); a missing ``--output`` is an argparse usage error and an internal fault
@@ -63,11 +62,10 @@ class DeclaredRejection(Exception):
 def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     """Parse the command line.
 
-    ``--output`` is required on purpose: a missing output path is a wiring fault of
-    the caller rather than a request this target may refuse, so argparse's own
-    usage error (exit 2 on stderr) is the honest classification. Error level,
-    format, size and colour are validated in code instead of through ``choices``,
-    because a fault in them is a declared rejection, not a usage error.
+    ``--output`` is required on purpose: a missing output path is a wiring fault of the caller
+    rather than a request this target may refuse, so argparse's own usage error (exit 2 on stderr)
+    is the honest classification. Error level, format, size and colour are validated in code instead
+    of through ``choices``, because a fault in them is a declared rejection, not a usage error.
     """
     parser = argparse.ArgumentParser(
         prog="cli_target.py",
@@ -185,13 +183,12 @@ def _resolve_mask(value: int | None) -> int | None:
 
 def _encode(payload: bytes, ec: str, version: int | None, mask: int | None) -> segno.QRCode:
     """Encode ``payload`` as a Model 2 QR symbol at the requested error level."""
-    # Both defaults of segno are wrong here, so both are stated. make_qr is
-    # Model 2 by construction, where bare segno.make() returns a Micro QR symbol for
-    # any payload that fits one -- and a Micro symbol has no 4V+17 module count, no
-    # Version 1-40 number and a different format-information layout.
-    # boost_error=False keeps the requested error level instead of spending spare
-    # capacity to raise it at the same version, which would make the symbol carry a
-    # level the caller never asked for.
+    # Both defaults of segno are wrong here, so both are stated. make_qr is Model 2 by construction,
+    # where bare segno.make() returns a Micro QR symbol for any payload that fits one -- and a Micro
+    # symbol has no 4V+17 module count, no Version 1-40 number and a different format-information
+    # layout. boost_error=False keeps the requested error level instead of spending spare capacity
+    # to raise it at the same version, which would make the symbol carry a level the caller never
+    # asked for.
     try:
         return segno.make_qr(payload, error=ec, version=version, mask=mask, boost_error=False)
     except segno.DataOverflowError:

@@ -48,16 +48,14 @@ MAX_VERSION: Final = 40
 MIN_MODULE_COUNT: Final = 4 * MIN_VERSION + 17  # 21 modules, Version 1
 MAX_MODULE_COUNT: Final = 4 * MAX_VERSION + 17  # 177 modules, Version 40
 
-# ISO/IEC 18004:2015(E) §6.3.3.1: each of the three finder patterns is a 7x7 module square
-# (dark outer ring, light ring, 3x3 dark core), so the dark run across its middle
-# row and down its middle column is exactly 7 modules wide. That is the measured
-# quantity the module pitch is derived from.
+# ISO/IEC 18004:2015(E) §6.3.3.1: each of the three finder patterns is a 7x7 module square (dark
+# outer ring, light ring, 3x3 dark core), so the dark run across its middle row and down its middle
+# column is exactly 7 modules wide. That is the measured quantity the module pitch is derived from.
 FINDER_MODULE_COUNT: Final = 7
 
-# ISO/IEC 18004:2015(E) §6.3.5: the timing patterns are the alternating dark/light lines
-# between the finder patterns -- module row 6 horizontally and module column 6
-# vertically. Counting their alternations is the independent confirmation that
-# the chosen module count is right.
+# ISO/IEC 18004:2015(E) §6.3.5: the timing patterns are the alternating dark/light lines between the
+# finder patterns -- module row 6 horizontally and module column 6 vertically. Counting their
+# alternations is the independent confirmation that the chosen module count is right.
 TIMING_ROW: Final = 6
 TIMING_COLUMN: Final = 6
 
@@ -66,28 +64,25 @@ TIMING_COLUMN: Final = 6
 # is wrong by a module or more moves the implied pitch by far more than this.
 _PITCH_TOLERANCE: Final = 0.20
 
-# The 10th-to-90th luminance percentile spread below which no threshold can
-# separate dark from light modules: under 8 grey levels a symbol is unreadable
-# however it is sampled.
+# The 10th-to-90th luminance percentile spread below which no threshold can separate dark from light
+# modules: under 8 grey levels a symbol is unreadable however it is sampled.
 _MIN_CONTRAST_SPREAD: Final = 8.0
 
 # A quadrangle whose shoelace area is below one square pixel cannot anchor a
 # homography, so its solve is refused before the matrix is inverted.
 _MIN_QUAD_AREA: Final = 1.0
 
-# The module pitch, in rectified pixels, below which a 3x3 mean around a module
-# centre would reach into a neighbouring module; sampling then uses the centre
-# pixel alone. Only the smaller guards the exactness of a 1 px/module image such
-# as the secondary decoder's ``straight_qrcode``.
+# The module pitch, in rectified pixels, below which a 3x3 mean around a module centre would reach
+# into a neighbouring module; sampling then uses the centre pixel alone. Only the smaller guards the
+# exactness of a 1 px/module image such as the secondary decoder's ``straight_qrcode``.
 _MIN_AVERAGING_PITCH: Final = 3.0
 
-# How many parallel lines the finder run is measured on, per axis. The outermost
-# row and column of a rectified square sit on the symbol's edge, where a rotated
-# or resampled symbol blends one module with the quiet zone; measuring them alone
-# would let a single antialiased pixel row report a zero run. Every one of these
-# lines lies inside the finder's own dark square -- its first module row, or at
-# one pixel per module a ring row of the finder itself -- so the longest reading
-# is the finder's width and cannot come from the data region.
+# How many parallel lines the finder run is measured on, per axis. The outermost row and column of a
+# rectified square sit on the symbol's edge, where a rotated or resampled symbol blends one module
+# with the quiet zone; measuring them alone would let a single antialiased pixel row report a zero
+# run. Every one of these lines lies inside the finder's own dark square -- its first module row, or
+# at one pixel per module a ring row of the finder itself -- so the longest reading is the finder's
+# width and cannot come from the data region.
 _FINDER_PROBE_LINES: Final = 3
 
 
@@ -109,9 +104,8 @@ def module_count_for_version(version: int) -> int:
 def version_from_dimension(module_count: int) -> int | None:
     """Return the version implied by a sampled dimension, or ``None`` if none is.
 
-    The product's only version source: ISO/IEC 18004:2015(E) §6.3.2.1's ``N = 4V + 17``
-    inverted, never a decoder -- the pinned ``zxing-cpp`` 2.2.0 reports none -- and never a
-    target's metadata.
+    The product's only version source: ISO/IEC 18004:2015(E) §6.3.2.1's ``N = 4V + 17`` inverted,
+    never a decoder -- the pinned ``zxing-cpp`` 2.2.0 reports none -- and never a target's metadata.
     ``None`` covers a ``module_count - 17`` that is not a multiple of four, a version outside 1-40,
     and the negative offsets a Micro QR dimension would produce.
     """
@@ -328,11 +322,10 @@ def _snap_module_count(n_est: int, pitch: float, side: int) -> int | None:
     :data:`_PITCH_TOLERANCE` of the pitch measured from the finder pattern; without that guard a
     count off by a module would round to a plausible neighbour and yield a confidently shifted grid.
     """
-    # Every legal count is a candidate, so an estimate far outside 1..40 (a
-    # broken pitch) still snaps to the closest legal dimension and is then
-    # refused by the pitch guard instead of being clipped to a boundary value. A
-    # tie keeps the smaller count, which is the one tie-break that does not
-    # depend on a rounding mode.
+    # Every legal count is a candidate, so an estimate far outside 1..40 (a broken pitch) still
+    # snaps to the closest legal dimension and is then refused by the pitch guard instead of being
+    # clipped to a boundary value. A tie keeps the smaller count, which is the one tie-break that
+    # does not depend on a rounding mode.
     nearest: int | None = None
     best = 0
     for candidate in range(MIN_MODULE_COUNT, MAX_MODULE_COUNT + 1, 4):
@@ -544,4 +537,3 @@ def sample_matrix(
         source="straight_qrcode" if straight_qrcode is not None else "primary",
         rectified_luma=rectified_luma if keep_rectified else None,
     )
-

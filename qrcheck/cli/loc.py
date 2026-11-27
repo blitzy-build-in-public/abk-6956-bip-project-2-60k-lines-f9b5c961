@@ -51,9 +51,8 @@ def loc(
     try:
         config = load_config(config_path)
     except ConfigError as exc:
-        # str() of a ConfigError is "<dotted key>: <message>", or the bare message
-        # for a whole-file fault such as an unreadable file or invalid TOML, which
-        # belongs to no single key.
+        # str() of a ConfigError is "<dotted key>: <message>", or the bare message for a whole-file
+        # fault such as an unreadable file or invalid TOML, which belongs to no single key.
         click.echo(f"qrcheck loc: {exc}", err=True)
         return EXIT_CONFIG
     except FileNotFoundError as exc:
@@ -68,11 +67,10 @@ def loc(
         click.echo(f"qrcheck loc: cannot prepare the report directory: {exc}", err=True)
         return EXIT_INTERNAL
     except OSError as exc:
-        # PermissionError included: every configuration-read fault has already been
-        # converted into a ConfigError inside the loader, so the only OSError left
-        # is the report_dir mkdir and writability probe, which the loader lets
-        # through as an environment fault and which is therefore exit 3. The
-        # exception text names the directory that has to change.
+        # PermissionError included: every configuration-read fault has already been converted into a
+        # ConfigError inside the loader, so the only OSError left is the report_dir mkdir and
+        # writability probe, which the loader lets through as an environment fault and which is
+        # therefore exit 3. The exception text names the directory that has to change.
         click.echo(f"qrcheck loc: cannot prepare the report directory: {exc}", err=True)
         return EXIT_INTERNAL
 
@@ -104,9 +102,8 @@ def loc(
         click.echo(f"qrcheck loc: cannot measure {label}: {exc}", err=True)
         return EXIT_INTERNAL
 
-    # One line per file in the order the report already sorted them, then the two
-    # figures being compared and the verdict, so a CI log or a grep reads the
-    # result without parsing prose.
+    # One line per file in the order the report already sorted them, then the two figures being
+    # compared and the verdict, so a CI log or a grep reads the result without parsing prose.
     for entry in report.files:
         click.echo(f"{entry.lines}\t{entry.path}")
     click.echo(f"total\t{report.total}")

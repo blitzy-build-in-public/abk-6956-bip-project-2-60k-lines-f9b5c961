@@ -1,12 +1,11 @@
 """Result identity for qrcheck: status words, failure reasons, tallies and records.
 
-This module owns, for the whole product, the three things a result is described by
-that must exist exactly once: the vocabulary of outcomes and causes
-(:class:`Status`, :class:`Reason`), the four tallies a run is summarised by
-(:class:`Counts`), and the identifier a failure is filed under (:func:`failure_id`).
-The runner, the registry, the evidence store and the three report writers import
-them from here instead of redefining them, because a second definition of a status
-word or of a failure ID would let two artefacts describe the same run differently.
+This module owns, for the whole product, the three things a result is described by that must exist
+exactly once: the vocabulary of outcomes and causes (:class:`Status`, :class:`Reason`), the four
+tallies a run is summarised by (:class:`Counts`), and the identifier a failure is filed under
+(:func:`failure_id`). The runner, the registry, the evidence store and the three report writers
+import them from here instead of redefining them, because a second definition of a status word or of
+a failure ID would let two artefacts describe the same run differently.
 
 Nothing here reads a clock, the environment, the filesystem or a third-party
 package: every value produced is a deterministic function of its inputs, which is
@@ -15,13 +14,12 @@ carries - how long a run took - is reachable only through the
 :attr:`RunResult.duration_ms` and :attr:`RunResult.duration_s` properties and is
 deliberately absent from every ``as_dict`` projection.
 
-The one value the model rewrites is :data:`TRACEBACK_KEY`, the text an errored case
-carries: its absolute frame paths are folded into a portable form here, once, so no
-writer, evidence store or report can publish the clone or the machine a run happened
-in. The anchor a frame path is folded against is this module's own location, taken
-from ``__file__`` lexically and never resolved, so it is the one input here that depends
-on where the package sits - and it is used only to take that location back out of the
-text.
+The one value the model rewrites is :data:`TRACEBACK_KEY`, the text an errored case carries: its
+absolute frame paths are folded into a portable form here, once, so no writer, evidence store or
+report can publish the clone or the machine a run happened in. The anchor a frame path is folded
+against is this module's own location, taken from ``__file__`` lexically and never resolved, so it
+is the one input here that depends on where the package sits - and it is used only to take that
+location back out of the text.
 """
 
 import datetime
@@ -77,21 +75,19 @@ _DATE_SHAPED = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
 # that simply never matches an absolute frame path, which then takes the fallback rule.
 _PROJECT_ROOT: Final[str] = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
 
-# The fixed marker an absolute path outside this project is collapsed behind: a traceback
-# still names the module and the line that failed, without naming the clone or the machine
-# it ran on.
+# The fixed marker an absolute path outside this project is collapsed behind: a traceback still
+# names the module and the line that failed, without naming the clone or the machine it ran on.
 _PORTABLE_PATH_MARKER: Final[str] = "..."
 
 # One absolute path token inside free text: a leading "/" followed by at least two
 # non-empty segments. The leading slash may not follow a word character, "." or ":" or
 # "/", so the middle of a relative path, a dotted run already in the portable form
-# (".../json/decoder.py") and a URL ("http://host/path", whose first slash follows ":" and
-# whose second follows "/") are all left alone - which is what makes the rewrite
-# idempotent. An absolute path that a URL carries as a query value is folded like any
-# other, because the artefact must hold no absolute path at all and such a value can name
-# the clone just as a frame path can. A segment stops at whitespace, a quote, a comma, a
-# bracket or a colon, so the punctuation surrounding a path in a message is not swallowed
-# into it.
+# (".../json/decoder.py") and a URL ("http://host/path", whose first slash follows ":" and whose
+# second follows "/") are all left alone - which is what makes the rewrite idempotent. An absolute
+# path that a URL carries as a query value is folded like any other, because the artefact must hold
+# no absolute path at all and such a value can name the clone just as a frame path can. A segment
+# stops at whitespace, a quote, a comma, a bracket or a colon, so the punctuation surrounding a path
+# in a message is not swallowed into it.
 _PORTABLE_PATH_TOKEN = re.compile(
     r"(?<![\w.:/-])(/(?:[^\s/\"'`,;:()\[\]{}<>]+/)+[^\s/\"'`,;:()\[\]{}<>]+)"
 )
@@ -117,23 +113,20 @@ class Status(enum.StrEnum):
 class Reason(enum.StrEnum):
     """The machine-readable cause carried by every non-passing result.
 
-    A passing case carries ``reason is None``. No member describes a selection
-    failure or a corpus-filter failure: both are configuration conditions that end
-    the command with exit code 2 before any result exists, so they never reach this
-    model and need no word here.
+    A passing case carries ``reason is None``. No member describes a selection failure or a
+    corpus-filter failure: both are configuration conditions that end the command with exit code 2
+    before any result exists, so they never reach this model and need no word here.
 
-    The vocabulary is closed at thirteen members. Twelve are the ones the
-    specification fixes - ``unsupported_capability``, ``missing_dependency``,
-    ``unsupported_platform``, ``decoder_disagreement``, ``format_info_disagreement``,
-    ``target_rejected``, ``target_unavailable``, ``target_timeout``,
-    ``contract_error``, ``value_mismatch``, ``sampling_failed`` and
-    ``capacity_violation`` - each spelled exactly as it writes them, in that order.
-    The thirteenth, ``INTERNAL_ERROR``, is one accepted addition, and the
-    specification's own internal-fault state is why it exists: an exception raised by a
-    check or by the framework itself is contained as an ``error`` result carrying its
-    traceback while the run continues, every non-``passed`` result must carry a reason,
-    and none of the twelve describes a fault of the framework rather than a verdict on
-    the target.
+    The vocabulary is closed at thirteen members. Twelve are the ones the specification fixes -
+    ``unsupported_capability``, ``missing_dependency``, ``unsupported_platform``,
+    ``decoder_disagreement``, ``format_info_disagreement``, ``target_rejected``,
+    ``target_unavailable``, ``target_timeout``, ``contract_error``, ``value_mismatch``,
+    ``sampling_failed`` and ``capacity_violation`` - each spelled exactly as it writes them, in that
+    order. The thirteenth, ``INTERNAL_ERROR``, is one accepted addition, and the specification's own
+    internal-fault state is why it exists: an exception raised by a check or by the framework itself
+    is contained as an ``error`` result carrying its traceback while the run continues, every
+    non-``passed`` result must carry a reason, and none of the twelve describes a fault of the
+    framework rather than a verdict on the target.
 
     Adding a member is additive and safe for consumers that compare against the
     string value; renaming one changes the public surface that ``summary.json``,
@@ -188,9 +181,8 @@ class Counts:
     def from_results(cls, results: Iterable["CaseResult"]) -> "Counts":
         """Tally a sequence of results in a single pass.
 
-        Each result increments exactly one tally: an unknown status raises rather
-        than falling into a fifth bucket, so the four integers always sum to the
-        number of results they describe.
+        Each result increments exactly one tally: an unknown status raises rather than falling into
+        a fifth bucket, so the four integers always sum to the number of results they describe.
 
         Args:
             results: The results to tally, in any order.
@@ -239,24 +231,22 @@ class Counts:
 def failure_id(check_id: str, case_id: str, reason: Reason | str | None) -> str:
     """Return the identifier a failure is filed under, and its evidence directory.
 
-    This is the only definition of a failure ID in the product: the evidence store
-    and ``qrcheck.evidence.naming`` derive from it, so one failure has one name no
-    matter which writer or check produced it. The result is deterministic (same
-    inputs, same output, on every run and every machine), built without a clock,
-    ``hash()`` or a random source, and safe to use as a single path segment: every
-    character outside ``[A-Za-z0-9._-]`` has been replaced, which is what stops a
-    hostile case identifier from writing outside the report directory.
+    This is the only definition of a failure ID in the product: the evidence store and
+    ``qrcheck.evidence.naming`` derive from it, so one failure has one name no matter which writer
+    or check produced it. The result is deterministic (same inputs, same output, on every run and
+    every machine), built without a clock, ``hash()`` or a random source, and safe to use as a
+    single path segment: every character outside ``[A-Za-z0-9._-]`` has been replaced, which is what
+    stops a hostile case identifier from writing outside the report directory.
 
-    The replacement rule is not injective: two case identifiers that differ only in
-    the characters it replaces derive the same identifier and so name the same
-    evidence directory, as ``a b`` and ``a/b`` do. The case-identifier forms the
-    product produces - ``corpus:<record-id>``, whose record ids use only
-    ``[a-z0-9-]``, and the fixed ``synthetic:<name>`` literals - carry no replaced
-    character except the constant ``:`` separating the family from the name, so
-    distinct case identifiers always derive distinct identifiers. The digest suffix
-    is therefore reserved for the :data:`FAILURE_ID_MAX` truncation bound and is not
-    added for sanitation, because the derivation this function defines is a stable
-    public surface that the evidence store and ``qrcheck.evidence.naming`` derive from.
+    The replacement rule is not injective: two case identifiers that differ only in the characters
+    it replaces derive the same identifier and so name the same evidence directory, as ``a b`` and
+    ``a/b`` do. The case-identifier forms the product produces - ``corpus:<record-id>``, whose
+    record ids use only ``[a-z0-9-]``, and the fixed ``synthetic:<name>`` literals - carry no
+    replaced character except the constant ``:`` separating the family from the name, so distinct
+    case identifiers always derive distinct identifiers. The digest suffix is therefore reserved for
+    the :data:`FAILURE_ID_MAX` truncation bound and is not added for sanitation, because the
+    derivation this function defines is a stable public surface that the evidence store and
+    ``qrcheck.evidence.naming`` derive from.
 
     Args:
         check_id: The stable check identifier, such as ``RT-ROUNDTRIP``.
@@ -288,13 +278,12 @@ def failure_id(check_id: str, case_id: str, reason: Reason | str | None) -> str:
 class CaseResult:
     """One case's outcome, its evidence and the seed that reproduces it.
 
-    The ten fields are the public record shape that ``summary.json``, ``junit.xml``
-    and the HTML report all serialise, so their names and order are a stable surface
-    that only ever grows. ``request``, ``decoded`` and ``expected`` hold mappings that
-    are already JSON-ready - the caller projects a generate request and a decode result
-    into them - which is why this module imports neither the target port nor the decode
-    layer; that they really are mappings is enforced here, so a list or a scalar cannot
-    reach a serialisation whose schema fixes an object.
+    The ten fields are the public record shape that ``summary.json``, ``junit.xml`` and the HTML
+    report all serialise, so their names and order are a stable surface that only ever grows.
+    ``request``, ``decoded`` and ``expected`` hold mappings that are already JSON-ready - the caller
+    projects a generate request and a decode result into them - which is why this module imports
+    neither the target port nor the decode layer; that they really are mappings is enforced here, so
+    a list or a scalar cannot reach a serialisation whose schema fixes an object.
 
     One value is not stored as it was handed in: when ``decoded`` carries
     :data:`TRACEBACK_KEY` as a string, the absolute paths inside that text are rewritten
@@ -324,16 +313,15 @@ class CaseResult:
     def __post_init__(self) -> None:
         """Coerce the vocabulary and enforce the record's invariants.
 
-        A passing case carries no reason and no evidence directory (a run of a few
-        thousand cases writes evidence only for what went wrong), every other status
-        carries a reason, the request, decoded and expected payloads are mappings so
-        every artefact documents an object where its schema fixes one, a duration is a
-        finite non-negative number of milliseconds - a ``nan`` or an ``inf`` would reach
-        ``summary.json`` as a token JSON does not define - and an evidence directory is a
-        non-empty relative posix path, so no artefact records an absolute location and
-        none names the report root itself. The traceback an errored case carries is
-        rewritten into a portable form here, at the one point where every artefact's value
-        of it is created, so no writer has to remember to do it.
+        A passing case carries no reason and no evidence directory (a run of a few thousand cases
+        writes evidence only for what went wrong), every other status carries a reason, the request,
+        decoded and expected payloads are mappings so every artefact documents an object where its
+        schema fixes one, a duration is a finite non-negative number of milliseconds - a ``nan`` or
+        an ``inf`` would reach ``summary.json`` as a token JSON does not define - and an evidence
+        directory is a non-empty relative posix path, so no artefact records an absolute location
+        and none names the report root itself. The traceback an errored case carries is rewritten
+        into a portable form here, at the one point where every artefact's value of it is created,
+        so no writer has to remember to do it.
 
         Raises:
             ValueError: ``status`` or ``reason`` is outside its enum, the status and
@@ -401,12 +389,11 @@ class CaseResult:
     def as_dict(self) -> dict[str, Any]:
         """Return the ten-key projection every report writer serialises.
 
-        The mappings are returned as given, not copied or coerced: a value that is
-        not JSON-serialisable must fail loudly in the writer rather than be silently
-        stringified here, where the defect would be invisible. The one exception is the
-        text field :meth:`__post_init__` normalised - ``decoded[TRACEBACK_KEY]`` comes
-        back with its absolute paths already rewritten, so no artefact can carry one,
-        while every other value is untouched.
+        The mappings are returned as given, not copied or coerced: a value that is not
+        JSON-serialisable must fail loudly in the writer rather than be silently stringified here,
+        where the defect would be invisible. The one exception is the text field
+        :meth:`__post_init__` normalised - ``decoded[TRACEBACK_KEY]`` comes back with its absolute
+        paths already rewritten, so no artefact can carry one, while every other value is untouched.
         """
         return {
             "check_id": self.check_id,
@@ -426,19 +413,17 @@ class CaseResult:
 class RunResult:
     """One run of the suite: its identity, its tallies and every case result.
 
-    ``results`` is stored sorted by ``(check_id, case_id)``. That is what makes
-    ``summary.json`` and ``junit.xml`` present the same order by construction,
-    instead of relying on two writers to agree by hand, and it makes two runs of the
-    same selection comparable element by element. That pair is also a case's identity,
-    so it appears at most once: a repeated pair would give two rows one failure ID and
-    one evidence directory, the second overwriting the first.
+    ``results`` is stored sorted by ``(check_id, case_id)``. That is what makes ``summary.json`` and
+    ``junit.xml`` present the same order by construction, instead of relying on two writers to agree
+    by hand, and it makes two runs of the same selection comparable element by element. That pair is
+    also a case's identity, so it appears at most once: a repeated pair would give two rows one
+    failure ID and one evidence directory, the second overwriting the first.
 
-    ``run_id`` is a content hash computed by the runner over the run's parameters;
-    this model validates it and refuses a UUID or a timestamp, but never invents an
-    identity of its own. The two timestamps are parsed once, here, and compared with
-    each other, so no consumer re-parses them, the duration costs nothing to read, and
-    a run that reports finishing before it started is refused instead of being
-    published with a negative duration.
+    ``run_id`` is a content hash computed by the runner over the run's parameters; this model
+    validates it and refuses a UUID or a timestamp, but never invents an identity of its own. The
+    two timestamps are parsed once, here, and compared with each other, so no consumer re-parses
+    them, the duration costs nothing to read, and a run that reports finishing before it started is
+    refused instead of being published with a negative duration.
 
     Raises:
         ValueError: a field breaks one of the invariants enforced by
@@ -460,14 +445,13 @@ class RunResult:
     def __post_init__(self) -> None:
         """Sort the results and enforce the run's invariants.
 
-        The counts are recomputed from the results and compared with the supplied
-        tallies, which is the model-level guard that no outcome - a skip above all -
-        was folded into another bucket on its way here. Sorting by ``(check_id,
-        case_id)`` puts a repeated pair side by side, so the same pass proves that every
-        case appears once. The two timestamps are compared as well, because a run that
-        finished before it started would be published with a negative duration in the
-        HTML header and summed into the JUnit suite time; identical timestamps stay
-        legal, since a run may take no measurable time.
+        The counts are recomputed from the results and compared with the supplied tallies, which is
+        the model-level guard that no outcome - a skip above all - was folded into another bucket on
+        its way here. Sorting by ``(check_id, case_id)`` puts a repeated pair side by side, so the
+        same pass proves that every case appears once. The two timestamps are compared as well,
+        because a run that finished before it started would be published with a negative duration in
+        the HTML header and summed into the JUnit suite time; identical timestamps stay legal, since
+        a run may take no measurable time.
 
         Raises:
             ValueError: ``run_id`` is empty, UUID-shaped or timestamp-shaped; a
@@ -599,12 +583,11 @@ def _validate_run_id(run_id: str) -> None:
 def _portable_decoded(decoded: Mapping[str, Any]) -> Mapping[str, Any]:
     """Return ``decoded`` with the traceback it carries made portable to any clone.
 
-    Only :data:`TRACEBACK_KEY` is considered, and only when it holds a string: that text
-    is the single field an absolute filesystem path reaches an artefact through, because
-    every frame of a Python traceback names its source file absolutely. The mapping itself
-    is returned - the same object - when there is nothing to rewrite, so an error result
-    without a traceback, an empty mapping and an already-portable traceback all keep
-    exactly what the caller supplied.
+    Only :data:`TRACEBACK_KEY` is considered, and only when it holds a string: that text is the
+    single field an absolute filesystem path reaches an artefact through, because every frame of a
+    Python traceback names its source file absolutely. The mapping itself is returned - the same
+    object - when there is nothing to rewrite, so an error result without a traceback, an empty
+    mapping and an already-portable traceback all keep exactly what the caller supplied.
 
     Args:
         decoded: The decoded-or-error evidence mapping a caller supplied.
@@ -632,10 +615,9 @@ def _portable_traceback_text(text: str) -> str:
     ``qrcheck/x.py``) or an installed copy (``<site-packages>/qrcheck/x.py`` ->
     ``qrcheck/x.py``). Any other absolute token keeps its last two segments behind
     :data:`_PORTABLE_PATH_MARKER`, which still names the module that failed
-    (``/usr/lib/python3.11/json/decoder.py`` -> ``.../json/decoder.py``). The result is
-    the same on every clone and every machine, so ``decoded.json`` stays byte-identical
-    for the same case and seed, and the rewrite is idempotent: a second pass finds no
-    token left to rewrite.
+    (``/usr/lib/python3.11/json/decoder.py`` -> ``.../json/decoder.py``). The result is the same on
+    every clone and every machine, so ``decoded.json`` stays byte-identical for the same case and
+    seed, and the rewrite is idempotent: a second pass finds no token left to rewrite.
     """
     return _PORTABLE_PATH_TOKEN.sub(_portable_token, text)
 

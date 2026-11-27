@@ -25,11 +25,13 @@ __all__ = [
 
 from collections.abc import Callable
 from dataclasses import dataclass
-
-import numpy
+from typing import TYPE_CHECKING
 
 from qrcheck.config.seeding import derive_seed
 from qrcheck.corpus import capacity
+
+if TYPE_CHECKING:  # Annotations only: numpy is imported where a payload draw starts.
+    import numpy
 
 # ISO/IEC 18004 Table 5: the alphanumeric character set in the standard's order --
 # ten digits, twenty-six uppercase letters, then nine symbols, 45 in all. A lowercase letter
@@ -164,17 +166,18 @@ def mode_of(payload: bytes) -> str:
     return "byte"
 
 
-def _rng(run_seed: int, class_name: str, index: int) -> numpy.random.Generator:
+def _rng(run_seed: int, class_name: str, index: int) -> "numpy.random.Generator":
     """Return the one generator a payload draw uses, keyed on its class and index."""
+    import numpy  # At its point of use: importing this module's class table must not need numpy.
     return numpy.random.Generator(numpy.random.PCG64(derive_seed(run_seed, class_name, index)))
 
 
-def _length(rng: numpy.random.Generator, low: int, high: int) -> int:
+def _length(rng: "numpy.random.Generator", low: int, high: int) -> int:
     """Return a seeded integer in ``low..high`` inclusive."""
     return int(rng.integers(low, high + 1))
 
 
-def _token(rng: numpy.random.Generator, alphabet: str, low: int, high: int) -> str:
+def _token(rng: "numpy.random.Generator", alphabet: str, low: int, high: int) -> str:
     """Return a seeded token of ``low..high`` characters drawn from ``alphabet``."""
     length = _length(rng, low, high)
     return "".join(alphabet[int(code)] for code in rng.integers(0, len(alphabet), length))
@@ -486,7 +489,7 @@ def _random_bytes(run_seed: int, index: int) -> PayloadDraft:
     """
     rng = _rng(run_seed, "random-bytes", index)
     length = _length(rng, 8, 64)
-    payload = rng.integers(0, 256, size=length, dtype=numpy.uint8).tobytes()
+    payload = rng.integers(0, 256, size=length, dtype="uint8").tobytes()
     return _content_draft("random-bytes", index, payload, f"{length} arbitrary byte values")
 
 

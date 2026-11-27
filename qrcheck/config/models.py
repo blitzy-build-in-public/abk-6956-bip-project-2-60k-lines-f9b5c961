@@ -24,10 +24,9 @@ from typing import Final, Literal, Mapping, get_args
 
 # ---------------------------------------------------------------------------
 # Vocabulary
-# Each ``Literal`` alias states a closed set once, and the runtime tuple beside
-# it is derived from that alias with ``get_args`` so no member name is written
-# twice.  ``qrcheck.config.schema`` validates against the tuples; the adapters
-# consume the same values.
+# Each ``Literal`` alias states a closed set once, and the runtime tuple beside it is derived from
+# that alias with ``get_args`` so no member name is written twice.  ``qrcheck.config.schema``
+# validates against the tuples; the adapters consume the same values.
 # ---------------------------------------------------------------------------
 
 # ``[targets.<name>] type``: the five kinds the target port is implemented by.
@@ -44,10 +43,9 @@ HttpMethod = Literal["GET", "POST"]
 # image, as base64 text or as the raw response body.
 ImageEncoding = Literal["base64", "raw"]
 
-# ``[render] svg_rasterizer``.  ``auto`` discovers in the documented order:
-# an importable ``cairosvg`` module first, then ``rsvg-convert``, ``resvg``,
-# ``magick`` and ``convert`` on ``PATH``; ``none`` disables rasterizing, which
-# makes RN-SVG report a skip rather than a pass.
+# ``[render]  svg_rasterizer``.  ``auto`` discovers in the documented order: an importable
+# ``cairosvg`` module first, then ``rsvg-convert``, ``resvg``, ``magick`` and ``convert`` on
+# ``PATH``; ``none`` disables rasterizing, which makes RN-SVG report a skip rather than a pass.
 SVGRasterizer = Literal[
     "auto",
     "cairosvg",
@@ -57,9 +55,8 @@ SVGRasterizer = Literal[
     "none",
 ]
 
-# The 13 capabilities an adapter may declare for itself.  These are member
-# names, not the adapter layer's enumeration, so this package stays free of any
-# import from ``qrcheck.targets``.
+# The 13 capabilities an adapter may declare for itself.  These are member names, not the adapter
+# layer's enumeration, so this package stays free of any import from ``qrcheck.targets``.
 CapabilityName = Literal[
     "png",
     "svg",
@@ -109,22 +106,20 @@ TEMPLATE_FIELDS: Final[tuple[str, ...]] = (
 # ---------------------------------------------------------------------------
 
 # The only hosts the framework may ever talk to.  This list is the product's
-# single outbound control -- an HTTP target is accepted only when its host is one
-# of these, which is what makes the tool verifiably offline rather than merely
-# configured to be -- so it is declared exactly once, here, and read by both
-# layers that enforce it: ``qrcheck.config.schema`` when a document is validated
-# and ``qrcheck.targets.http`` when an ``HTTPTarget`` is built without the
+# single outbound control -- an HTTP target is accepted only when its host is one of these, which is
+# what makes the tool verifiably offline rather than merely configured to be -- so it is declared
+# exactly once, here, and read by both layers that enforce it: ``qrcheck.config.schema`` when a
+# document is validated and ``qrcheck.targets.http`` when an ``HTTPTarget`` is built without the
 # loader.  Neither layer restates a host name, so the online/offline boundary
 # cannot widen in one place while staying closed in the other.
 LOOPBACK_HOSTS: Final[tuple[str, ...]] = ("127.0.0.1", "localhost", "::1")
 
 # ---------------------------------------------------------------------------
 # Threshold defaults
-# Each constant is the fallback for exactly one configuration key, used when
-# ``qrcheck.toml`` omits it, and is the one place the fallback is written down;
-# the effective value a run uses is that file's whenever it supplies the key.
-# ``qrcheck.config.schema`` builds its table from these names rather than
-# retyping the numbers.
+# Each constant is the fallback for exactly one configuration key, used when ``qrcheck.toml`` omits
+# it, and is the one place the fallback is written down; the effective value a run uses is that
+# file's whenever it supplies the key. ``qrcheck.config.schema`` builds its table from these names
+# rather than retyping the numbers.
 # ---------------------------------------------------------------------------
 
 DEFAULT_ADAPTER: Final[str] = "reference"  # default_adapter
@@ -156,26 +151,23 @@ DEFAULT_PERSPECTIVE_DEG: Final[float] = 10.0  # perspective_deg
 DEFAULT_DOWNSCALE_PX_PER_MODULE: Final[float] = 3.0  # downscale_px_per_module
 DEFAULT_LOGO_AREA_FRACTION: Final[float] = 0.15  # logo_area_fraction
 
-# [targets.<name>], common to every adapter kind.  The contrast floor defaults
-# to the ratio RN-CONTRAST asserts, so a target that declares nothing is still
-# held to the documented floor, and IV-BAD-OPTION reads that same declared value
-# to build a request measured below it.
+# [targets.<name>], common to every adapter kind.  The contrast floor defaults to the ratio
+# RN-CONTRAST asserts, so a target that declares nothing is still held to the documented floor, and
+# IV-BAD-OPTION reads that same declared value to build a request measured below it.
 DEFAULT_TIMEOUT_S: Final[float] = 30.0  # timeout_s
 DEFAULT_CONTRAST_FLOOR: Final[float] = 7.0  # contrast_floor
 
 # ---------------------------------------------------------------------------
 # Records
-# Frozen, so a resolved configuration cannot drift once the loader has built
-# it, and free of validation, so the single gate stays
-# ``qrcheck.config.schema.validate``.
+# Frozen, so a resolved configuration cannot drift once the loader has built it, and free of
+# validation, so the single gate stays ``qrcheck.config.schema.validate``.
 # ---------------------------------------------------------------------------
 
-# ``MappingProxyType({})`` is deliberately not written inline as a field
-# default: ``dataclasses`` rejects a default whose class is unhashable, and a
-# mapping proxy has ``__hash__ = None``.  The factory hands every record the
-# same read-only empty mapping instead.  For the same reason a record that
-# carries a mapping compares field-wise but cannot be hashed, which no caller
-# needs: targets are looked up by name, never keyed by their record.
+# ``MappingProxyType({})`` is deliberately not written inline as a field default: ``dataclasses``
+# rejects a default whose class is unhashable, and a mapping proxy has ``__hash__ =  None``.  The
+# factory hands every record the same read-only empty mapping instead.  For the same reason a record
+# that carries a mapping compares field-wise but cannot be hashed, which no caller needs: targets
+# are looked up by name, never keyed by their record.
 _EMPTY_MAPPING: Final[Mapping[str, str]] = MappingProxyType({})
 
 

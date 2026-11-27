@@ -9,11 +9,10 @@ that closes it: an :exc:`OSError` naming the path, raised before anything is cre
 link's target empty and a linked destination's file byte for byte unchanged.
 
 It holds the guarantees the refusal must not cost, too: the two checks are independent, so a link
-the component scan does not see is still refused by the real-path comparison; a relative report
-root and a report root that is itself a symlink (the operator's own choice) both still record; a
-normal record writes exactly the closed artefact set under ``evidence/<CHECK-ID>/<failure-id>`` and
-returns that relative posix path; and a passed result still returns ``None`` having written nothing
-.
+the component scan does not see is still refused by the real-path comparison; a relative report root
+and a report root that is itself a symlink (the operator's own choice) both still record; a normal
+record writes exactly the closed artefact set under ``evidence/<CHECK-ID>/<failure-id>`` and returns
+that relative posix path; and a passed result still returns ``None`` having written nothing .
 """
 
 import json

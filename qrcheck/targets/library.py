@@ -11,11 +11,10 @@ anywhere in the package.
 (``"module:Factory.build"``) whose segments are each walked.  The module is resolved **lazily**,
 on the first :meth:`LibraryAdapter.generate`, so constructing an adapter costs nothing and it is
 ``qrcheck doctor``'s single probe generate, not the constructor, that proves the path exists.  A
-missing module or a missing attribute raises :class:`TargetUnavailable`, the one trigger that
-error has; any other exception the module's own import body raises is a defect in the target
-module rather than a missing import path, so it is left unconverted and propagates to the
-runner, which records an ``error`` result with its traceback instead of misattributing it to an
-unreachable target.
+missing module or a missing attribute raises :class:`TargetUnavailable`, the one trigger that error
+has; any other exception the module's own import body raises is a defect in the target module rather
+than a missing import path, so it is left unconverted and propagates to the runner, which records an
+``error`` result with its traceback instead of misattributing it to an unreachable target.
 
 ``kwargs_map`` maps a framework field name to the callable's keyword-argument name, the framework
 field vocabulary being exactly the field list of :class:`GenerateRequest` read from the dataclass
@@ -46,16 +45,15 @@ framework considers valid -- instead of appearing to crash.  Any other exception
 callable becomes :class:`TargetContractError` carrying ``"<ExceptionType>: <text>"``, so a target
 bug is reported as a target bug.
 
-The configured ``targets.<name>.timeout_s`` is a real ceiling on the call, not a recorded
-number: :func:`_call_with_watchdog` invokes the callable once on a daemon thread and waits at
-most that many seconds for it, and no answer by then raises :class:`TargetTimeout` naming the
-configured timeout, the callable and the adapter -- the same treatment ``cli`` gives the key with
-``subprocess.run(timeout=...)`` and ``http`` with ``httpx.Timeout``.  A call inside this
-interpreter has no process boundary, socket or pipe to interrupt, so a timed-out call **keeps
-running in the background with its result discarded**: the framework never joins it again, and
-being a daemon thread it cannot hold the process open.  One thread per call inside one
-still-sequential pass adds no component, no check runs concurrently, and nothing about a run's
-ordering or determinism changes.
+The configured ``targets.<name>.timeout_s`` is a real ceiling on the call, not a recorded number:
+:func:`_call_with_watchdog` invokes the callable once on a daemon thread and waits at most that many
+seconds for it, and no answer by then raises :class:`TargetTimeout` naming the configured timeout,
+the callable and the adapter -- the same treatment ``cli`` gives the key with
+``subprocess.run(timeout=...)`` and ``http`` with ``httpx.Timeout``.  A call inside this interpreter
+has no process boundary, socket or pipe to interrupt, so a timed-out call **keeps running in the
+background with its result discarded**: the framework never joins it again, and being a daemon
+thread it cannot hold the process open.  One thread per call inside one still-sequential pass adds
+no component, no check runs concurrently, and nothing about a run's ordering or determinism changes.
 
 Imports: the standard library, :mod:`qrcheck.config.models` for the record it is handed, and the
 shared helpers of :mod:`qrcheck.targets.base` -- no image library, no decoder and no generator
@@ -103,11 +101,10 @@ _REQUEST_FIELDS: Final[tuple[str, ...]] = tuple(
     field.name for field in fields(GenerateRequest)
 )
 
-# The capabilities a request is *inferable* to need, keyed by the request field
-# that asks for them.  ``png``/``svg`` come from ``output_format``; the rest are
-# the optional pins and overlays, which are ``None`` in an ordinary request and
-# therefore say positively that the operation was asked for.  ``ec_level`` and
-# the colours are deliberately absent: both are always present in a
+# The capabilities a request is *inferable* to need, keyed by the request field that asks for them.
+# ``png``/``svg`` come from ``output_format``; the rest are the optional pins and overlays, which
+# are ``None`` in an ordinary request and therefore say positively that the operation was asked for.
+# ``ec_level`` and the colours are deliberately absent: both are always present in a
 # :class:`GenerateRequest`, with defaults, so no request can ask for them here --
 # a check that needs them declares that in its own ``requires`` set, which is
 # what ``qrcheck/registry/resolve.py`` intersects with the declared capabilities.
@@ -117,16 +114,14 @@ _REQUEST_FIELDS: Final[tuple[str, ...]] = tuple(
 class LibraryAdapter:
     """Drive one configured in-process QR generator through the adapter port.
 
-    The port's three runtime members are all here: ``name`` and ``capabilities``
-    are what the registry and the runner read, and :meth:`generate` is what a
-    check calls.  The capability set is exactly the one the configuration
-    declares -- never a built-in superset -- because a shortfall against a
-    check's requirement has to become ``skipped``/``unsupported_capability``,
-    counted separately and never a pass, rather than a silent wrong assertion.
+    The port's three runtime members are all here: ``name`` and ``capabilities`` are what the
+    registry and the runner read, and :meth:`generate` is what a check calls.  The capability set is
+    exactly the one the configuration declares -- never a built-in superset -- because a shortfall
+    against a check's requirement has to become ``skipped``/``unsupported_capability``, counted
+    separately and never a pass, rather than a silent wrong assertion.
 
-    ``timeout_s`` bounds every call through the daemon-thread watchdog the module
-    docstring describes, so a hung generator costs one ``TargetTimeout`` rather
-    than the whole run.
+    ``timeout_s`` bounds every call through the daemon-thread watchdog the module docstring
+    describes, so a hung generator costs one ``TargetTimeout`` rather than the whole run.
     """
 
     def __init__(self, config: LibraryTarget, *, name: str | None = None) -> None:
@@ -255,11 +250,10 @@ class LibraryAdapter:
     def close(self) -> None:
         """Drop the cached callable; safe to call twice and after a failure.
 
-        The adapter holds no socket, file or child process, so closing releases
-        the resolved callable and nothing else.  A later :meth:`generate`
-        re-resolves it, which is what makes "close, then use again" behave like a
-        fresh adapter instead of raising: the runner closes every adapter once a
-        run ends, including one it closed after an error.
+        The adapter holds no socket, file or child process, so closing releases the resolved
+        callable and nothing else.  A later :meth:`generate` re-resolves it, which is what makes
+        "close, then use again" behave like a fresh adapter instead of raising: the runner closes
+        every adapter once a run ends, including one it closed after an error.
         """
         self._resolved = None
 
@@ -295,13 +289,12 @@ class LibraryAdapter:
         try:
             target: object = importlib.import_module(module_path)
         except (ImportError, AttributeError) as exc:
-            # Only a missing import path is the TargetUnavailable trigger: an absent
-            # module raises ModuleNotFoundError, and an attribute a module's own
-            # import statements need raises AttributeError.  Every other exception
-            # is a defect in the target module's import body rather than an
-            # unreachable target, so it is deliberately not converted: it
-            # propagates to the runner, which records the framework-defect ``error``
-            # result with its traceback.  The cause is quoted, never swallowed.
+            # Only a missing import path is the TargetUnavailable trigger: an absent module raises
+            # ModuleNotFoundError, and an attribute a module's own import statements need raises
+            # AttributeError.  Every other exception is a defect in the target module's import body
+            # rather than an unreachable target, so it is deliberately not converted: it propagates
+            # to the runner, which records the framework-defect ``error`` result with its traceback.
+            # The cause is quoted, never swallowed.
             raise TargetUnavailable(
                 f"{self._key} = {self.callable!r}: cannot import module "
                 f"{module_path!r} to resolve attribute {attribute_path!r} "
@@ -363,11 +356,10 @@ class LibraryAdapter:
 def _requested_capabilities(request: GenerateRequest) -> frozenset[Capability]:
     """Return the capabilities `request` itself asks for.
 
-    Only a field that positively asks for an operation can be read off a request:
-    the output format, and the version pin, mask pin, module size, quiet zone and
-    logo overlay, each of which is ``None`` unless the caller asked for it.  See
-    the module-level comment on the inference for why ``ec_level`` and the colours
-    are not among them.
+    Only a field that positively asks for an operation can be read off a request: the output format,
+    and the version pin, mask pin, module size, quiet zone and logo overlay, each of which is
+    ``None`` unless the caller asked for it.  See the module-level comment on the inference for why
+    ``ec_level`` and the colours are not among them.
 
     Returns:
         The capabilities to require before the call, empty for an ordinary
@@ -398,10 +390,9 @@ def _convert_call_failure(exc: Exception, key: str) -> TargetError:
         :class:`TargetRejected` carrying the text after a ``rejected:`` prefix, or
         :class:`TargetContractError` carrying ``"<ExceptionType>: <text>"``.
 
-    Only the whitespace separating the prefix from the message is removed: the
-    rest is the target's text verbatim, because ``IV-*`` checks record it in
-    ``decoded.rejection`` and every other check reports it as reason
-    ``target_rejected``.
+    Only the whitespace separating the prefix from the message is removed: the rest is the target's
+    text verbatim, because ``IV-*`` checks record it in ``decoded.rejection`` and every other check
+    reports it as reason ``target_rejected``.
     """
     text = str(exc)
     if text.startswith(_REJECTION_PREFIX):
@@ -448,10 +439,9 @@ def _call_with_watchdog(
             (``SystemExit``, ``KeyboardInterrupt``) is re-raised unchanged, as it
             would have been without the watchdog.
 
-    The worker is a **daemon** thread and cannot be cancelled: a call still
-    running when the wait expires keeps running in the background with its result
-    discarded, the framework never joins it again, and it cannot hold the process
-    open.
+    The worker is a **daemon** thread and cannot be cancelled: a call still running when the wait
+    expires keeps running in the background with its result discarded, the framework never joins it
+    again, and it cannot hold the process open.
     """
     holder: dict[str, object] = {}
 
@@ -497,9 +487,8 @@ def _checked_kwargs_map(
 ) -> tuple[tuple[str, str], ...]:
     """Return the kwarg mapping as pairs in :class:`GenerateRequest` field order.
 
-    The order is the request record's own field order rather than the TOML table's
-    insertion order, so the call a target receives is identical whatever order the
-    configuration lists its keys in.
+    The order is the request record's own field order rather than the TOML table's insertion order,
+    so the call a target receives is identical whatever order the configuration lists its keys in.
 
     Args:
         kwargs_map: Framework field name -> the callable's keyword argument name.

@@ -33,15 +33,14 @@ report directory is left empty:
 * a run prerequisite fails -- the corpus cannot be read, or the ``--class`` filter leaves no
   record (``RunPrerequisiteError``).
 
-Every fault found during or after the run is reported differently, because a report then
-exists or can exist, and exit code 3 outranks 1, which outranks 0. One or more ``failed``
-results with no ``error`` result is 1; any ``error`` result is 3; a run of ``passed`` and
-``skipped`` results alone is 0, because a skip is neither a failure nor a pass-flavoured
-outcome and is tallied in its own integer. A report directory that cannot be written is 3 as
-well, and is the one condition where the results the run did produce are streamed to stdout as
-one JSON object per line; a directory found unusable before a result existed leaves nothing to
-stream, which the diagnostic states, so a CI consumer is never left with an empty stream it
-cannot explain.
+Every fault found during or after the run is reported differently, because a report then exists or
+can exist, and exit code 3 outranks 1, which outranks 0. One or more ``failed`` results with no
+``error`` result is 1; any ``error`` result is 3; a run of ``passed`` and ``skipped`` results alone
+is 0, because a skip is neither a failure nor a pass-flavoured outcome and is tallied in its own
+integer. A report directory that cannot be written is 3 as well, and is the one condition where the
+results the run did produce are streamed to stdout as one JSON object per line; a directory found
+unusable before a result existed leaves nothing to stream, which the diagnostic states, so a CI
+consumer is never left with an empty stream it cannot explain.
 
 Two gaps in the documented interface, and how this module settles them
 ----------------------------------------------------------------------
@@ -220,15 +219,14 @@ def run(
         return EXIT_CONFIG
 
     # -- 5. the report directory, resolved once and carried on the config -----
-    # An override is held to the configuration's own path rule before anything is created,
-    # because the file and the option name the same key and a value the file refuses cannot
-    # become a report root merely by arriving on the command line. The rule and its wording
-    # have one owner -- the schema entry ``report_dir`` names -- so only the option's name is
-    # put in front of the fragment it returns: ``--report-dir ""`` is a bad invocation, exit 2,
-    # rather than ``Path("")`` resolving to the working directory and filling it with a report
-    # set. The same check refuses a NUL byte, which no filesystem call accepts and which
-    # ``Path.resolve`` answers with a ``ValueError`` rather than the ``OSError`` the exit-3
-    # contract below covers.
+    # An override is held to the configuration's own path rule before anything is created, because
+    # the file and the option name the same key and a value the file refuses cannot become a report
+    # root merely by arriving on the command line. The rule and its wording have one owner -- the
+    # schema entry ``report_dir`` names -- so only the option's name is put in front of the fragment
+    # it returns: ``--report-dir ""`` is a bad invocation, exit 2, rather than ``Path("")``
+    # resolving to the working directory and filling it with a report set. The same check refuses a
+    # NUL byte, which no filesystem call accepts and which ``Path.resolve`` answers with a
+    # ``ValueError`` rather than the ``OSError`` the exit-3 contract below covers.
     if report_dir is not None:
         fragment = SCHEMA[""]["report_dir"].check(report_dir)
         if fragment is not None:
@@ -266,24 +264,22 @@ def run(
         return EXIT_CONFIG
 
     # -- 7. the adapter, and the run -----------------------------------------
-    # ADAPTER_TYPES is the only factory table, and a lookup imports the one adapter module
-    # for this target kind: no concrete adapter is named in this file. That import is also
-    # where the kind's own library loads -- ``httpx`` for an ``http`` target -- so an
-    # unusable pinned distribution surfaces here too.
-    # Construction sits inside the exit-2 mapping, never above it. A constructor refuses a
-    # configuration that is wrong on its own terms but whose shape alone the schema can
-    # check: a ``kwargs_map`` naming a field the framework does not have, because that
-    # mapping's key vocabulary belongs to the adapter and not to the schema; a
-    # ``metadata_map`` beside a stdout-based ``returns``, which would read one stream twice;
-    # an http ``request_template`` carrying no payload placeholder. Each of these is exit code
-    # 2, named by its dotted key and decided before any check runs, and ``str(error)`` already
-    # reads "<dotted key>: <message>". A ``TargetError`` raised this early is the pre-flight
-    # availability fault, which carries that same code wherever it is found: an adapter that
-    # could not be built leaves no run to describe.
+    # ADAPTER_TYPES is the only factory table, and a lookup imports the one adapter module for this
+    # target kind: no concrete adapter is named in this file. That import is also where the kind's
+    # own library loads -- ``httpx`` for an ``http`` target -- so an unusable pinned distribution
+    # surfaces here too. Construction sits inside the exit-2 mapping, never above it. A constructor
+    # refuses a configuration that is wrong on its own terms but whose shape alone the schema can
+    # check: a ``kwargs_map`` naming a field the framework does not have, because that mapping's key
+    # vocabulary belongs to the adapter and not to the schema; a ``metadata_map`` beside a
+    # stdout-based ``returns``, which would read one stream twice; an http ``request_template``
+    # carrying no payload placeholder. Each of these is exit code 2, named by its dotted key and
+    # decided before any check runs, and ``str(error)`` already reads "<dotted key>: <message>". A
+    # ``TargetError`` raised this early is the pre-flight availability fault, which carries that
+    # same code wherever it is found: an adapter that could not be built leaves no run to describe.
     # An ``ImportError`` or ``OSError`` from that same import is an environment fault instead --
-    # exit 2 naming the distribution and ``requirements.lock``, through the product's one
-    # dependency probe -- and not the exit-3 internal error the re-raise leaves to
-    # ``qrcheck.cli.main`` for a fault no dependency explains.
+    # exit 2 naming the distribution and ``requirements.lock``, through the product's one dependency
+    # probe -- and not the exit-3 internal error the re-raise leaves to ``qrcheck.cli.main`` for a
+    # fault no dependency explains.
     adapter_obj: Adapter | None = None
     try:
         adapter_obj = ADAPTER_TYPES[str(target.type)](target, name=name)
@@ -552,4 +548,3 @@ def run_command(
         report_dir,
         config_path=resolve_config_path(ctx),
     )
-

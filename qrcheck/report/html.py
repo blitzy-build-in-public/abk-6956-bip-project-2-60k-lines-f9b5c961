@@ -1,15 +1,14 @@
 """The product's only human interface: one self-contained ``index.html`` per run.
 
-A person who opens this file has three questions - did the run pass, what failed, and
-can I see it - and the document answers them before they scroll, in the
-order: verdict and tallies, then degradation banners, then every case in one table - or
-the empty state when the run recorded no case at all - then a detail block per failure,
-then the skips, then how to reproduce a case. The three case sections are unconditional:
-the failures and the skipped section are always present, and a section whose set is empty
-says so in one fixed sentence rather than disappearing, so no reader has to infer an empty
-set from a missing heading. A failing or errored case gets its block even when the run could
-not write its evidence, because the request, the decoded-or-error outcome, the expected value
-and the seed all come from the result model - only the image area is then missing.
+A person who opens this file has three questions - did the run pass, what failed, and can I see it -
+and the document answers them before they scroll, in the order: verdict and tallies, then
+degradation banners, then every case in one table - or the empty state when the run recorded no case
+at all - then a detail block per failure, then the skips, then how to reproduce a case. The three
+case sections are unconditional: the failures and the skipped section are always present, and a
+section whose set is empty says so in one fixed sentence rather than disappearing, so no reader has
+to infer an empty set from a missing heading. A failing or errored case gets its block even when the
+run could not write its evidence, because the request, the decoded-or-error outcome, the expected
+value and the seed all come from the result model - only the image area is then missing.
 
 The file is self-contained by construction, which is what "opens with no server and no
 network" costs:
@@ -43,9 +42,8 @@ The document is a pure function of the :class:`~qrcheck.report.model.RunResult` 
 evidence bytes already on disk, so it is exactly as stable as the result model and no
 more. Nothing here reads a clock - the run's duration comes from
 :attr:`~qrcheck.report.model.RunResult.duration_s` - nothing formats through the locale,
-nothing prints or logs, every directory listing is sorted, and no timestamp, hostname,
-user name or absolute path is emitted. Two writes of the same run therefore produce
-byte-identical files.
+nothing prints or logs, every directory listing is sorted, and no timestamp, hostname, user name or
+absolute path is emitted. Two writes of the same run therefore produce byte-identical files.
 
 The only volatile content it carries is the duration the model already holds, which is
 why the report is compared semantically rather than byte for byte across runs. Writing
@@ -80,11 +78,10 @@ _STATUS_CLASSES: dict[str, str] = {
     Status.ERROR.value: "status-error",
 }
 
-# The statuses that get a detail block, evidence directory or not: the block's request,
-# outcome, expected and seed come from the model, so a case whose evidence could not be
-# written loses only its image. A skip is reported in its own section instead: it is a real
-# outcome that is never a pass, so it must not be filed with the failures a
-# reader triages.
+# The statuses that get a detail block, evidence directory or not: the block's request, outcome,
+# expected and seed come from the model, so a case whose evidence could not be written loses only
+# its image. A skip is reported in its own section instead: it is a real outcome that is never a
+# pass, so it must not be filed with the failures a reader triages.
 _DETAIL_STATUSES: tuple[Status, ...] = (Status.FAILED, Status.ERROR)
 
 # One plain sentence per machine-readable skip reason that can occur, in the order the
@@ -125,10 +122,9 @@ _IMAGE_DESCRIPTIONS: dict[str, str] = {
     LOGO_PNG: "the overlay bitmap the check composited onto the symbol",
 }
 
-# The decoder names a result's ``per_decoder`` map is keyed by. They are spelled here rather
-# than imported from :mod:`qrcheck.decode`, because this writer is a pure function of the
-# result model: it names the vocabulary it reads instead of depending on the layer that
-# produced it.
+# The decoder names a result's ``per_decoder`` map is keyed by. They are spelled here rather than
+# imported from :mod:`qrcheck.decode`, because this writer is a pure function of the result model:
+# it names the vocabulary it reads instead of depending on the layer that produced it.
 _PRIMARY_DECODER: str = "zxing"
 _SECONDARY_DECODER: str = "opencv"
 
@@ -194,10 +190,15 @@ a:focus-visible {
   outline-offset: 2px;
 }
 
-/* A link a reader clicks meets the 24x24 CSS px target size WCAG 2.2 AA asks for. */
+/* A link a reader clicks is a touch target: the 2.75rem minimum below is 44x44 CSS px at the
+   page's 16px root, clearing WCAG 2.2 AA's 24x24. `inline-flex` keeps the anchor an
+   inline-level box where the narrow-viewport rule turns the table's cells into blocks. */
 .evidence-link {
-  display: inline-block;
-  min-block-size: 1.5rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-block-size: 2.75rem;
+  min-inline-size: 2.75rem;
   padding-block: 0.125rem;
 }
 
@@ -476,13 +477,12 @@ footer {
 # that cannot be listed, which has no listing to be absent from.
 _NO_IMAGE: str = '<p class="no-image">no image recorded for this case</p>'
 
-# The paragraph a case section carries instead of its list when its set is empty. Both
-# sentences are fixed text - no count, no path and nothing this run measured - because the
-# page is a pure function of the results and the tallies and the results table are what
-# carry the outcome, so a section that restated a number would be a second source of truth
-# for it. A run with no failure and no skip
-# therefore says so in words rather than leaving a reader to infer it from two absent
-# sections, and neither sentence can be read as a pass.
+# The paragraph a case section carries instead of its list when its set is empty. Both sentences are
+# fixed text - no count, no path and nothing this run measured - because the page is a pure function
+# of the results and the tallies and the results table are what carry the outcome, so a section that
+# restated a number would be a second source of truth for it. A run with no failure and no skip
+# therefore says so in words rather than leaving a reader to infer it from two absent sections, and
+# neither sentence can be read as a pass.
 _NO_FAILURES: str = (
     '<p class="empty-state">No failures or errors in this run: no case recorded a failed or '
     "errored outcome, so there is no failing case to inspect.</p>"
@@ -589,11 +589,10 @@ def _render_document(run_result: RunResult, evidence_root: Path) -> str:
 def _render_header(run_result: RunResult) -> list[str]:
     """Render the verdict line, the run's identity and the four separate tallies.
 
-    The verdict is derived from the tallies and nothing else, and a run with skips is
-    never called a plain pass: ``run passed (skips present)`` keeps a skipped check from
-    reading as a pass. The four tallies are rendered as four figures rather than one total,
-    for the same reason. The duration comes from the model, so this writer reads no clock
-    of its own.
+    The verdict is derived from the tallies and nothing else, and a run with skips is never called a
+    plain pass: ``run passed (skips present)`` keeps a skipped check from reading as a pass. The
+    four tallies are rendered as four figures rather than one total, for the same reason. The
+    duration comes from the model, so this writer reads no clock of its own.
     """
     verdict, modifier = _verdict(run_result)
     counts = run_result.counts
@@ -668,11 +667,10 @@ def _render_banners(run_result: RunResult) -> list[str]:
     visible from the reason of a skipped result. Each banner states the consequence in
     words, so a reader is never left to infer a degradation from an empty column.
 
-    The missing-dependency banner names the skipped check IDs and no cause, because one
-    reason token that several different producers record cannot establish which prerequisite
-    was absent: a skip of that kind states which check it denied and leaves the missing
-    prerequisite to the evidence the skip recorded, which is the only place it is written
-    down.
+    The missing-dependency banner names the skipped check IDs and no cause, because one reason token
+    that several different producers record cannot establish which prerequisite was absent: a skip
+    of that kind states which check it denied and leaves the missing prerequisite to the evidence
+    the skip recorded, which is the only place it is written down.
     """
     banners: list[str] = []
     bearing, unanswered, primary_alone = _decoder_counts(run_result.results)
@@ -795,27 +793,25 @@ def _decoder_status(per_decoder: Mapping[object, object], decoder: str) -> str |
 def _render_table(run_result: RunResult, anchors: Mapping[int, str]) -> list[str]:
     """Render one row per result, in the model's stored order.
 
-    The status class separates the four outcomes by colour and the status word spells the
-    outcome out, so a skipped row is visibly distinct from a passed one without colour
-    being the only signal. The reason column carries the machine-readable value verbatim,
-    because that is the vocabulary a reader greps for. The evidence column is derived from
-    the model - a link to the case's block, an explicit statement that a directory was
-    recorded for a case reported elsewhere, or the em dash that means nothing was recorded
-    (:func:`_evidence_cell`) - so the page cannot contradict ``summary.json`` about a case
-    that persisted evidence. The section keeps ``id="results"`` and ``tabindex="-1"`` so a
-    link to the results takes the keyboard focus with it instead of leaving the reader's
-    focus on the link.
+    The status class separates the four outcomes by colour and the status word spells the outcome
+    out, so a skipped row is visibly distinct from a passed one without colour being the only
+    signal. The reason column carries the machine-readable value verbatim, because that is the
+    vocabulary a reader greps for. The evidence column is derived from the model - a link to the
+    case's block, an explicit statement that a directory was recorded for a case reported elsewhere,
+    or the em dash that means nothing was recorded (:func:`_evidence_cell`) - so the page cannot
+    contradict ``summary.json`` about a case that persisted evidence. The section keeps
+    ``id="results"`` and ``tabindex="-1"`` so a link to the results takes the keyboard focus with it
+    instead of leaving the reader's focus on the link.
 
     A run that recorded no result gets the empty state in place of the table rather than a
     table with only a header: there is no row to read, and a header-only table under four
     zero tallies would leave a reader nothing to contradict a conclusion that the suite
     passed. The paragraph says so in words, so the state does not rest on colour alone.
 
-    The table's structural elements also carry explicit ARIA roles. They are not redundant
-    with the native elements: the narrow-viewport rule sets ``display: block`` on the table
-    parts, which strips the roles a browser derives from them, so the row and column
-    association the caption, ``thead`` and ``th scope`` establish has to survive the collapse
-    explicitly.
+    The table's structural elements also carry explicit ARIA roles. They are not redundant with the
+    native elements: the narrow-viewport rule sets ``display: block`` on the table parts, which
+    strips the roles a browser derives from them, so the row and column association the caption,
+    ``thead`` and ``th scope`` establish has to survive the collapse explicitly.
     """
     if not run_result.results:
         return [
@@ -896,32 +892,29 @@ def _render_details(
 ) -> list[str]:
     """Render one block per failed or errored case, in the section that holds them.
 
-    The section is rendered whether or not it holds a block: a run with no failed and no
-    errored case states that in one fixed sentence (:data:`_NO_FAILURES`) instead of
-    omitting the heading, so an empty set is a statement a reader can read rather than an
-    absence to infer from the table.
+    The section is rendered whether or not it holds a block: a run with no failed and no errored
+    case states that in one fixed sentence (:data:`_NO_FAILURES`) instead of omitting the heading,
+    so an empty set is a statement a reader can read rather than an absence to infer from the table.
 
-    The block answers "can I see it": the recorded images inline as ``data:`` URIs, the
-    request that produced them, the decoded-or-error outcome and the seed, plus the one
-    command that re-runs the case at this run's adapter, EC level and seed. The
-    ``request.json`` panel renders the body :func:`_request_payload` composes - the case's
-    request projection with its identity envelope spread over it, which the artefact the
-    store writes carries too, though that artefact can hold more than the panel does (the
-    parameters its check resolved) - rather than the request alone, and both JSON panels are
-    built from the in-memory model through the canonical JSON formatter instead of read back
-    from the files on disk, which is what keeps this writer a pure function of the result it
-    is handed. Each block carries ``tabindex="-1"`` so a jump to it moves the keyboard focus
-    as well as the viewport.
+    The block answers "can I see it": the recorded images inline as ``data:`` URIs, the request that
+    produced them, the decoded-or-error outcome and the seed, plus the one command that re-runs the
+    case at this run's adapter, EC level and seed. The ``request.json`` panel renders the body
+    :func:`_request_payload` composes - the case's request projection with its identity envelope
+    spread over it, which the artefact the store writes carries too, though that artefact can hold
+    more than the panel does (the parameters its check resolved) - rather than the request alone,
+    and both JSON panels are built from the in-memory model through the canonical JSON formatter
+    instead of read back from the files on disk, which is what keeps this writer a pure function of
+    the result it is handed. Each block carries ``tabindex="-1"`` so a jump to it moves the keyboard
+    focus as well as the viewport.
 
     A case whose evidence could not be written still gets its block: the facts, the command
     and the panels are derived from the model, so the only part that degrades is the image
     area, which states that no image was recorded (:func:`_render_images`) rather than the
     block being withheld along with everything it carries.
 
-    Each JSON panel is marked ``dir="auto"``: the panels render payload text a target
-    supplied, so a payload in a right-to-left script would otherwise reorder the JSON
-    punctuation around it and could make the panel read as something other than what the
-    evidence says.
+    Each JSON panel is marked ``dir="auto"``: the panels render payload text a target supplied, so a
+    payload in a right-to-left script would otherwise reorder the JSON punctuation around it and
+    could make the panel read as something other than what the evidence says.
     """
     blocks: list[str] = []
     for index, case in enumerate(run_result.results):
@@ -1014,16 +1007,14 @@ def _render_images(evidence_root: Path, case: CaseResult) -> list[str]:
     Only the closed evidence set is rendered: a name in the fixed artefact list or a
     ``damage-<kind>-<seed>.png`` carrying a declared kind, which
     :func:`qrcheck.evidence.naming.is_evidence_artifact` decides once for the whole
-    product. An unknown file in the directory is ignored rather than published, because
-    this writer must not surface something the product never promised to write. An SVG
-    goes through a ``data:`` URI inside an image element too: that context is what makes a
-    target-supplied vector inert.
+    product. An unknown file in the directory is ignored rather than published, because this writer
+    must not surface something the product never promised to write. An SVG goes through a ``data:``
+    URI inside an image element too: that context is what makes a target-supplied vector inert.
 
-    Each figure's alternative text says what the image shows - the symbol the target returned,
-    its second call of the same request, a damaged variant or the composited overlay - and
-    which case it belongs to, while the caption underneath names the artefact; the two never
-    carry the same string, so an informative image is described once instead of being
-    announced twice.
+    Each figure's alternative text says what the image shows - the symbol the target returned, its
+    second call of the same request, a damaged variant or the composited overlay - and which case it
+    belongs to, while the caption underneath names the artefact; the two never carry the same
+    string, so an informative image is described once instead of being announced twice.
 
     The image area degrades rather than raising, but it says which of three facts it is
     reporting, because a reader triaging a failure reads this block to learn what the run
@@ -1189,16 +1180,15 @@ def _render_skipped(run_result: RunResult) -> list[str]:
 def _render_footer(run_result: RunResult) -> list[str]:
     """Render the closing note that says how to reproduce a single case.
 
-    The guiding sentence follows the results this run recorded. A run with at least one
-    result points the reader at the case's detail block and the rows of the table; a run
-    that recorded none says there is no row to re-run, so the page never sends a reader
-    looking for a row that does not exist. The command names this run's adapter, EC level and
-    run seed and leaves ``<CHECK-ID>`` as its only placeholder: an omitted ``--adapter`` or
-    ``--ec`` falls back to the configured default target and to EC level ``M``, and
-    ``--seed`` is the run seed, so a command naming none of them re-runs the configured
-    default target at the configured default seed instead of the run the results came from.
-    The command and the note about the two machine-readable files are the same on both
-    branches - they state this run's own parameters and the forms a machine reads - while the
+    The guiding sentence follows the results this run recorded. A run with at least one result
+    points the reader at the case's detail block and the rows of the table; a run that recorded none
+    says there is no row to re-run, so the page never sends a reader looking for a row that does not
+    exist. The command names this run's adapter, EC level and run seed and leaves ``<CHECK-ID>`` as
+    its only placeholder: an omitted ``--adapter`` or ``--ec`` falls back to the configured default
+    target and to EC level ``M``, and ``--seed`` is the run seed, so a command naming none of them
+    re-runs the configured default target at the configured default seed instead of the run the
+    results came from. The command and the note about the two machine-readable files are the same on
+    both branches - they state this run's own parameters and the forms a machine reads - while the
     guidance differs, because it describes what this run happened to record.
     """
     command = (
@@ -1230,9 +1220,8 @@ def _render_footer(run_result: RunResult) -> list[str]:
 def _detail_anchors(results: Sequence[CaseResult]) -> dict[int, str]:
     """Return the in-page anchor of each result that gets a detail block.
 
-    Keyed by the result's position in the stored order, so the table and the blocks cannot
-    disagree about which case an anchor names, and numbered ``ev-1`` to ``ev-N`` in that
-    same order.
+    Keyed by the result's position in the stored order, so the table and the blocks cannot disagree
+    about which case an anchor names, and numbered ``ev-1`` to ``ev-N`` in that same order.
 
     Every failed or errored case gets a block, whether or not it recorded an evidence
     directory: the block's request, decoded-or-error outcome, expected and seed are all
@@ -1285,9 +1274,8 @@ def _reason_text(reason: Reason | str | None) -> str:
 def _esc(value: object) -> str:
     """Return ``value`` as text that is safe to interpolate into the document.
 
-    Every dynamic value in this module passes through here, a case identifier a target
-    could have influenced included: the escape is the single textual boundary between
-    untrusted evidence and the report, so it is written once and reused rather than
-    re-implemented per fragment.
+    Every dynamic value in this module passes through here, a case identifier a target could have
+    influenced included: the escape is the single textual boundary between untrusted evidence and
+    the report, so it is written once and reused rather than re-implemented per fragment.
     """
     return html_escape(str(value), quote=True)

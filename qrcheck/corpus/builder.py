@@ -572,4 +572,3 @@ def _preview(value: object, limit: int = 60) -> str:
     if len(text) > limit:
         return text[: limit - 3] + "..."
     return text
-

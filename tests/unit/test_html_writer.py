@@ -126,6 +126,10 @@ _FIXED_VOCABULARY_CELLS: tuple[str, ...] = (
     'tbody td[data-label="Evidence"]',
 )
 
+# The touch target the page's links are held to, and the root font size a rem length resolves at.
+_TOUCH_TARGET_PX: int = 44
+_ROOT_FONT_PX: int = 16
+
 
 # The one sentence each case section states when its set is empty, held verbatim: they are
 # fixed text by contract - no count, no path, nothing this run measured - so a test that
@@ -414,6 +418,17 @@ def _declarations(stylesheet: str, selector: str) -> str:
         if selector in (part.strip() for part in rule.group("selectors").split(",")):
             return " ".join(rule.group("declarations").split())
     return ""
+
+
+def _declared_px(declarations: str, name: str) -> float:
+    """Return declaration ``name`` in px, converting a rem length at the page root.
+
+    Every box on the page is ``border-box``, so ``min-block-size``/``min-inline-size`` is the
+    rendered floor of that axis with its padding inside it.
+    """
+    match = re.search(rf"(?:^|; ){name}: ([0-9.]+)(rem|px)", declarations)
+    assert match is not None, f"{name} is not declared in {declarations!r}"
+    return float(match.group(1)) * (_ROOT_FONT_PX if match.group(2) == "rem" else 1)
 
 
 def _wrapping_selectors(stylesheet: str) -> set[str]:
@@ -1113,13 +1128,12 @@ def test_a_result_that_proves_no_degradation_carries_no_single_decoder_banner(
 ) -> None:
     """The banner is withheld from the shapes that prove nothing, one reason each.
 
-    The decoder shapes here differ from the degraded ones only in their statuses, which is why
-    they are held as one parametrised test: an artefact neither decoder could be shown, and a
-    primary that read no payload beside a secondary that could not run, both leave nothing for
-    the banner's sentence to state, because its claim is about a payload the primary decoder
-    corroborated alone. ``why`` names what each shape fails to prove. A result that records no
-    decoder map at all is skipped the same way, so the writer never fails over evidence it
-    knows how to do without.
+    The decoder shapes here differ from the degraded ones only in their statuses, which is why they
+    are held as one parametrised test: an artefact neither decoder could be shown, and a primary
+    that read no payload beside a secondary that could not run, both leave nothing for the banner's
+    sentence to state, because its claim is about a payload the primary decoder corroborated alone.
+    ``why`` names what each shape fails to prove. A result that records no decoder map at all is
+    skipped the same way, so the writer never fails over evidence it knows how to do without.
     """
     run = _run(dataclasses.replace(_passed_case(), decoded=decoded))
     document = _write_page(tmp_path, run)
@@ -1169,11 +1183,10 @@ def test_two_writes_of_one_run_are_byte_identical(tmp_path: Path) -> None:
 def test_each_failing_case_block_carries_its_own_reproduction_command(tmp_path: Path) -> None:
     """The block's command names its own check and the run's target, seed and EC level.
 
-    The two cases differ in their check ID, so a single constant command cannot satisfy
-    both, and the count at the end separates the two block commands from the footer's
-    placeholder one. Each block's command repeats the run's adapter, EC level and run seed,
-    because those are the values a copy has to carry to re-run a case of this run rather
-    than of the configured default target.
+    The two cases differ in their check ID, so a single constant command cannot satisfy both, and
+    the count at the end separates the two block commands from the footer's placeholder one. Each
+    block's command repeats the run's adapter, EC level and run seed, because those are the values a
+    copy has to carry to re-run a case of this run rather than of the configured default target.
     """
     cases = (
         _failed_case(_REQUEST),
@@ -1203,11 +1216,10 @@ def test_each_failing_case_block_carries_its_own_reproduction_command(tmp_path: 
 def test_the_command_carries_the_run_seed_not_the_case_s_derived_one(tmp_path: Path) -> None:
     """A derived case seed must not reach the command's run-seed slot.
 
-    ``DM-RESILIENCE`` derives each case's seed from the run seed, so passing that derived
-    value back into ``--seed`` re-derives every draw from the wrong root and reproduces a
-    different case than the page shows. The command carries the run seed, while the block's
-    ``seed`` fact keeps recording the case's own derived seed that the damage artefact is
-    named for.
+    ``DM-RESILIENCE`` derives each case's seed from the run seed, so passing that derived value back
+    into ``--seed`` re-derives every draw from the wrong root and reproduces a different case than
+    the page shows. The command carries the run seed, while the block's ``seed`` fact keeps
+    recording the case's own derived seed that the damage artefact is named for.
     """
     derived = 1617066119022174236
     failure = dataclasses.replace(_failed_case(_REQUEST), seed=derived)
@@ -1426,3 +1438,18 @@ def test_the_wrap_rule_stays_off_the_fixed_vocabulary_columns(
     document = _write_page(tmp_path, _run(_failed_case(_REQUEST)))
 
     assert selector not in _wrapping_selectors(_stylesheet(document))
+
+
+def test_the_evidence_link_clears_the_touch_target(tmp_path: Path) -> None:
+    """An evidence link is a pointer target, so its rule sizes the box past the touch target.
+
+    The link stays an inline-level box at every width - the narrow-viewport rule turns the
+    table's cells into blocks - so neither axis may rest on the width of the label's text, and
+    the label is centred in the box instead of pinned to its top.
+    """
+    document = _write_page(tmp_path, _run(_failed_case(_REQUEST)))
+    declarations = _declarations(_stylesheet(document), ".evidence-link")
+
+    assert _declared_px(declarations, "min-block-size") >= _TOUCH_TARGET_PX
+    assert _declared_px(declarations, "min-inline-size") >= _TOUCH_TARGET_PX
+    assert "align-items: center" in declarations

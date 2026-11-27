@@ -112,10 +112,9 @@ DEGRADATION_CLASS: Final[str] = "banner-single-decoder"
 DEGRADATION_LABEL: Final[str] = "degrad"
 
 # The selections every run in this module is bounded by: one corpus class and one check per run
-# keeps the module in the fast job while still exercising the real encode, the real decoders and
-# the real report writers. ``otp`` holds twelve ASCII records in the committed corpus and
-# both decoders read them, which is what makes the single-decoder and two-decoder runs
-# comparable.
+# keeps the module in the fast job while still exercising the real encode, the real decoders and the
+# real report writers. ``otp`` holds twelve ASCII records in the committed corpus and both decoders
+# read them, which is what makes the single-decoder and two-decoder runs comparable.
 
 #: The configuration file's name, beside the report root under ``tmp_path``.
 CONFIG_FILE_NAME: Final[str] = "qrcheck.toml"
@@ -727,16 +726,15 @@ def test_run_degrades_when_the_secondary_decoder_cannot_be_imported(
 
     ``module_absent`` above is the easy half of the secondary decoder's absence: ``find_spec``
     answers ``None``, the run resolves the secondary decoder as unavailable, and its name never
-    reaches ``per_decoder``. A
-    binding that is *installed* but cannot be imported is the half that looks different while
-    meaning the same thing -- the availability probe finds the module, so the run's resolution keeps
-    the decoder, and the decode pipeline's own probe is what discovers that it cannot be loaded. It
-    is therefore asked nothing and recorded as unavailable with its reason, rather than as a decoder
-    that ran and raised, so ``per_decoder`` still lists the primary decoder alone. Breaks if an
-    unimportable binding goes back to leaving a second ``per_decoder`` entry -- a consumer counting
-    entries would then read two decoders where one answered -- or if ``index.html`` goes silent
-    again for this shape, which is how a degraded run came to be indistinguishable from a fully
-    corroborated one.
+    reaches ``per_decoder``. A binding that is *installed* but cannot be imported is the half that
+    looks different while meaning the same thing -- the availability probe finds the module, so the
+    run's resolution keeps the decoder, and the decode pipeline's own probe is what discovers that
+    it cannot be loaded. It is therefore asked nothing and recorded as unavailable with its reason,
+    rather than as a decoder that ran and raised, so ``per_decoder`` still lists the primary decoder
+    alone. Breaks if an unimportable binding goes back to leaving a second ``per_decoder`` entry --
+    a consumer counting entries would then read two decoders where one answered -- or if
+    ``index.html`` goes silent again for this shape, which is how a degraded run came to be
+    indistinguishable from a fully corroborated one.
     """
     assert importlib.util.find_spec(SECONDARY_MODULE) is not None, (
         f"{SECONDARY_MODULE!r} is not installed in this environment, so the binding could not be "

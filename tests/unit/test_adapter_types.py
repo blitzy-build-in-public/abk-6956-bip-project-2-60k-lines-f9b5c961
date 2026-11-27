@@ -328,4 +328,3 @@ def test_the_capability_vocabulary_matches_the_configuration() -> None:
             f"the configured capability {name!r} does not convert to a Capability member of the "
             "same name"
         )
-

@@ -111,10 +111,9 @@ __all__ = [
     "relative_luminance",
 ]
 
-# WCAG 2.x relative luminance: the channel value is linearised at the 0.03928
-# knee and the three channels are weighted for human perception. These are the
-# numbers behind the ``contrast_floor`` target key and the ~3.5:1 request that
-# ``IV-BAD-OPTION`` expects a target to reject.
+# WCAG 2.x relative luminance: the channel value is linearised at the 0.03928 knee and the three
+# channels are weighted for human perception. These are the numbers behind the ``contrast_floor``
+# target key and the ~3.5:1 request that ``IV-BAD-OPTION`` expects a target to reject.
 _LINEARISATION_KNEE: Final = 0.03928
 _LINEARISATION_DIVISOR: Final = 12.92
 _LINEARISATION_OFFSET: Final = 0.055
@@ -221,18 +220,16 @@ def _linearise(channel: int) -> float:
 def relative_luminance(rgb: tuple[int, int, int]) -> float:
     """Return the WCAG 2.x relative luminance of an sRGB colour.
 
-    Each ``0-255`` channel is divided by 255, linearised at the ``0.03928`` knee
-    (``c / 12.92`` below it, ``((c + 0.055) / 1.055) ** 2.4`` above it) and
-    weighted ``0.2126 R + 0.7152 G + 0.0722 B``. Black is ``0.0`` and white is
-    ``1.0``.
+    Each ``0-255`` channel is divided by 255, linearised at the ``0.03928`` knee (``c / 12.92``
+    below it, ``((c + 0.055) / 1.055) ** 2.4`` above it) and weighted
+    ``0.2126 R + 0.7152 G + 0.0722 B``. Black is ``0.0`` and white is ``1.0``.
 
     This is the definition behind the ``contrast_floor`` target key and the
     ~``3.5:1`` request ``IV-BAD-OPTION`` builds against a declared floor:
     :func:`contrast_ratio` is the ratio those two numbers are measured in, and it
-    is built on this function. ``qrcheck/decode/matrix.py`` reduces colour with
-    the ITU-R BT.601 luma weights instead, which is a *different* quantity used
-    only for thresholding pixels -- the two must not be substituted for one
-    another.
+    is built on this function. ``qrcheck/decode/matrix.py`` reduces colour with the ITU-R BT.601
+    luma weights instead, which is a *different* quantity used only for thresholding pixels -- the
+    two must not be substituted for one another.
 
     Args:
         rgb: Three ``0-255`` integers.
@@ -257,17 +254,15 @@ def contrast_ratio(
 ) -> float:
     """Return the WCAG contrast ratio between a foreground and a background colour.
 
-    ``(lighter + 0.05) / (darker + 0.05)`` on the two relative luminances, so
-    black on white is ``21.0`` and identical colours are ``1.0``. The order of
-    the arguments does not matter: the ratio is symmetric, which is why an
-    inverted palette is measured exactly as a normal one.
+    ``(lighter + 0.05) / (darker + 0.05)`` on the two relative luminances, so black on white is
+    ``21.0`` and identical colours are ``1.0``. The order of the arguments does not matter: the
+    ratio is symmetric, which is why an inverted palette is measured exactly as a normal one.
 
-    This is the single implementation of the ratio. ``RN-CONTRAST`` measures a
-    rendered image's colours against it, the built-in targets reject a request
-    below the target's declared ``contrast_floor`` with it, and ``IV-BAD-OPTION``
-    relies on that rejection -- all three import this function rather than
-    re-deriving the formula, so the number a request is refused for and the number
-    a report records can never drift apart.
+    This is the single implementation of the ratio. ``RN-CONTRAST`` measures a rendered image's
+    colours against it, the built-in targets reject a request below the target's declared
+    ``contrast_floor`` with it, and ``IV-BAD-OPTION`` relies on that rejection -- all three import
+    this function rather than re-deriving the formula, so the number a request is refused for and
+    the number a report records can never drift apart.
 
     Args:
         foreground_rgb: The dark-module colour, three ``0-255`` integers.
@@ -316,11 +311,10 @@ def _request_colours(request: object) -> tuple[tuple[int, int, int], tuple[int, 
 def is_inverted_request(request: GenerateRequest) -> bool:
     """Report whether a request asks for a light-on-dark (inverted) symbol.
 
-    A request is inverted when its ``foreground_rgb`` is *lighter* than its
-    ``background_rgb``: the modules become the light pixels and the quiet zone
-    the dark ones. ``RN-CONTRAST``'s inverted cases are why this exists -- they
-    exercise a palette the pinned secondary decoder cannot detect at all, so the
-    pipeline has to know the polarity was inverted before it can normalise it.
+    A request is inverted when its ``foreground_rgb`` is *lighter* than its ``background_rgb``: the
+    modules become the light pixels and the quiet zone the dark ones. ``RN-CONTRAST``'s inverted
+    cases are why this exists -- they exercise a palette the pinned secondary decoder cannot detect
+    at all, so the pipeline has to know the polarity was inverted before it can normalise it.
 
     Args:
         request: The request the artefact was produced for.
@@ -340,12 +334,11 @@ def is_inverted_request(request: GenerateRequest) -> bool:
 def invert_image(image: numpy.ndarray) -> numpy.ndarray:
     """Return the 255-inverted copy of a ``uint8`` image array.
 
-    Polarity normalisation, not a decoder feature: the framework builds this copy
-    itself because ``zxing-cpp`` 2.2.0 exposes no inversion switch and OpenCV
-    4.10 cannot detect a light-on-dark symbol, so the second decode pass and the
-    grid sampling of an inverted request both read this array. Being a per-pixel
-    complement, it preserves every coordinate, so the corner quadrangle a decoder
-    reported for one polarity is valid for the other.
+    Polarity normalisation, not a decoder feature: the framework builds this copy itself because
+    ``zxing-cpp`` 2.2.0 exposes no inversion switch and OpenCV 4.10 cannot detect a light-on-dark
+    symbol, so the second decode pass and the grid sampling of an inverted request both read this
+    array. Being a per-pixel complement, it preserves every coordinate, so the corner quadrangle a
+    decoder reported for one polarity is valid for the other.
 
     Args:
         image: An ``H x W`` or ``H x W x 3`` ``uint8`` array.
@@ -384,12 +377,11 @@ def _looks_like_svg(raw: bytes) -> bool:
 def _grayscale_pixels(image: Image.Image) -> numpy.ndarray:
     """Return ``image`` as the single ``H x W`` ``uint8`` grayscale array decoded from.
 
-    An image that carries an alpha band -- an ``"A"`` among its bands, or a
-    ``transparency`` entry in its ``info``, which is how a palette image states its
-    alpha -- is composited over :data:`_RASTER_BACKDROP` and only then converted, so
-    a transparent pixel is measured as that backdrop rather than as the black zeroes
-    its band happens to store. Every other image is converted directly, which is the
-    same reduction without the composite.
+    An image that carries an alpha band -- an ``"A"`` among its bands, or a ``transparency`` entry
+    in its ``info``, which is how a palette image states its alpha -- is composited over
+    :data:`_RASTER_BACKDROP` and only then converted, so a transparent pixel is measured as that
+    backdrop rather than as the black zeroes its band happens to store. Every other image is
+    converted directly, which is the same reduction without the composite.
 
     One grayscale array is what both decoders read, so neither binding's
     three-channel order is ever exercised: ``zxing-cpp`` documents its three-byte
@@ -415,16 +407,15 @@ def _rasterize(image_bytes: bytes) -> numpy.ndarray:
     call: ``CL-ARTIFACTS`` asserts that the framework leaves nothing open, and an
     artefact this pipeline opened is the only kind it could be blamed for.
 
-    The artefact's dimensions are read from its header first, in an open that parses
-    the header and decodes no pixel, and two refusals happen before anything is
-    allocated per pixel. An image with no pixels at all is refused, and so is one
-    whose longer side is above :data:`_MAX_ARTEFACT_SIDE_PX`, because a
-    target-supplied artefact is untrusted and the grayscale and ``float64`` luminance
-    copies this pipeline builds grow with its pixel count: an unbounded dimension
-    would let a small compressed file exhaust the runner instead of producing the
-    recorded contract failure. :func:`_grayscale_pixels` then composites any alpha band
-    over an opaque backdrop, so a symbol on a transparent background is measured as
-    drawn rather than as its band's zeroes.
+    The artefact's dimensions are read from its header first, in an open that parses the header and
+    decodes no pixel, and two refusals happen before anything is allocated per pixel. An image with
+    no pixels at all is refused, and so is one whose longer side is above
+    :data:`_MAX_ARTEFACT_SIDE_PX`, because a target-supplied artefact is untrusted and the grayscale
+    and ``float64`` luminance copies this pipeline builds grow with its pixel count: an unbounded
+    dimension would let a small compressed file exhaust the runner instead of producing the recorded
+    contract failure. :func:`_grayscale_pixels` then composites any alpha band over an opaque
+    backdrop, so a symbol on a transparent background is measured as drawn rather than as its band's
+    zeroes.
 
     Args:
         image_bytes: The artefact exactly as the target returned it.
@@ -462,14 +453,12 @@ def _rasterize(image_bytes: bytes) -> numpy.ndarray:
     except _UnreadableRaster:
         raise
     except Exception as exc:  # target bytes must never abort a run
-        # Deliberately broad, and the only catch of this width in the module.
-        # Every way Pillow can refuse hostile or broken bytes -- UnidentifiedImageError,
-        # a truncated stream's OSError, a decompression-bomb guard -- must become one
-        # recorded outcome, because a check reports on a target's misbehaviour rather
-        # than dying of it. The library's own text is preserved so the cause stays
-        # diagnosable from decoded.json; only the run-varying object address is
-        # replaced, by _VOLATILE_ADDRESS, so the recorded evidence stays
-        # byte-identical across runs.
+        # Deliberately broad, and the only catch of this width in the module. Every way Pillow can
+        # refuse hostile or broken bytes -- UnidentifiedImageError, a truncated stream's OSError, a
+        # decompression-bomb guard -- must become one recorded outcome, because a check reports on a
+        # target's misbehaviour rather than dying of it. The library's own text is preserved so the
+        # cause stays diagnosable from decoded.json; only the run-varying object address is
+        # replaced, by _VOLATILE_ADDRESS, so the recorded evidence stays byte-identical across runs.
         raise _UnreadableRaster(
             "image bytes are not a raster image Pillow can open: "
             f"{type(exc).__name__}: {_VOLATILE_ADDRESS.sub('0x...', str(exc))}"
@@ -484,14 +473,13 @@ def _authoritative(
 ) -> tuple[Polarity, zxing.PrimaryReading]:
     """Return the polarity and the reading the authoritative payload came from.
 
-    The first polarity at which the primary decoder produced a payload wins,
-    original before inverted: a symbol as generated outranks its inverted copy, and
-    no decoder's inverted reading can become the authority. A payload of ``b""`` is
-    a payload: an empty symbol the decoder did read is a different fact from a
-    symbol it could not read, and the invalid-input checks depend on that
-    distinction. When neither polarity produced one, the original reading is
-    returned with ``"original"`` -- nothing was applied, and the field never claims
-    a polarity that recovered nothing.
+    The first polarity at which the primary decoder produced a payload wins, original before
+    inverted: a symbol as generated outranks its inverted copy, and no decoder's inverted reading
+    can become the authority. A payload of ``b""`` is a payload: an empty symbol the decoder did
+    read is a different fact from a symbol it could not read, and the invalid-input checks depend on
+    that distinction. When neither polarity produced one, the original reading is returned with
+    ``"original"`` -- nothing was applied, and the field never claims a polarity that recovered
+    nothing.
     """
     if original.outcome.payload is not None:
         return ("original", original)
@@ -507,14 +495,13 @@ def _merge_outcome(
 ) -> DecoderOutcome | None:
     """Merge one decoder's two polarity passes into the single outcome recorded.
 
-    The outcome recorded in ``per_decoder`` is the one carrying a payload when
-    only one polarity produced one. When both produced the same payload the merged
-    polarity is ``"both"``, which is what a decoder reading either palette reports
-    and what makes an inverted case's evidence self-explanatory. When the two
-    payloads differ -- which only a decoder reading two different symbols could
-    produce -- the pass at the polarity the authoritative payload came from is
-    kept, so the recorded answer never contradicts the authority; the other pass
-    remains visible through its own evidence of the polarity it was read at.
+    The outcome recorded in ``per_decoder`` is the one carrying a payload when only one polarity
+    produced one. When both produced the same payload the merged polarity is ``"both"``, which is
+    what a decoder reading either palette reports and what makes an inverted case's evidence
+    self-explanatory. When the two payloads differ -- which only a decoder reading two different
+    symbols could produce -- the pass at the polarity the authoritative payload came from is kept,
+    so the recorded answer never contradicts the authority; the other pass remains visible through
+    its own evidence of the polarity it was read at.
     """
     if original is None and inverted is None:
         return None
@@ -562,10 +549,9 @@ def _rectified(
 def _is_text_payload(payload: bytes, text: str | None) -> bool:
     """Report whether ``payload`` round-trips through UTF-8 as ``text``.
 
-    This is the predicate that decides whether the secondary decoder's text can
-    contradict the primary decoder's bytes at all; see the module docstring for
-    why a payload that fails it is recorded as ``primary_only`` with
-    ``secondary_comparable`` ``False``.
+    This is the predicate that decides whether the secondary decoder's text can contradict the
+    primary decoder's bytes at all; see the module docstring for why a payload that fails it is
+    recorded as ``primary_only`` with ``secondary_comparable`` ``False``.
     """
     if text is None:
         return False
@@ -580,17 +566,15 @@ def _secondary_comparable(
 ) -> bool | None:
     """Report whether the two answers could be compared, and if not, why not.
 
-    ``None`` means no comparison was attempted: the secondary decoder did not
-    run, found nothing or errored, or the primary decoder produced no payload.
-    ``True`` means both decoders answered and their payloads are comparable --
-    they are equal, or the primary payload round-trips through UTF-8, so the
-    secondary decoder's text could have contradicted it. ``False`` means both
-    answered with payloads that differ and that the text-only secondary decoder
-    cannot be held to, which is the one case in which :func:`_classify` declines
-    to report ``disagree``; the module docstring states why that refinement is
-    required. This predicate is the single derivation of the recorded
-    ``secondary_comparable`` field: :func:`_classify` consumes the same value
-    rather than deciding the question a second time.
+    ``None`` means no comparison was attempted: the secondary decoder did not run, found nothing or
+    errored, or the primary decoder produced no payload. ``True`` means both decoders answered and
+    their payloads are comparable -- they are equal, or the primary payload round-trips through
+    UTF-8, so the secondary decoder's text could have contradicted it. ``False`` means both answered
+    with payloads that differ and that the text-only secondary decoder cannot be held to, which is
+    the one case in which :func:`_classify` declines to report ``disagree``; the module docstring
+    states why that refinement is required. This predicate is the single derivation of the recorded
+    ``secondary_comparable`` field: :func:`_classify` consumes the same value rather than deciding
+    the question a second time.
     """
     if primary.payload is None or secondary is None or secondary.payload is None:
         return None
@@ -604,12 +588,11 @@ def _classify(
 ) -> tuple[Agreement, bool | None]:
     """Classify the two decoders' payloads, and report whether they were comparable.
 
-    ``undetected`` is a decoder finding no payload, never a disagreement. A
-    ``disagree`` verdict requires a secondary decoder that ran, two payloads that
-    actually differ, and a comparability of ``True`` -- a primary payload the
-    secondary decoder's text could have spoken about in the first place -- which
-    is the documented refinement, without which a conforming binary payload would
-    be reported as a disagreement.
+    ``undetected`` is a decoder finding no payload, never a disagreement. A ``disagree`` verdict
+    requires a secondary decoder that ran, two payloads that actually differ, and a comparability of
+    ``True`` -- a primary payload the secondary decoder's text could have spoken about in the first
+    place -- which is the documented refinement, without which a conforming binary payload would be
+    reported as a disagreement.
 
     Returns:
         The ``agreement`` value and, beside it, the ``secondary_comparable`` value
@@ -632,14 +615,13 @@ def _classify(
 def _secondary_consultation(secondary: bool | None) -> str | None:
     """Return why the secondary decoder cannot be consulted, or ``None`` when it can.
 
-    ``secondary=False`` is the run's own resolution that the decoder is unavailable, so
-    it is recorded as such without a probe; ``True`` and ``None`` both ask the binding
-    whether it loads, because a module present on ``sys.path`` is not necessarily one
-    that can be imported -- a shadowing module or an extension built for another
-    architecture answers ``find_spec`` and fails its import. A decoder that answers a
-    reason here is never asked anything, so nothing it would have produced reaches
-    ``per_decoder``: it is recorded as unavailable instead of as an outcome with
-    ``status == "error"``, which means a decoder that ran and raised.
+    ``secondary=False`` is the run's own resolution that the decoder is unavailable, so it is
+    recorded as such without a probe; ``True`` and ``None`` both ask the binding whether it loads,
+    because a module present on ``sys.path`` is not necessarily one that can be imported -- a
+    shadowing module or an extension built for another architecture answers ``find_spec`` and fails
+    its import. A decoder that answers a reason here is never asked anything, so nothing it would
+    have produced reaches ``per_decoder``: it is recorded as unavailable instead of as an outcome
+    with ``status == "error"``, which means a decoder that ran and raised.
     """
     if secondary is False:
         return opencv.RESOLUTION_ABSENT_TEXT
@@ -651,13 +633,12 @@ def _unreadable_result(
 ) -> DecodeResult:
     """Record bytes no decoder can be shown as ``undetected``, with the reason.
 
-    One ``error`` outcome is recorded per decoder that was consulted, so
-    ``decoded.json`` names the decoders and the reason in the same place a decoded
-    case names its payload, and the result's ``agreement`` stays ``undetected``
-    because no decoder found anything -- an unreadable artefact is not a
-    disagreement between two decoders that both ran. A decoder the run did not
-    consult is carried in ``unavailable_decoders`` instead, because it never saw
-    these bytes and so has nothing to record about them.
+    One ``error`` outcome is recorded per decoder that was consulted, so ``decoded.json`` names the
+    decoders and the reason in the same place a decoded case names its payload, and the result's
+    ``agreement`` stays ``undetected`` because no decoder found anything -- an unreadable artefact
+    is not a disagreement between two decoders that both ran. A decoder the run did not consult is
+    carried in ``unavailable_decoders`` instead, because it never saw these bytes and so has nothing
+    to record about them.
     """
     names: list[str] = [PRIMARY_DECODER]
     if secondary_ran:
@@ -704,19 +685,17 @@ def decode_symbol(
 ) -> DecodeResult:
     """Decode one artefact and return the single evidence object every check reads.
 
-    The steps are exactly the pipeline the module docstring describes, and nothing
-    else happens here: the bytes become arrays, the decoders run, the primary's
-    payload becomes authoritative, the grid and the format information are read,
-    the two answers are classified, and one :class:`DecodeResult` is assembled.
-    ``rejection`` and ``metrics`` are left empty because they belong to other
-    layers -- a declared rejection is recorded by the check that provoked it and
-    the performance probes fill ``metrics`` themselves.
+    The steps are exactly the pipeline the module docstring describes, and nothing else happens
+    here: the bytes become arrays, the decoders run, the primary's payload becomes authoritative,
+    the grid and the format information are read, the two answers are classified, and one
+    :class:`DecodeResult` is assembled. ``rejection`` and ``metrics`` are left empty because they
+    belong to other layers -- a declared rejection is recorded by the check that provoked it and the
+    performance probes fill ``metrics`` themselves.
 
-    Inversion is decided from the request, not from a decoder: a request whose
-    ``foreground_rgb`` is lighter than its ``background_rgb`` gets a second pass
-    over the 255-inverted copy with both decoders, and the grid is sampled from
-    that normalised copy, because sampling the light-on-dark array measures the
-    finder pattern's light ring as its dark run and would report a wrong module
+    Inversion is decided from the request, not from a decoder: a request whose ``foreground_rgb`` is
+    lighter than its ``background_rgb`` gets a second pass over the 255-inverted copy with both
+    decoders, and the grid is sampled from that normalised copy, because sampling the light-on-dark
+    array measures the finder pattern's light ring as its dark run and would report a wrong module
     count rather than no module count.
 
     Args:
@@ -770,11 +749,10 @@ def decode_symbol(
         opencv.read_secondary(gray, polarity="original") if secondary_ran else None
     )
 
-    # An inverted request is decoded twice, with both decoders, on the artefact as
-    # generated and on its 255-inverted copy: the framework owns polarity
-    # normalisation rather than relying on a decoder's inversion support, and the
-    # normalised copy is also what the grid is sampled from below. One inverted
-    # copy is built and both decoders and the sampler read it.
+    # An inverted request is decoded twice, with both decoders, on the artefact as generated and on
+    # its 255-inverted copy: the framework owns polarity normalisation rather than relying on a
+    # decoder's inversion support, and the normalised copy is also what the grid is sampled from
+    # below. One inverted copy is built and both decoders and the sampler read it.
     inverted_gray: numpy.ndarray | None = None
     primary_inverted: zxing.PrimaryReading | None = None
     secondary_inverted: opencv.SecondaryReading | None = None
@@ -846,4 +824,3 @@ def decode_symbol(
         secondary_comparable=secondary_comparable,
         unavailable_decoders=unavailable_decoders,
     )
-

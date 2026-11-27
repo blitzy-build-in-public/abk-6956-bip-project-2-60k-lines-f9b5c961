@@ -1040,4 +1040,3 @@ def test_write_summary_emits_exactly_the_model_projection(
     run = _build_run(make_case_result, make_run_result)
     payload = _write_and_load(_summary_path(report_dir), run)
     assert payload == run.as_dict()
-

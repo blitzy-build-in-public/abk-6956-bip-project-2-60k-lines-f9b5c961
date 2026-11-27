@@ -21,13 +21,14 @@ from typing import Any, Final
 
 import pytest
 
-from qrcheck.cli.exit import EXIT_CONFIG
+from qrcheck.cli.exit import EXIT_CONFIG, EXIT_OK
 from qrcheck.dependencies import LOCK_FILE
+from qrcheck.registry.check import CHECK_IDS
 from qrcheck.report import SUMMARY_FILENAME
 
-#: The core dependencies whose failure surfaces while the verbs register, as ``(distribution a
+#: The core dependencies whose absence refuses ``doctor`` and ``run``, as ``(distribution a
 #: reader installs, module the stub shadows)``; ``httpx`` is not here -- it loads only for ``http``.
-REGISTRATION_TIME_DEPENDENCIES: Final[tuple[tuple[str, str], ...]] = (
+REFUSING_DEPENDENCIES: Final[tuple[tuple[str, str], ...]] = (
     ("segno", "segno"),
     ("numpy", "numpy"),
     ("Pillow", "PIL"),
@@ -44,6 +45,11 @@ LOOPBACK_URL: Final[str] = "http://127.0.0.1:9/generate"
 
 #: How much of a process-level diagnostic a failure message quotes.
 DIAGNOSTIC_CHARS: Final[int] = 800
+
+#: The six keys ``doctor --json`` publishes: the output contract a CI consumer keys on.
+REPORT_KEYS: Final[tuple[str, ...]] = (
+    "adapter", "capabilities", "dependencies", "reachable", "svg_rasterizer", "type",
+)
 
 
 def config_for(
@@ -96,7 +102,7 @@ def assert_refusal(result: Any, distribution: str) -> None:
         )
 
 
-@pytest.mark.parametrize(("distribution", "module"), REGISTRATION_TIME_DEPENDENCIES)
+@pytest.mark.parametrize(("distribution", "module"), REFUSING_DEPENDENCIES)
 def test_both_verbs_refuse_an_unimportable_core_dependency(
     run_cli: Callable[..., Any],
     write_config: Callable[..., Path],
@@ -107,13 +113,22 @@ def test_both_verbs_refuse_an_unimportable_core_dependency(
 ) -> None:
     """``doctor`` and ``run`` exit 2 naming the distribution, and the run writes no report.
 
-    Breaks if the ``ImportError`` reaches the last-resort arm again -- exit 3 with a traceback is
-    what the review found -- or if the run completes, turning a broken install into results.
+    ``doctor`` states the verdict in its report too -- one entry, ``missing`` and blocking -- so a
+    CI consumer reading the six-key object finds it there. Breaks if the ``ImportError`` reaches the
+    last-resort arm again (exit 3 with a traceback is what the review found), if the report is never
+    emitted, or if the run completes, turning a broken install into results.
     """
     unimportable_module(module)
     config, report_dir = config_for(write_config, tmp_path)
 
-    assert_refusal(run_cli("doctor", "--json", config=config), distribution)
+    doctor = run_cli("doctor", "--json", config=config)
+    assert_refusal(doctor, distribution)
+    document = json.loads(doctor.stdout)
+    entries = [entry for entry in document["dependencies"] if entry["name"] == distribution]
+    assert sorted(document) == sorted(REPORT_KEYS), sorted(document)
+    assert len(entries) == 1, entries
+    assert sorted(entries[0]) == ["blocking", "name", "status", "version"], entries
+    assert entries[0]["status"] == "missing" and entries[0]["blocking"] is True, entries[0]
     result = run_cli(
         "run", "--adapter", REFERENCE_TARGET, "--checks", CONTROL_CHECK, config=config
     )
@@ -124,6 +139,24 @@ def test_both_verbs_refuse_an_unimportable_core_dependency(
     )
 
 
+def test_the_verbs_that_need_nothing_from_numpy_still_run(
+    run_cli: Callable[..., Any], write_config: Callable[..., Path],
+    unimportable_module: Callable[[str], Path], tmp_path: Path,
+) -> None:
+    """``list`` and ``loc`` run with numpy unimportable, while ``corpus build`` keeps refusing."""
+    unimportable_module("numpy")
+    config, _ = config_for(write_config, tmp_path)
+
+    listed = run_cli("list", "--json", config=config)
+    assert listed.exit_code == EXIT_OK, diagnostic(listed)
+    assert len(json.loads(listed.stdout)) == len(CHECK_IDS), diagnostic(listed)
+    counted = run_cli("loc", "--path", str(tmp_path), "--limit", "60000", config=config)
+    assert counted.exit_code == EXIT_OK, diagnostic(counted)
+    # Payload generation draws from numpy's PCG64 generator, so a build must keep refusing.
+    build = run_cli("corpus", "build", "--out", str(tmp_path / "corpus.jsonl"), config=config)
+    assert_refusal(build, "numpy")
+
+
 def test_a_module_that_raises_anything_but_ImportError_is_a_named_dependency_fault(
     run_cli: Callable[..., Any],
     write_config: Callable[..., Path],
@@ -132,9 +165,12 @@ def test_a_module_that_raises_anything_but_ImportError_is_a_named_dependency_fau
 ) -> None:
     """A pinned module that cannot even initialise still exits 2 naming it, not 3 with a traceback.
 
-    Two faults at once: the oracle's ``ImportError`` is the one the command line meets, and probing
-    the second pin raises ``RuntimeError`` from inside that very handler. Breaks if the probe lets
-    that fault escape, or if the diagnostic names only the first unusable dependency.
+    Two faults at once: the oracle's ``ImportError`` is the fault the probe finds first, and probing
+    the second pin raises ``RuntimeError`` from inside that very probe. ``doctor`` names every
+    unusable dependency it found, while a run's pre-flight refuses on the first one in table order,
+    the oracle before the libraries -- so the two verbs name different distributions, and neither
+    may answer with a traceback. Breaks if the probe lets that fault escape as exit 3, or if a run
+    that must refuse starts instead.
     """
     stub = unimportable_module("segno")
     (stub / "numpy.py").write_text(
@@ -146,7 +182,9 @@ def test_a_module_that_raises_anything_but_ImportError_is_a_named_dependency_fau
     result = run_cli(
         "run", "--adapter", REFERENCE_TARGET, "--checks", CONTROL_CHECK, config=config
     )
-    assert_refusal(result, "numpy")
+    # The refusal names the first unusable dependency in table order, which is the oracle; listing
+    # all of them is doctor's report to make.
+    assert_refusal(result, "segno")
     assert not list(report_dir.rglob(SUMMARY_FILENAME)), diagnostic(result)
 
 

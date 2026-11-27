@@ -36,10 +36,9 @@ __all__ = [
     "write_all_reports",
 ]
 
-# The three artefact names, spelled out here and nowhere else. A writer carrying its own copy, or
-# a caller re-deriving one, would be a second source of truth for a filename that machine
-# consumers and the three writer tests locate by name, so the names are a public surface of this
-# module.
+# The three artefact names, spelled out here and nowhere else. A writer carrying its own copy, or a
+# caller re-deriving one, would be a second source of truth for a filename that machine consumers
+# and the three writer tests locate by name, so the names are a public surface of this module.
 SUMMARY_FILENAME: str = "summary.json"
 JUNIT_FILENAME: str = "junit.xml"
 HTML_FILENAME: str = "index.html"

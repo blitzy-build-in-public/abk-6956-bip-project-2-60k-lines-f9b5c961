@@ -5,23 +5,23 @@ pipeline and one-authority rule of :mod:`qrcheck.decode.consensus`, the two deco
 module-grid sampler and the format-information reader. This module defines no type, helper or
 decoding step of its own, so there is no second implementation of any of them.
 
-Import cost is a contract: ``import qrcheck.decode`` loads the standard library, numpy and ``base``
-only -- never ``cv2``, ``zxingcpp`` or ``PIL`` -- and :func:`decode_symbol` imports the consensus
-pipeline inside its own body, so ``qrcheck list`` and ``qrcheck doctor`` pay for no native image
-stack and the single-decoder degradation path stays reachable. Nothing here raises, prints, writes
+Import cost is a contract: ``import qrcheck.decode`` loads the standard library and ``base`` only --
+never numpy, ``cv2``, ``zxingcpp`` or ``PIL`` -- and :func:`decode_symbol` imports the consensus
+pipeline inside its own body, so ``qrcheck list`` and ``qrcheck doctor`` pay for no image stack and
+the single-decoder degradation path stays reachable; ``Matrix`` alone is resolved lazily, by the
+``__getattr__`` below, because naming it is what imports numpy. Nothing here raises, prints, writes
 or decides an exit code: the blocking-versus-degrading split belongs to this package's consumers.
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from qrcheck.decode.base import (
     DECODER_ORDER,
     DecodeResult,
     DecoderAvailability,
     DecoderOutcome,
-    Matrix,
     ModuleCountEstimate,
     PRIMARY_DECODER,
     SECONDARY_DECODER,
@@ -50,6 +50,14 @@ __all__ = [
     "primary_available",
     "secondary_available",
 ]
+
+
+def __getattr__(name: str) -> Any:
+    """Re-export ``base.Matrix`` on first access -- naming it is what imports numpy."""
+    if name == "Matrix":
+        from qrcheck.decode.base import Matrix as matrix_type
+        return globals().setdefault("Matrix", matrix_type)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def decode_symbol(

@@ -1,14 +1,13 @@
 """The end-to-end proof: one command, five runs, one ceiling.
 
-``pytest -m e2e`` is the whole of the end-to-end proof. In one command this module builds the
-corpus and proves it has not drifted, consumes the five runs the session fixtures pay for --
-``reference`` and ``defective`` at EC M plus the 40-record boundary subset at L, Q and H --
-and asserts, from the artefacts those runs left on disk, that the sequence is five runs into
-five distinct report roots, that each root carries a parseable ``summary.json``,
-``junit.xml`` and ``index.html``, that ``reference`` failed nothing while ``defective``
-failed exactly the nine checks `SELF_CHECK_TARGETS` declares, that the five finished inside the
-600 000 ms ceiling, that every failing case's evidence and image are in the page, and that
-nothing was written into the repository.
+``pytest -m e2e`` is the whole of the end-to-end proof. In one command this module builds the corpus
+and proves it has not drifted, consumes the five runs the session fixtures pay for -- ``reference``
+and ``defective`` at EC M plus the 40-record boundary subset at L, Q and H -- and asserts, from the
+artefacts those runs left on disk, that the sequence is five runs into five distinct report roots,
+that each root carries a parseable ``summary.json``, ``junit.xml`` and ``index.html``, that
+``reference`` failed nothing while ``defective`` failed exactly the nine checks `SELF_CHECK_TARGETS`
+declares, that the five finished inside the 600 000 ms ceiling, that every failing case's evidence
+and image are in the page, and that nothing was written into the repository.
 
 It starts no run of its own, because a sixth ``run`` would break the budget this module
 asserts. Check and decoder behaviour, the HTML contract and each command's exit code are held
@@ -659,4 +658,3 @@ def test_nothing_was_written_into_the_repository(
         f"the repository's {_REPORTS_DIR}/ tree changed during the tier: added {added}, "
         f"removed {removed}; runtime artefacts stay under the temporary base"
     )
-

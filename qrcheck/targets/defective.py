@@ -79,14 +79,13 @@ _DEFECTIVE_QUIET_ZONE_MODULES: Final[int] = 1
 # D4: ISO/IEC 18004 §7.8 defines exactly eight mask patterns.
 _MASK_PATTERN_COUNT: Final[int] = 8
 
-# The capacity arithmetic is evaluated in byte mode, the most expensive way to carry a
-# character, so a payload clamped to this bound fits in every mode -- and because the level D1
-# encodes at (the requested one, or a step below it in the direction of more capacity) holds
-# at least as much data as the level this clamp is measured against, it fits that level too.
-# What a *request* may lawfully ask for is a different question, settled in the payload's own
-# mode by the port's build_request and the conforming target's own capacity rule. D5's clamp
-# is what reads this constant, and D2's window makes the same byte-mode choice inside
-# ``capacity.truncation_keeps_version``.
+# The capacity arithmetic is evaluated in byte mode, the most expensive way to carry a character, so
+# a payload clamped to this bound fits in every mode -- and because the level D1 encodes at (the
+# requested one, or a step below it in the direction of more capacity) holds at least as much data
+# as the level this clamp is measured against, it fits that level too. What a *request* may lawfully
+# ask for is a different question, settled in the payload's own mode by the port's build_request and
+# the conforming target's own capacity rule. D5's clamp is what reads this constant, and D2's window
+# makes the same byte-mode choice inside ``capacity.truncation_keeps_version``.
 _BYTE_MODE: Final[str] = "byte"
 
 # The nine check IDs this target must fail: the comparison target

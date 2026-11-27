@@ -430,10 +430,9 @@ def discover_svg_rasterizer(value: RenderConfig | str) -> RasterizerStatus:
 
     The product's only discovery implementation, read by both ``doctor`` and ``RN-SVG``, so the tool
     the run reports and the tool the check uses are one value, and a host with no rasterizer
-    degrades ``RN-SVG`` to ``skipped``/``missing_dependency``. An explicit value is honoured
-    exactly -- a silent substitution would make ``doctor`` report a tool the configuration never
-    named -- and ``auto`` probes :data:`SVG_RASTERIZER_AUTO_ORDER` in order, stopping at the first
-    hit.
+    degrades ``RN-SVG`` to ``skipped``/``missing_dependency``. An explicit value is honoured exactly
+    -- a silent substitution would make ``doctor`` report a tool the configuration never named --
+    and ``auto`` probes :data:`SVG_RASTERIZER_AUTO_ORDER` in order, stopping at the first hit.
 
     Raises:
         ValueError: The configured value is not one of
@@ -2457,9 +2456,8 @@ def _run_logo(ctx: RunContext, case_id: str, level: str, step: int) -> CaseResul
             return _translate(RN_LOGO, case_id, error, request, started)
 
     projection = request.as_dict()
-    # The overlay reached the target through a temporary file whose name must not reach an
-    # artefact (an absolute path may never reach an evidence file); the bitmap is persisted as
-    # ``logo.png``.
+    # The overlay reached the target through a temporary file whose name must not reach an artefact
+    # (an absolute path may never reach an evidence file); the bitmap is persisted as ``logo.png``.
     projection["logo_overlay_path"] = LOGO_PNG
     try:
         with _measure_artefact(symbol.image_bytes) as artefact:

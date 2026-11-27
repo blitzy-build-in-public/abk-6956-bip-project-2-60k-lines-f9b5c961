@@ -67,11 +67,10 @@ raised before anything is written: :exc:`ValueError` from this module or from
 repetition, an undeclared damage kind) or from :func:`qrcheck.report.json_report.dumps_canonical`
 for a non-finite float (``nan``, ``inf``, ``-inf``), which JSON defines no token for; and
 :exc:`TypeError` for a value the canonical writer cannot serialise or a non-bytes-like
-``image_bytes``. Each message names the offending value or the artefact at fault. Text UTF-8
-cannot encode is not one of them: the lone surrogate a target's JSON metadata can carry in is
-replaced with U+FFFD by the canonical formatter
-(:func:`qrcheck.report.json_report.make_utf8_encodable`), so it becomes a written artefact
-instead of costing the run the report that describes it. The third is
+``image_bytes``. Each message names the offending value or the artefact at fault. Text UTF-8 cannot
+encode is not one of them: the lone surrogate a target's JSON metadata can carry in is replaced with
+U+FFFD by the canonical formatter (:func:`qrcheck.report.json_report.make_utf8_encodable`), so it
+becomes a written artefact instead of costing the run the report that describes it. The third is
 :exc:`OSError`, raised two ways: before anything is created, when a component below
 ``report_dir`` or an artefact destination is a symlink or the case directory's real path leaves
 the report root -- the refusal naming the path it declined to write -- and when the directory or

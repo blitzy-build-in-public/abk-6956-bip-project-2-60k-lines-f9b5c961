@@ -900,4 +900,3 @@ def _verdict_line(notes: Sequence[_Note]) -> str:
 def doctor_command(ctx: click.Context, adapter: str | None, as_json: bool) -> int:
     """Verify the target and the local toolchain before any check runs."""
     return doctor(adapter, as_json, config_path=resolve_config_path(ctx))
-

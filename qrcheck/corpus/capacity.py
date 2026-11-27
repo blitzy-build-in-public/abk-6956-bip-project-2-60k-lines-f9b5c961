@@ -85,12 +85,11 @@ TOTAL_CODEWORDS: dict[int, int] = {
     40: 3706,
 }
 
-# ISO/IEC 18004 Table 9: the error-correction block structure, aggregated per
-# (version, level) into (blocks, ecc_codewords_per_block). Table 9 splits some levels
-# into two block groups whose block counts and codewords per block differ; the number
-# of error-correction codewords per block is identical across a level's groups, so the
-# aggregated pair loses nothing — blocks is the sum of the groups' block counts and
-# ecc_codewords_per_block is num_total - num_data of either group — and
+# ISO/IEC 18004 Table 9: the error-correction block structure, aggregated per (version, level) into
+# (blocks, ecc_codewords_per_block). Table 9 splits some levels into two block groups whose block
+# counts and codewords per block differ; the number of error-correction codewords per block is
+# identical across a level's groups, so the aggregated pair loses nothing — blocks is the sum of the
+# groups' block counts and ecc_codewords_per_block is num_total - num_data of either group — and
 # blocks * (data + ecc_per_block) summed over the groups equals TOTAL_CODEWORDS.
 ECC_BLOCKS: dict[int, dict[str, tuple[int, int]]] = {
     1: {"L": (1, 7), "M": (1, 10), "Q": (1, 13), "H": (1, 17)},
@@ -156,18 +155,16 @@ _CHAR_COUNT_BITS: dict[str, tuple[int, int, int]] = {
     "byte": (8, 16, 16),
 }
 
-# ISO/IEC 18004 §7.4: characters per bit in each mode, as an exact integer ratio
-# (characters, bits) — 3 digits per 10 bits, 2 alphanumeric characters per 11 bits,
-# 1 byte per 8 bits. Integer arithmetic keeps a boundary length exact; a float ratio
-# would make it depend on binary rounding.
+# ISO/IEC 18004 §7.4: characters per bit in each mode, as an exact integer ratio (characters, bits)
+# — 3 digits per 10 bits, 2 alphanumeric characters per 11 bits, 1 byte per 8 bits. Integer
+# arithmetic keeps a boundary length exact; a float ratio would make it depend on binary rounding.
 _PAYLOAD_RATIO: dict[str, tuple[int, int]] = {
     "numeric": (3, 10),
     "alphanumeric": (2, 11),
     "byte": (1, 8),
 }
 
-# ISO/IEC 18004 §7.4: every mode's indicator is 4 bits and precedes the character-count
-# indicator.
+# ISO/IEC 18004 §7.4: every mode's indicator is 4 bits and precedes the character-count indicator.
 _MODE_INDICATOR_BITS: int = 4
 
 

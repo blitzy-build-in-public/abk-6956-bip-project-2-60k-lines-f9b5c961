@@ -1211,4 +1211,3 @@ def test_contrast_ratio_matches_the_wcag_reference_values() -> None:
     assert consensus.contrast_ratio((0x88, 0x88, 0x88), white) == pytest.approx(3.54, abs=0.01), (
         "contrast ratio: #888888 on white must measure about 3.5:1"
     )
-

@@ -98,7 +98,7 @@ One subsection per check, in check-ID order. Every subsection carries the same s
 - **Requires** — the capability members of `Capability` (`qrcheck/targets/base.py`) the target must have declared for this check to be runnable. An unmet requirement is resolved before execution into `skipped` with reason `unsupported_capability`.
 - **Optional runtime dependency** — the `DEPENDENCY_*` token the check declared, resolved once per run into `RunContext.availability`. A missing optional tool degrades to a skip; the primary decoder is never optional, because a run without it exits before any check.
 - **Cases / encodes / decodes** — the row of the case matrix for one full run at error level M over the default 240-record corpus: the cases the check contributes, the `generate` invocations it makes and the decodes it performs.
-- **Evidence** — names drawn only from the closed artefact set (`request.json`, `decoded.json`, `symbol.png`, `symbol.svg`, `symbol-repeat.png`, `damage-<kind>-<seed>.png`, `logo.png`), plus the measurements `decoded.json` carries for that check.
+- **Evidence** — names drawn only from the closed artefact set (`request.json`, `decoded.json`, `symbol.png`, `symbol.svg`, `symbol-repeat.png`, `damage-<kind>-<seed>.png`, `logo.png`), plus the measurements `decoded.json` carries for that check. Not every key of `decoded.json` is a measurement: a case whose target returned a symbol also records the target's own metadata claim under `declared_version`, `declared_ec`, `declared_mask` and `declared_mode` — evidence only, never asserted, `null` for a field the target did not state and absent when no symbol came back — and the same four keys appear in the decoded projection that case's own record carries in `summary.json`, its JUnit failure body and its block on the page.
 - **Failure reasons** — the reasons this check's own assertion can produce. Every target-dependent check can *additionally* be skipped with `unsupported_capability`, fail with `target_rejected` when the target refuses a request the framework considers valid, fail with `contract_error` when the response is unusable, or receive one `synthetic:target` error with `target_unavailable` or `target_timeout` when the target is lost. Those five are properties of the shared translation in `qrcheck/checks/support.py` and of the runner, are stated once here rather than in eighteen rows, and a row names them again only where it changes the verdict.
 - **Reproduce** — the command that re-runs this check alone, so the reader can confirm the finding without re-running the suite. Add `--report-dir <path>` when you do not want the re-run to overwrite the original report, and `--class <glob>` to narrow a corpus-driven check to the records you care about.
 
@@ -625,7 +625,7 @@ The artefact set is closed. A check writes only these names:
 |----------|-----------|---------|
 | `request.json` | every case that writes evidence | The request in serializable form, plus `check_id`, `case_id` and `seed`. `out_of_contract: true` marks a deliberate `IV-*` probe, and a case's extra resolved facts — the damage kind and the thresholds actually applied, the quiet-zone request, the contrast request, the oracle digest — are merged in beside them. |
 | `symbol.png` / `symbol.svg` | every image-producing check | The artefact the target returned, byte for byte as received. |
-| `decoded.json` | every case that writes evidence | The decode projection plus the check's own measurements (8.2). |
+| `decoded.json` | every case that writes evidence | The decode projection, the target's own claim about the symbol it returned and the check's own measurements (8.2). |
 | `symbol-repeat.png` | `DT-DETERMINISTIC` only | The second call's artefact for the identical request — what makes a mask that changes between calls observable. |
 | `damage-<kind>-<seed>.png` | `DM-RESILIENCE`, `DM-SEEDED` | One per variant, with `<kind>` from the declared order and `<seed>` the decimal derived seed. |
 | `logo.png` | `RN-LOGO` only | The generated overlay bitmap that was composited, so the covered area can be re-measured. |
@@ -634,11 +634,13 @@ Both JSON files are written canonically: sorted keys, two-space indent, UTF-8 wi
 
 ### 8.2 What `decoded.json` always carries, and what each check adds
 
-Every `decoded.json` for a case that decoded a symbol is built on the canonical decode projection, so these fields are present whatever the check:
+Every `decoded.json` for a case that decoded a symbol has the same three parts — the canonical decode projection, the target's own claim about the symbol it returned, and the measurements the check's own assertion used. The projection is fixed, so these fields are present whatever the check:
 
 `per_decoder` (each decoder's `decoder`, `status`, `polarity`, `payload_sha256`, `reported_ec`, `reported_version`, `error_text`), `unavailable_decoders` (the reason a decoder the run did not consult could not be, `{}` when both were consulted), `polarity_applied`, `agreement`, `symbology_identifier`, `content_type`, `ec_level_decoder`, `ec_level_format`, `version`, `mask`, `matrix_sha256`, `secondary_comparable`, and `sampling` — `null` where no grid was sampled, otherwise the module-count estimate with its pitch, finder run, snap and timing-pattern transitions. `secondary_comparable` is `true` when both decoders answered and their payloads could be compared, `false` when they answered with differing payloads the text-only secondary decoder cannot be held to (so `agreement` stays `primary_only` by the refinement `architecture.md` records), and `null` when no comparison was attempted — the secondary decoder did not run, found nothing or errored, or the primary produced no payload. A case that only observed a rejection records the rejection text in place of the payload fields, and `CL-ARTIFACTS` records its own run-level observation instead of a decode.
 
-On top of that projection each check records the measurements its assertion used:
+The claim is the part of the file that is neither projection nor measurement: `declared_version`, `declared_ec`, `declared_mask` and `declared_mode` are what the target said about the symbol it returned, taken from its `GeneratedSymbol` as evidence only and never asserted, `null` for a field the target did not state, and absent altogether from a case whose target returned no symbol — a rejection, a contract error and a pre-execution skip claim nothing.
+
+On top of that projection and that claim each check records the measurements its assertion used:
 
 | Check | Fields to open first |
 |-------|---------------------|

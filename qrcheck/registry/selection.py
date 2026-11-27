@@ -275,9 +275,8 @@ def select(
     for token in selector.split(","):
         candidate = token.strip()
         if not candidate:
-            # A trailing or doubled comma is an empty token; it selects nothing anyone
-            # meant and dropping it keeps ``RT-ROUNDTRIP,`` usable while a real typo
-            # still names itself below.
+            # A trailing or doubled comma is an empty token; it selects nothing anyone meant and
+            # dropping it keeps ``RT-ROUNDTRIP,`` usable while a real typo still names itself below.
             continue
         hits = [
             contract

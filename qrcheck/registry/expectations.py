@@ -102,12 +102,11 @@ class ExpectationError(ValueError):
 
 # One immutable set per injection of qrcheck/targets/defective.py, holding every check identifier
 # that injection must make fail: the check designed to catch it plus any consequence the injection
-# declares unavoidable. Named after the injection so the two declarations can be read side by
-# side.
+# declares unavoidable. Named after the injection so the two declarations can be read side by side.
 # D1 secures the payload at one error-correction level below the request while declaring the
 # requested level. SY-EC-MATCH is the catch; SY-VERSION-MIN follows because a lower level fits a
-# boundary payload in a smaller version, and SY-MATRIX-EQUIV because a pinned-EC matrix cannot
-# match the oracle's.
+# boundary payload in a smaller version, and SY-MATRIX-EQUIV because a pinned-EC matrix cannot match
+# the oracle's.
 WRONG_EC_LEVEL_EXPECTED: Final[frozenset[str]] = frozenset(
     {"SY-EC-MATCH", "SY-VERSION-MIN", "SY-MATRIX-EQUIV"}
 )

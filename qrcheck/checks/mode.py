@@ -111,9 +111,8 @@ CHARSET_CLASSES: Final[tuple[str, ...]] = tuple(
 )
 
 # The encoding modes in increasing order of the charset each admits, mapped to the unit a payload
-# length is counted in (ISO/IEC 18004 §7.4: numeric and alphanumeric are character counts, byte
-# mode a byte count).  Sorted order is declaration order, so derived versions are emitted the same
-# way.
+# length is counted in (ISO/IEC 18004 §7.4: numeric and alphanumeric are character counts, byte mode
+# a byte count).  Sorted order is declaration order, so derived versions are emitted the same way.
 _MODE_ORDER: Final[Mapping[str, int]] = MappingProxyType(
     {"numeric": 0, "alphanumeric": 1, "byte": 2}
 )
@@ -549,9 +548,8 @@ def coverages_for_record(record: CorpusRecord) -> tuple[str, ...]:
     The declared mapping decides, with one predicate on top: ``four-byte-code-points`` needs a
     payload that really carries a code point of U+10000 or above, so a ``utf8-multibyte`` record
     whose widest code point is two or three bytes wide does not count toward it. Every other
-    coverage is a property
-    of the record's class. Empty for a class the mapping does not list, which the class list makes
-    unreachable for the records this check selects.
+    coverage is a property of the record's class. Empty for a class the mapping does not list, which
+    the class list makes unreachable for the records this check selects.
     """
     covered = [
         coverage

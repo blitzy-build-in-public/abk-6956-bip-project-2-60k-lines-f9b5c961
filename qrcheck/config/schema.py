@@ -622,12 +622,11 @@ RENDER: Final[Mapping[str, KeySpec]] = _group(
     ),
 )
 
-# [checks.performance]: PF-ENCODE and PF-DECODE read the values declared here.
-# Each default below is a ``models.DEFAULT_*`` fallback this table references by
-# name instead of restating the number; the effective value a run uses is the
-# committed ``qrcheck.toml``'s, so a floor is retuned in that file plus the
-# gate that reads it.  A count may be an integer only; a latency or a
-# throughput floor may be written either way and is cast to float by ``load.py``.
+# [checks.performance]: PF-ENCODE and PF-DECODE read the values declared here. Each default below is
+# a ``models.DEFAULT_*`` fallback this table references by name instead of restating the number; the
+# effective value a run uses is the committed ``qrcheck.toml``'s, so a floor is retuned in that file
+# plus the gate that reads it.  A count may be an integer only; a latency or a throughput floor may
+# be written either way and is cast to float by ``load.py``.
 PERFORMANCE: Final[Mapping[str, KeySpec]] = _group(
     KeySpec(
         "encode_p95_ms", (float, int), models.DEFAULT_ENCODE_P95_MS, _check_minimum(0, strict=True)
@@ -654,10 +653,9 @@ PERFORMANCE: Final[Mapping[str, KeySpec]] = _group(
 )
 
 # [checks.damage]: the eight thresholds DM-RESILIENCE, DM-SEEDED and RN-LOGO read.
-# ``occlusion_margin`` is bounded above *exclusively* at 0.10, so the safety margin
-# can never consume the whole documented L-level recovery capacity; the logo
-# fraction, the rotation and the perspective warp are bounded above inclusively at
-# the values the contract states.
+# ``occlusion_margin`` is bounded above *exclusively* at 0.10, so the safety margin can never
+# consume the whole documented L-level recovery capacity; the logo fraction, the rotation and the
+# perspective warp are bounded above inclusively at the values the contract states.
 DAMAGE: Final[Mapping[str, KeySpec]] = _group(
     KeySpec(
         "occlusion_margin",
@@ -706,12 +704,11 @@ DAMAGE: Final[Mapping[str, KeySpec]] = _group(
     ),
 )
 
-# Defaults for the two optional collection keys.  ``capabilities`` is declared as
-# an empty tuple and ``metadata_map`` as a read-only empty mapping, so the table
-# holds no mutable default and ``_materialise`` can hand each resolution a private
-# copy.  Only ``capabilities`` is reached from below: ``metadata_map`` is an
-# optional *per-type* key whose default each record in ``qrcheck.config.models``
-# already owns, so ``apply_defaults`` never fills it.
+# Defaults for the two optional collection keys.  ``capabilities`` is declared as an empty tuple and
+# ``metadata_map`` as a read-only empty mapping, so the table holds no mutable default and
+# ``_materialise`` can hand each resolution a private copy.  Only ``capabilities`` is reached from
+# below: ``metadata_map`` is an optional *per-type* key whose default each record in
+# ``qrcheck.config.models`` already owns, so ``apply_defaults`` never fills it.
 _EMPTY_CAPABILITIES: Final[tuple[str, ...]] = ()
 _EMPTY_MAPPING: Final[Mapping[str, str]] = MappingProxyType({})
 
@@ -785,10 +782,9 @@ SCHEMA: Final[Mapping[str, Mapping[str, KeySpec]]] = {
     "targets.*.defective": TARGET_DEFECTIVE,
 }
 
-# The non-scalar top-level names, and the children of [checks], derived from the
-# group paths of SCHEMA in their declared order.  ``targets`` is derived like the
-# others but walked separately, because its children are the target names the
-# document declares rather than names fixed here.
+# The non-scalar top-level names, and the children of [checks], derived from the group paths of
+# SCHEMA in their declared order.  ``targets`` is derived like the others but walked separately,
+# because its children are the target names the document declares rather than names fixed here.
 _TOP_LEVEL_TABLES: Final[tuple[str, ...]] = tuple(
     dict.fromkeys(path.split(".", 1)[0] for path in SCHEMA if path)
 )

@@ -134,17 +134,16 @@ def write_canonical_text(text: str, path: Path) -> Path:
     """Write canonical JSON ``text`` to ``path`` and return ``path``.
 
     Exactly one ``\\n`` is appended, so the file is UTF-8 with ``\\n`` line endings, no byte-order
-    mark and a single trailing newline: byte-identical across runs and platforms. The
-    parent directory is created when it is missing, and the text is encoded to UTF-8 before any
-    filesystem I/O, so a text UTF-8 cannot represent leaves no file at all rather than an empty or
-    truncated one. Reaching that refusal takes a caller assembling a text of its own: the canonical
-    formatter replaces every unencodable code point with U+FFFD before its text gets here
-    (:func:`make_utf8_encodable`), which is what a lone surrogate from a target needs. The bytes
-    are written directly rather than through a temporary file and a rename, because a temporary
-    file inside the report directory would be an artefact outside the closed evidence layout that
-    ``CL-ARTIFACTS`` inspects for. Filesystem errors propagate untouched:
-    ``qrcheck.cli.run`` is the single place that turns them into exit code 3, and the product has
-    no retry path.
+    mark and a single trailing newline: byte-identical across runs and platforms. The parent
+    directory is created when it is missing, and the text is encoded to UTF-8 before any filesystem
+    I/O, so a text UTF-8 cannot represent leaves no file at all rather than an empty or truncated
+    one. Reaching that refusal takes a caller assembling a text of its own: the canonical formatter
+    replaces every unencodable code point with U+FFFD before its text gets here
+    (:func:`make_utf8_encodable`), which is what a lone surrogate from a target needs. The bytes are
+    written directly rather than through a temporary file and a rename, because a temporary file
+    inside the report directory would be an artefact outside the closed evidence layout that
+    ``CL-ARTIFACTS`` inspects for. Filesystem errors propagate untouched: ``qrcheck.cli.run`` is the
+    single place that turns them into exit code 3, and the product has no retry path.
 
     ``text`` is written exactly as given -- nothing escaped, replaced, dropped or re-encoded -- and
     ``path`` is used as given, never resolved to an absolute path. Raises :exc:`UnicodeEncodeError`

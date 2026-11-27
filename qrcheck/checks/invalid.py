@@ -594,8 +594,7 @@ def _bad_option_accepted(
     Each probe breaks exactly one rule of the request contract, and a target that answers one with a
     symbol has accepted a request it had to refuse, so the case fails with
     ``Reason.VALUE_MISMATCH``. The symbol travels as evidence so a reader can see what was produced;
-    nothing about it is decoded,
-    because the finding is the acceptance, not the payload.
+    nothing about it is decoded, because the finding is the acceptance, not the payload.
     """
     decoded: dict[str, Any] = {
         "outcome": "accepted_symbol",
@@ -668,8 +667,7 @@ def _first_divergence_offset(requested: bytes, decoded: bytes | None) -> int | N
     """Return the offset at which `decoded` first stops matching `requested`.
 
     ``None`` when the two are identical or when nothing was decoded at all. When the decoded payload
-    is
-    a strict prefix of the requested one -- the signature of a target that truncated instead of
+    is a strict prefix of the requested one -- the signature of a target that truncated instead of
     rejecting -- the offset is the shorter length, which is the truncation point.
     """
     if decoded is None:

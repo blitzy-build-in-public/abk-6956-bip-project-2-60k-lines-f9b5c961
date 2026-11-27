@@ -9,13 +9,12 @@ a prerequisite only of a run that reads it -- a ``--class`` filter, or a check w
 drawn from the corpus -- because the prerequisite is conditioned on a corpus-driven check being
 selected, so a synthetic-only selection completes with no corpus file at all.
 
-Pinned: the forms are unioned, de-duplicated and returned sorted by identifier, asserted against
-a selector written in reverse order, because an order following the user's typing would break the
-determinism the sorted tuple promises; and a mistyped token raises :class:`SelectionError`
-carrying the selector as typed rather than being dropped, since a dropped token would stop a check
-running while the run still reported a clean pass. Registration is forced here --
-``qrcheck.registry`` leaves the registry empty on import -- so no grammar case can pass against a
-half-populated one.
+Pinned: the forms are unioned, de-duplicated and returned sorted by identifier, asserted against a
+selector written in reverse order, because an order following the user's typing would break the
+determinism the sorted tuple promises; and a mistyped token raises :class:`SelectionError` carrying
+the selector as typed rather than being dropped, since a dropped token would stop a check running
+while the run still reported a clean pass. Registration is forced here -- ``qrcheck.registry``
+leaves the registry empty on import -- so no grammar case can pass against a half-populated one.
 """
 
 from __future__ import annotations

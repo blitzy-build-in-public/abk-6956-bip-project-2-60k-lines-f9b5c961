@@ -228,7 +228,7 @@ What a target returns becomes a `GeneratedSymbol`, and three of its fields have 
 
 - `image_bytes` is the artefact **exactly as the target produced it** — never re-encoded, resized or repaired by the framework, so the image in the evidence directory is the one a failure is about.
 - `output_format` is the format actually produced, and it must match the request. A target that answers a `png` request with SVG bytes has broken its contract, and that is where it is caught.
-- `declared_version`, `declared_ec`, `declared_mask` and `declared_mode` are the target's own claim and are **evidence only, never the assertion**. `SY-VERSION-MIN` takes the version from the sampled module count, `SY-EC-MATCH` reads the error level from the primary decoder and from the symbol's format information, and `SY-MASK` reads the mask from the format information: a target that lies about its metadata is recorded as having lied, not believed.
+- `declared_version`, `declared_ec`, `declared_mask` and `declared_mode` are the target's own claim and are **evidence only, never the assertion**: the claim is recorded in `decoded.json` under those four names — with `null` for a field you did not state — and in the same four keys of that case's decoded projection in `summary.json`, its JUnit failure body and its block on the page. `SY-VERSION-MIN` takes the version from the sampled module count, `SY-EC-MATCH` reads the error level from the primary decoder and from the symbol's format information, and `SY-MASK` reads the mask from the format information: a target that lies about its metadata is recorded as having lied, not believed.
 
 ## 7. `metadata_map` and dotted paths
 

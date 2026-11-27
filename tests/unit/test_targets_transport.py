@@ -1163,4 +1163,3 @@ def test_an_artefact_that_grows_past_the_ceiling_while_read_is_refused(
     message = str(raised.value)
     assert "grew past" in message
     assert str(base_module._MAX_ARTEFACT_BYTES) in message
-

@@ -6,14 +6,13 @@ source of the *mask* and its second source of the *EC level*: ``zxing-cpp`` 2.2.
 version nor mask, ``opencv`` reports none of the three, yet ``SY-MASK``, ``SY-MATRIX-EQUIV`` and
 ``SY-EC-MATCH`` must assert all three, so a wrong reading here is wrong in three checks at once.
 
-Pinned: ISO/IEC 18004:2015(E) §7.9's BCH(15, 5) code with generator ``0x537``, codewords
-XOR-masked with ``0x5412`` and minimum distance 7, all 32 codewords generated rather than
-transcribed; ``2 * 3 < 7`` is why radius-three correction is unambiguous, so all 14560 three-bit
-corruptions come back as the original pair while a four-bit one never does; both copies are read
-and their distances reported rather than majority-voted; nothing raises, so a symbol defect
-becomes a failed check instead of an ``error`` result; and the placement convention is proved
-against a ``segno``-placed symbol, the one expectation this module cannot derive from its own
-table.
+Pinned: ISO/IEC 18004:2015(E) §7.9's BCH(15, 5) code with generator ``0x537``, codewords XOR-masked
+with ``0x5412`` and minimum distance 7, all 32 codewords generated rather than transcribed;
+``2 * 3 < 7`` is why radius-three correction is unambiguous, so all 14560 three-bit corruptions come
+back as the original pair while a four-bit one never does; both copies are read and their distances
+reported rather than majority-voted; nothing raises, so a symbol defect becomes a failed check
+instead of an ``error`` result; and the placement convention is proved against a ``segno``-placed
+symbol, the one expectation this module cannot derive from its own table.
 """
 
 from __future__ import annotations
@@ -630,4 +629,3 @@ def test_as_dict_projects_the_evidence_keys_exactly_once() -> None:
     )
     assert unreadable.as_dict()["copy_bit_errors"] == [None, 0]
     assert json.loads(json.dumps(unreadable.as_dict()))["copy_bit_errors"] == [None, 0]
-

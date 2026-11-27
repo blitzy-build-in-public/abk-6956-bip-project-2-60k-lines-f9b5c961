@@ -63,13 +63,12 @@ __all__ = [
     "unmet_dependencies",
 ]
 
-# The case identifier a pre-execution skip result is filed under.
-# One string, defined once, because three artefacts key on it: ``summary.json`` carries it as
-# ``case_id``, ``junit.xml`` renders it inside ``name="<CHECK-ID>[<case_id>]"`` and the runner
-# accumulates one such result per unrunnable check.  It is deliberately distinct from the runner's
-# own ``synthetic:target`` case identifier, which describes a *different* condition -- a target
-# that was reachable when the run started and then vanished -- so a reader can tell "this target
-# never promised this" from "this target broke".
+# The case identifier a pre-execution skip result is filed under. One string, defined once, because
+# three artefacts key on it: ``summary.json`` carries it as ``case_id``, ``junit.xml`` renders it
+# inside ``name="<CHECK-ID>[<case_id>]"`` and the runner accumulates one such result per unrunnable
+# check.  It is deliberately distinct from the runner's own ``synthetic:target`` case identifier,
+# which describes a *different* condition -- a target that was reachable when the run started and
+# then vanished -- so a reader can tell "this target never promised this" from "this target broke".
 CAPABILITY_CASE_ID: Final[str] = "synthetic:capability"
 
 # The only two reasons a resolution may skip a check with.  Anything else -- an unsupported
@@ -353,8 +352,7 @@ def _attempted_orders(
 ) -> dict[str, tuple[str, ...]]:
     """Return the discovery orders `attempted` describes, keyed by dependency token.
 
-    A token absent from the mapping has no order to record; a key outside the vocabulary is
-    refused.
+    A token absent from the mapping has no order to record; a key outside the vocabulary is refused.
 
     Raises:
         TypeError: `attempted` is not a mapping.
@@ -531,4 +529,3 @@ def skip_case_results(resolution: Resolution, seed: int) -> tuple[CaseResult, ..
         )
         for outcome in resolution.skipped
     )
-

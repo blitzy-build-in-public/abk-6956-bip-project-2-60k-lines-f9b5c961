@@ -27,8 +27,7 @@ layer builds, and ``EvidenceStore.record`` documents ``ValueError``, ``TypeError
 as its refusal modes -- a value it will not serialise, and a write that fails. The write fault is
 proven end to end through ``run`` in ``tests/unit/test_exit_codes.py``; the refusals a
 target-influenced value reaches are pinned here against the function itself, because each has to
-become one ``error`` result in the case's own place instead of an exception that aborts the walk
-.
+become one ``error`` result in the case's own place instead of an exception that aborts the walk .
 """
 
 from __future__ import annotations
@@ -132,10 +131,9 @@ def install_leaking_seam(monkeypatch: pytest.MonkeyPatch, entry: Path) -> CheckC
 
     The seam is a case of a selected ordinary check, so it runs inside the walk and before the
     witness -- exactly the position from which an entry can enter the run's own observation window.
-    The replacement goes into the module-private store, the way
-    ``tests/unit/test_exit_codes.py`` replaces a generator: the registry holds the contract built
-    at import, so patching the module attribute would change nothing the walk reads. Returns the
-    registered replacement.
+    The replacement goes into the module-private store, the way ``tests/unit/test_exit_codes.py``
+    replaces a generator: the registry holds the contract built at import, so patching the module
+    attribute would change nothing the walk reads. Returns the registered replacement.
     """
 
     def cases(context: RunContext) -> Iterator[Case]:

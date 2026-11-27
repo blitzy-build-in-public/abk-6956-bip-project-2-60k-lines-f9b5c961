@@ -6,10 +6,9 @@ invisible unless a pair of calls is compared.
 
 Two invocations of the **identical** request must agree on all three of the artefact's image bytes
 (``symbol_sha256`` per call), the sampled module matrix (``matrix_sha256``) and the mask read out of
-the
-15-bit format information. All three, because each catches what the others cannot: a byte comparison
-alone would pass a target whose writer is deterministic while the symbol it wrote was not, and the
-mask is the one value an encoder chooses freely per call.
+the 15-bit format information. All three, because each catches what the others cannot: a byte
+comparison alone would pass a target whose writer is deterministic while the symbol it wrote was
+not, and the mask is the one value an encoder chooses freely per call.
 
 Reasons emitted, and nothing else: ``Reason.VALUE_MISMATCH`` when a component that could be measured
 differs (``decoded["divergent"]`` names which), and ``Reason.SAMPLING_FAILED`` when nothing diverged
@@ -62,9 +61,8 @@ __all__ = [
 # path and JUnit testcase name this file produces.
 CHECK_ID: Final[str] = "DT-DETERMINISTIC"
 
-# The case-identifier prefix for a case the framework constructs rather than draws from the
-# corpus. ``checks/support.py`` owns the rule; this module only states the identifier it builds
-# with it.
+# The case-identifier prefix for a case the framework constructs rather than draws from the corpus.
+# ``checks/support.py`` owns the rule; this module only states the identifier it builds with it.
 _SYNTHETIC_PREFIX: Final[str] = "synthetic:"
 
 # The six payloads, one per case, in the order the case identifiers number them. Declared
@@ -351,4 +349,3 @@ def _elapsed_ms(started: float) -> float:
     reads it.
     """
     return (time.perf_counter() - started) * 1000.0
-

@@ -126,23 +126,21 @@ FAMILY_BY_PREFIX: Final[Mapping[str, str]] = MappingProxyType(
     }
 )
 
-# The runtime dependencies a check may declare, as tokens rather than module names.
-# A check declares *what it needs*, never *what provides it*: ``checks/*`` may not import a
-# decoder or the rasterizer's discovery logic, and each token's availability is resolved once per
-# run by the runner into :attr:`RunContext.availability`.
-# A missing primary decoder (zxing-cpp) blocks the run: ``qrcheck doctor`` and ``qrcheck run``
-# exit 2, naming zxing-cpp and the interpreter/platform, before any check runs, so
-# ``RT-ROUNDTRIP`` is never silently skipped. A check still declares
+# The runtime dependencies a check may declare, as tokens rather than module names. A check declares
+# *what it needs*, never *what provides it*: ``checks/*`` may not import a decoder or the
+# rasterizer's discovery logic, and each token's availability is resolved once per run by the runner
+# into :attr:`RunContext.availability`. A missing primary decoder (zxing-cpp) blocks the run:
+# ``qrcheck doctor`` and ``qrcheck run`` exit 2, naming zxing-cpp and the interpreter/platform,
+# before any check runs, so ``RT-ROUNDTRIP`` is never silently skipped. A check still declares
 # :data:`DEPENDENCY_PRIMARY_DECODER`, because that is the honest record of what it needs --
-# notably ``PF-DECODE`` and ``CL-ARTIFACTS``, which decode but need nothing from the target --
-# and resolution can never turn that record into a skip, because a run without the primary
-# decoder never reaches resolution.
-# Only two tools degrade. The secondary decoder (opencv) leaves the run in single-decoder mode,
-# reported as ``primary_only``. The SVG rasterizer makes ``RN-SVG`` report ``skipped`` with reason
-# ``missing_dependency`` and the discovery order it attempted.
-# The vocabulary is closed at three, one per runtime tool whose availability a check can depend
-# on. There is deliberately no token for the platform file-descriptor directory: a declared token
-# can only produce a whole-check ``missing_dependency`` skip, whereas ``CL-ARTIFACTS`` reports its
+# notably ``PF-DECODE`` and ``CL-ARTIFACTS``, which decode but need nothing from the target -- and
+# resolution can never turn that record into a skip, because a run without the primary decoder never
+# reaches resolution. Only two tools degrade. The secondary decoder (opencv) leaves the run in
+# single-decoder mode, reported as ``primary_only``. The SVG rasterizer makes ``RN-SVG`` report
+# ``skipped`` with reason ``missing_dependency`` and the discovery order it attempted. The
+# vocabulary is closed at three, one per runtime tool whose availability a check can depend on.
+# There is deliberately no token for the platform file-descriptor directory: a declared token can
+# only produce a whole-check ``missing_dependency`` skip, whereas ``CL-ARTIFACTS`` reports its
 # handle half per case as ``unsupported_platform`` while its temporary-file half still asserts.
 DEPENDENCY_PRIMARY_DECODER: Final[str] = "primary-decoder"
 DEPENDENCY_SECONDARY_DECODER: Final[str] = "secondary-decoder"
@@ -223,10 +221,9 @@ class RunContext:
     :func:`tempfile.gettempdir` that carried the framework's ``qrcheck-`` prefix when the runner
     took it, at the last instant before any check could run. The runner observes it through the
     check layer's own :func:`qrcheck.checks.cleanup.temp_entries`, and only ``CL-ARTIFACTS`` reads
-    it. A context built directly -- as a test does -- carries the empty
-    default, under which any prefixed entry present is reported as leaked: the safe direction for
-    a snapshot nobody took. The instance is frozen, so a check cannot change what another check
-    sees.
+    it. A context built directly -- as a test does -- carries the empty default, under which any
+    prefixed entry present is reported as leaked: the safe direction for a snapshot nobody took. The
+    instance is frozen, so a check cannot change what another check sees.
     """
 
     adapter: Adapter
@@ -558,4 +555,3 @@ def isolated_registry() -> Iterator[dict[str, CheckContract]]:
     finally:
         _REGISTRY.clear()
         _REGISTRY.update(snapshot)
-

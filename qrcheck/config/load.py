@@ -43,10 +43,9 @@ _PROBE_SUFFIX: Final[str] = ".tmp"
 _PROBE_CONTENT: Final[bytes] = b"qrcheck writability probe\n"
 
 # Which configuration record each ``type`` resolves to.  This is the *record* map of
-# the configuration package and is not the adapter factory map, which pairs a type
-# with the implementation that consumes these records: importing the adapter layer
-# from here would close a cycle, because that layer depends on this package for the
-# very records built below.
+# the configuration package and is not the adapter factory map, which pairs a type with the
+# implementation that consumes these records: importing the adapter layer from here would close a
+# cycle, because that layer depends on this package for the very records built below.
 _TARGET_CLASSES: Final[Mapping[str, type[models.TargetConfig]]] = MappingProxyType(
     {
         "library": models.LibraryTarget,
@@ -204,9 +203,8 @@ def _prepare_report_dir(report_dir: Path) -> None:
 # The document handed to these builders has already been validated, so every value
 # below is present and of its declared kind.  Values are coerced in exactly two ways:
 # * A number is cast to the type its record declares.  TOML spells a whole number
-#   as an integer, ``timeout_s = 30``, and the schema accepts either spelling for a
-#   float field, so this is the one place a number key becomes the ``float`` or the
-#   ``int`` its record holds.
+#   as an integer, ``timeout_s = 30``, and the schema accepts either spelling for a float field, so
+#   this is the one place a number key becomes the ``float`` or the ``int`` its record holds.
 # * A closed-vocabulary string is cast to the ``Literal`` alias that names its set,
 #   which records that the schema has already restricted it to a known member.
 # ---------------------------------------------------------------------------

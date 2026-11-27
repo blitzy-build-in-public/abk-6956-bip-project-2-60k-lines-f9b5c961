@@ -129,11 +129,10 @@ def read_secondary(
     try:
         decoded_info, points, straight_qrcode = module.QRCodeDetector().detectAndDecode(decodable)
     except Exception as exc:  # the closed error vocabulary of the pipeline
-        # Deliberate, and the only broad catch in this module: the consensus
-        # layer treats a secondary decoder's failure as absence, and an
-        # exception escaping here would abort a check that the primary decoder
-        # can still answer. The binding's own message is preserved verbatim so
-        # the cause stays diagnosable from evidence.
+        # Deliberate, and the only broad catch in this module: the consensus layer treats a
+        # secondary decoder's failure as absence, and an exception escaping here would abort a check
+        # that the primary decoder can still answer. The binding's own message is preserved verbatim
+        # so the cause stays diagnosable from evidence.
         return SecondaryReading(
             outcome=DecoderOutcome(
                 decoder=DECODER_NAME,
@@ -146,9 +145,8 @@ def read_secondary(
             )
         )
 
-    # ``reported_ec`` and ``reported_version`` are ``None`` in every outcome
-    # below: the binding exposes neither, so the absence is the evidence rather
-    # than a gap in the mapping.
+    # ``reported_ec`` and ``reported_version`` are ``None`` in every outcome below: the binding
+    # exposes neither, so the absence is the evidence rather than a gap in the mapping.
     position = _quad(points)
     rectified = _rectified(straight_qrcode)
     payload = _payload_from(decoded_info)

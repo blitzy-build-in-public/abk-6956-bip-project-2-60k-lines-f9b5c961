@@ -9,13 +9,12 @@ diagnosis, a shifted grid is a wrong answer.
 
 Every image is synthesised in-fixture, so the symbol's corners are handed to the sampler as its
 ``position`` quad and nothing here needs a decoder, the network, a subprocess or a file outside
-``tmp_path``. Pinned: the grid is the oracle's matrix at ``4V + 17``, Version 40 included,
-because snapping to 178 gives a grid one module too wide; illegal dimensions are refused rather
-than snapped; the finder dark run, its pitch, the snap and the timing confirmation are all
-measured; a refused count keeps its numbers for the evidence store; the ``straight_qrcode``
-fallback recovers the grid when no quadrangle exists; both paths failing gives ``None`` with
-``reason="sampling_failed"``; and sampling imports no decoder, so it survives single-decoder
-mode.
+``tmp_path``. Pinned: the grid is the oracle's matrix at ``4V + 17``, Version 40 included, because
+snapping to 178 gives a grid one module too wide; illegal dimensions are refused rather than
+snapped; the finder dark run, its pitch, the snap and the timing confirmation are all measured; a
+refused count keeps its numbers for the evidence store; the ``straight_qrcode`` fallback recovers
+the grid when no quadrangle exists; both paths failing gives ``None`` with
+``reason="sampling_failed"``; and sampling imports no decoder, so it survives single-decoder mode.
 """
 
 from __future__ import annotations
@@ -445,4 +444,3 @@ def test_sampling_imports_no_decoder() -> None:
     unexpected = sorted({name for name in imported if name not in _ALLOWED_SAMPLER_IMPORTS})
     assert unexpected == [], f"qrcheck.decode.matrix must import only {_ALLOWED_SAMPLER_IMPORTS}"
     assert "numpy" in imported, "the sampler works on numpy arrays, so it imports numpy"
-

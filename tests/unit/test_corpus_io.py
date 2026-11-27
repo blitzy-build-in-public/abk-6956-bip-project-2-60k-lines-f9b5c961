@@ -654,9 +654,8 @@ def test_each_boundary_class_separates_ec_l_from_ec_m_by_version(
 ) -> None:
     """A boundary payload needs a different minimal version at EC L and at EC M. That one-step
     difference is what makes the ``wrong_ec_level`` defect fail ``SY-VERSION-MIN`` as well as
-    ``SY-EC-MATCH``, so the witness is asserted per boundary class: a class whose payloads
-    stopped being boundary-length would leave that half of the expected failure set
-    unproducible.
+    ``SY-EC-MATCH``, so the witness is asserted per boundary class: a class whose payloads stopped
+    being boundary-length would leave that half of the expected failure set unproducible.
     """
     by_id = {record.id: record for record in records}
     for class_name in builder.BOUNDARY_CLASSES:

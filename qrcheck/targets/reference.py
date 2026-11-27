@@ -6,11 +6,10 @@ the twenty-one checks, while :mod:`qrcheck.targets.defective` must fail exactly 
 a check to make it pass here is forbidden.
 
 Two segno disciplines are mandatory at the call site. ``boost_error=False``: segno's default spends
-spare capacity on a *higher* error-correction level without changing the version. Model 2
-only: Micro QR has no ``4V+17`` module count and a different format-information layout, so every
-capacity and version computation would be wrong -- hence ``segno.make_qr()`` and never bare
-``segno.make()``, which returns Micro QR for short content (``make_qr`` takes no ``micro`` argument
-in segno 1.6.6).
+spare capacity on a *higher* error-correction level without changing the version. Model 2 only:
+Micro QR has no ``4V+17`` module count and a different format-information layout, so every capacity
+and version computation would be wrong -- hence ``segno.make_qr()`` and never bare ``segno.make()``,
+which returns Micro QR for short content (``make_qr`` takes no ``micro`` argument in segno 1.6.6).
 
 All thirteen capabilities are declared unconditionally, because ``capabilities`` is a gate and
 narrowing it would let a check skip. ``logo_overlay_path`` is applied through
@@ -512,4 +511,3 @@ class ReferenceAdapter:
                 f"compositing overlay {str(overlay_path)!r} onto the rendered symbol "
                 f"failed: {type(exc).__name__}: {exc}"
             ) from None
-

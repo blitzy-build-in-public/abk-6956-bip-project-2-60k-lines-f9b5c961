@@ -39,12 +39,11 @@ from qrcheck.evidence.naming import (
     symbol_artifact_name,
 )
 
-# The lazy half, declared in one place. A name in this set is resolved from
-# ``qrcheck.evidence.mux`` on first access and cached in this module's globals; the set is
-# disjoint from the eager names above, so a cache entry can never shadow one of them. mux's
-# magic-byte and MIME constants are deliberately not re-exported: the adapters read them from the
-# module that owns them, and this façade publishes only the nine names its consumers import from
-# the package.
+# The lazy half, declared in one place. A name in this set is resolved from ``qrcheck.evidence.mux``
+# on first access and cached in this module's globals; the set is disjoint from the eager names
+# above, so a cache entry can never shadow one of them. mux's magic-byte and MIME constants are
+# deliberately not re-exported: the adapters read them from the module that owns them, and this
+# façade publishes only the nine names its consumers import from the package.
 _MUX_EXPORTS: frozenset[str] = frozenset(
     {
         "OpenImage",

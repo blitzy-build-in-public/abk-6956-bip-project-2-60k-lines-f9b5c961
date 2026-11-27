@@ -11,11 +11,10 @@ base64, bytes that are not an image, a missing ``image_field`` and a non-zero ex
 no rejection are ``TargetContractError``; and ``TargetUnsupported`` is raised *before any I/O*.
 
 Two distinctions the module exists to hold: ``TargetRejected`` versus ``TargetContractError``
-decides whether ``IV-*`` passes, so misclassifying one as the other is a report defect and not
-only an exception-type defect; and the five errors are siblings -- every one a ``TargetError``,
-none a subclass of another -- so a caller's ``except`` order cannot reclassify a failure. The
-HTTP adapter gives a non-2xx status no declared-rejection spelling, which the comment on that
-test records.
+decides whether ``IV-*`` passes, so misclassifying one as the other is a report defect and not only
+an exception-type defect; and the five errors are siblings -- every one a ``TargetError``, none a
+subclass of another -- so a caller's ``except`` order cannot reclassify a failure. The HTTP adapter
+gives a non-2xx status no declared-rejection spelling, which the comment on that test records.
 
 The vocabulary is also held mechanically: one AST scan reads every module of ``qrcheck/targets/``
 and proves that each ``except`` in it either converts what it caught into one of the five or hands
@@ -1818,11 +1817,10 @@ def test_the_scan_discovers_every_module_of_the_adapter_package() -> None:
         "reference.py",
     }
 
-    # The scan covers every module the package declares and the one shared capture module above
-    # it, and the eight that exist today are among them. A superset on the named set, never
-    # equality: a new adapter kind is added by creating one module under ``qrcheck/targets/``,
-    # and that module must be scanned rather than fail this test for a reason no defect
-    # explains.
+    # The scan covers every module the package declares and the one shared capture module above it,
+    # and the eight that exist today are among them. A superset on the named set, never equality: a
+    # new adapter kind is added by creating one module under ``qrcheck/targets/``, and that module
+    # must be scanned rather than fail this test for a reason no defect explains.
     directory = Path(targets_package.__file__).parent
     declared = {path.name for path in directory.glob("*.py")} | {"capture.py"}
     assert set(scan.modules) == declared, (
@@ -2186,4 +2184,3 @@ def test_reference_adapter_holds_no_second_copy_of_the_contrast_formula(name: st
         f"qrcheck.targets.reference must not define {name}: a second copy of the WCAG ratio "
         "decouples the floor IV-BAD-OPTION measures from the floor this target rejects at"
     )
-

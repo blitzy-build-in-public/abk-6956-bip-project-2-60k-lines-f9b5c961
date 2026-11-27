@@ -397,19 +397,17 @@ def build_request(
     )
     pinned_mask = _checked_optional_int("mask", mask, minimum=_MIN_MASK, maximum=_MAX_MASK)
 
-    # The capacity gate is measured in the mode the payload's own bytes are limited to:
-    # a conforming encoder spends the smallest charset that holds the payload, so the
-    # capacity tables' row for that mode is the bound the request is actually held to.
-    # The byte row alone is the smallest of the three and would refuse a payload that
-    # lawfully fits a pinned version in numeric or alphanumeric mode -- Version 1 at
-    # error level L holds 41 digits but only 17 bytes. Numeric and alphanumeric
-    # payloads are ASCII by construction, so len(body) is their character count as well
-    # as their byte count. An unpinned request is bounded by Version 40, the largest
-    # Model 2 symbol, in that same mode.
-    # ``mode_of`` is imported at the point of use, never at module scope: its module
-    # imports ``numpy`` for the corpus's seeded generators, and this port is imported by
-    # the registry, the decoders and every check, so a module-level import would put
-    # numpy's cost into each of them. ``mode_of`` itself is pure string classification.
+    # The capacity gate is measured in the mode the payload's own bytes are limited to: a conforming
+    # encoder spends the smallest charset that holds the payload, so the capacity tables' row for
+    # that mode is the bound the request is actually held to. The byte row alone is the smallest of
+    # the three and would refuse a payload that lawfully fits a pinned version in numeric or
+    # alphanumeric mode -- Version 1 at error level L holds 41 digits but only 17 bytes. Numeric and
+    # alphanumeric payloads are ASCII by construction, so len(body) is their character count as well
+    # as their byte count. An unpinned request is bounded by Version 40, the largest Model 2 symbol,
+    # in that same mode. ``mode_of`` is imported at the point of use, never at module scope: its
+    # module imports ``numpy`` for the corpus's seeded generators, and this port is imported by the
+    # registry, the decoders and every check, so a module-level import would put numpy's cost into
+    # each of them. ``mode_of`` itself is pure string classification.
     from qrcheck.corpus.payloads import mode_of
 
     capacity_version = _MAX_VERSION if pinned_version is None else pinned_version

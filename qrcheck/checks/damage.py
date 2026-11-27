@@ -142,10 +142,9 @@ _OCCLUDER_RGB: Final[tuple[int, int, int]] = (128, 128, 128)
 # pattern (ISO/IEC 18004 §7.3.4), so the two-module column pairs stop short of it.
 _TIMING_LINE: Final[int] = 6
 
-# The finder-plus-separator footprint (ISO/IEC 18004 §7.3.2-7.3.3): seven modules of finder plus
-# one of separator, rows 0..7 by columns 0..7.  The corner blocks reserved below are one module
-# wider, because their eighth row and column also carry both format-information copies and the dark
-# module.
+# The finder-plus-separator footprint (ISO/IEC 18004 §7.3.2-7.3.3): seven modules of finder plus one
+# of separator, rows 0..7 by columns 0..7.  The corner blocks reserved below are one module wider,
+# because their eighth row and column also carry both format-information copies and the dark module.
 _FINDER_FOOTPRINT: Final[int] = 8
 
 # Version information (ISO/IEC 18004 §7.10) exists from Version 7 upwards, as two 6x3 blocks.
@@ -774,8 +773,7 @@ def _occlude_pixels(
     """Cover each module of `modules` with the occluder colour.
 
     Module-sized blocks rather than one contiguous hole: several small opaque patches test the
-    symbol's error correction, whereas one hole of the same area would test the decoder's
-    detection.
+    symbol's error correction, whereas one hole of the same area would test the decoder's detection.
     """
     damaged = pixels.copy()
     for row, column in modules:
@@ -1177,10 +1175,9 @@ def _canvas_above_ceiling(
     own output, not a framework fault, so it is reported as ``sampling_failed`` with the declared
     side and the ceiling in ``decoded`` and the artefact persisted as evidence. The refusal stands
     in for the pristine measurement: every measurement would allocate the canvas the target
-    declared, so nothing about the symbol is asserted, and the case is neither a
-    ``value_mismatch`` nor an ``error`` result. A refusal the image library made never reads the
-    dimensions out, so ``artefact_px`` and ``artefact_side_px`` are then recorded as ``null``
-    rather than guessed at.
+    declared, so nothing about the symbol is asserted, and the case is neither a ``value_mismatch``
+    nor an ``error`` result. A refusal the image library made never reads the dimensions out, so
+    ``artefact_px`` and ``artefact_side_px`` are then recorded as ``null`` rather than guessed at.
 
     Raises:
         TypeError: A mapping holds a value the result model rejects.

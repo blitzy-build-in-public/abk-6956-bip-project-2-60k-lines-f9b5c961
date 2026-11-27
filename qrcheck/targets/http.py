@@ -878,4 +878,3 @@ class HttpAdapter:
             + "; the framework treats any non-2xx status as a contract error, because "
             "an http target has no declared-rejection channel"
         )
-

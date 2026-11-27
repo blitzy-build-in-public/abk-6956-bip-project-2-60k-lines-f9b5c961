@@ -432,9 +432,8 @@ def test_a_failure_id_of_already_sanitized_parts_is_unchanged(
     case: tuple[str, str, str],
 ) -> None:
     """Pre-sanitizing the three parts does not rename the failure. The evidence store and
-    ``build_request`` may hand over a component that has already been reduced once; the
-    identifier has to be the same either way, otherwise one failure would be filed under two
-    names.
+    ``build_request`` may hand over a component that has already been reduced once; the identifier
+    has to be the same either way, otherwise one failure would be filed under two names.
     """
     check_id, case_id, reason = case
     assert len(_raw(check_id, case_id, reason)) <= FAILURE_ID_LIMIT
@@ -450,9 +449,8 @@ def test_a_failure_id_of_already_sanitized_parts_is_unchanged(
 @pytest.mark.parametrize("length", COMPONENT_LENGTHS)
 def test_a_component_is_bounded_by_the_component_limit(length: int) -> None:
     """A component within the limit passes through; a longer one is truncated with a suffix.
-    ``MAX_COMPONENT_LENGTH`` is the bound :func:`sanitize` enforces on one path segment, and
-    the retained prefix absorbs the separator and the digest so the *whole* segment stays
-    inside it.
+    ``MAX_COMPONENT_LENGTH`` is the bound :func:`sanitize` enforces on one path segment, and the
+    retained prefix absorbs the separator and the digest so the *whole* segment stays inside it.
     """
     component = "c" * length
     segment = sanitize(component)
@@ -818,8 +816,7 @@ RUN_RESULT_FIELDS = (
     "results",
 )
 
-# A content hash, not a UUID and not a timestamp, which is the identity shape the model
-# accepts.
+# A content hash, not a UUID and not a timestamp, which is the identity shape the model accepts.
 RUN_ID = "9f2c4a1d8e7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d"
 STARTED_AT = "2026-01-01T00:00:05+00:00"
 FINISHED_AT = "2026-01-01T00:00:07.500+00:00"

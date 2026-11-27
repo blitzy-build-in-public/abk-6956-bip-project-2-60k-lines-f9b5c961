@@ -43,10 +43,9 @@ __all__ = [
     "read_format_copies",
 ]
 
-# ISO/IEC 18004:2015(E) §7.9.1, Table C.1: the 15 format bits are XOR-masked with
-# 101010000010010 before anything is placed, so a symbol whose format modules are
-# all light can never present itself as the all-zero (i.e. valid-looking)
-# codeword. Literal value 0x5412.
+# ISO/IEC 18004:2015(E) §7.9.1, Table C.1: the 15 format bits are XOR-masked with 101010000010010
+# before anything is placed, so a symbol whose format modules are all light can never present itself
+# as the all-zero (i.e. valid-looking) codeword. Literal value 0x5412.
 FORMAT_MASK: Final = 0x5412
 
 # ISO/IEC 18004:2015(E) §7.9.1 / Annex C: the BCH(15, 5) generator polynomial
@@ -59,11 +58,10 @@ BCH_GENERATOR: Final = 0x537
 #: corrected per copy, and 2 * 3 < 7 is why no two candidates can ever tie.
 MAX_CORRECTABLE_BIT_ERRORS: Final = 3
 
-# ISO/IEC 18004:2015(E) Table 12: the two-bit error correction level indicator
-# that leads the format information -- L=01, M=00, Q=11, H=10. The values are not
-# ordered by recovery capacity (M is 00 and Q is 11), which is why the mapping is
-# declared and never derived. Stored in sorted key order so iterating it is
-# deterministic.
+# ISO/IEC 18004:2015(E) Table 12: the two-bit error correction level indicator that leads the format
+# information -- L=01, M=00, Q=11, H=10. The values are not ordered by recovery capacity (M is 00
+# and Q is 11), which is why the mapping is declared and never derived. Stored in sorted key order
+# so iterating it is deterministic.
 EC_INDICATORS: Final[Mapping[str, int]] = types.MappingProxyType(
     {"H": 0b10, "L": 0b01, "M": 0b00, "Q": 0b11}
 )

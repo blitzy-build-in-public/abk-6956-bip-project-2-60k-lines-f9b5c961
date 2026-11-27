@@ -2,11 +2,12 @@
 
 Case iteration over corpus records, request construction through the port's builder, the
 deterministic sampling helpers, the documented-recovery budget helper, the ``CaseResult`` factories,
-and the single translation of an adapter error into a status. It also owns the four helpers a family
-would otherwise copy -- :func:`corpus_case_id`, :func:`first_divergence`, :func:`sha256_hex` and
-:func:`elapsed_ms` -- because the check families share them and no concern may have a second
-implementation. This module is **not** a check family: it registers nothing, owns no check ID and
-asserts nothing about a symbol.
+the single translation of an adapter error into a status, and the target's own ``declared_*`` claim
+-- the one decoded value this module adds. It also owns the four helpers a family would otherwise
+copy -- :func:`corpus_case_id`, :func:`first_divergence`, :func:`sha256_hex` and :func:`elapsed_ms`
+-- because the check families share them and no concern may have a second implementation. This
+module is **not** a check family: it registers nothing, owns no check ID and asserts nothing about a
+symbol.
 
 It never owns request validation (the port's :func:`~qrcheck.targets.base.build_request`), the
 result vocabulary and failure identifier (:mod:`qrcheck.report.model`), the evidence layout
@@ -24,7 +25,7 @@ nothing here reads a random source, ``hash()``, ``id()`` or the filesystem, and 
 anything but an identifier. Two names are settled by the modules that own them: the evidence store
 is :attr:`qrcheck.registry.check.RunContext.evidence`, and
 :meth:`qrcheck.report.evidence.EvidenceStore.record` returns ``None`` for a passing case, so
-:func:`record_evidence` returns a passing result unchanged. :mod:`qrcheck.decode` and
+:func:`record_evidence` attaches no evidence directory to one. :mod:`qrcheck.decode` and
 :mod:`qrcheck.corpus.builder` load at the point of use.
 """
 
@@ -101,6 +102,11 @@ _OUT_OF_CONTRACT_KEY: Final[str] = "out_of_contract"
 # collides with one of them would be silently overwritten by the envelope, so the collision
 # is refused instead.
 _ENVELOPE_KEYS: Final[frozenset[str]] = frozenset({"case_id", "check_id", "seed"})
+
+# The four fields a target claims about its own artefact: evidence only, never the assertion.
+_DECLARED_CLAIM_KEYS: Final[tuple[str, ...]] = (
+    "declared_version", "declared_ec", "declared_mask", "declared_mode",
+)
 
 # The port's documented default colours (black on white). A request keeps them unless the
 # caller asked for something else, so a pair that differs from them is what makes the
@@ -227,8 +233,7 @@ def corpus_cases(
 
     The registry's own ``Case`` type, named ``corpus:<record-id>``. Records are sorted by ``id``
     here, so the order a family received them in can never reach a report. ``execute_factory`` is
-    called once per record, which lets a family close over that record's
-    payload and expectations.
+    called once per record, which lets a family close over that record's payload and expectations.
 
     Raises:
         ValueError: ``check_id`` is not a non-empty string, or two records would register the same
@@ -597,7 +602,7 @@ def pass_(
     """Return a passing result: no reason, no evidence, the case's own record.
 
     A passing case writes no evidence and the model therefore refuses one, so this factory offers no
-    way to attach an evidence directory; :func:`record_evidence` returns a passing result unchanged
+    way to attach an evidence directory; :func:`record_evidence` attaches none to a passing result
     for the same reason.
 
     Raises:
@@ -706,7 +711,15 @@ def record_evidence(
     layout, and this function the envelope of ``request.json``: the case's identity plus whatever
     the check resolved for it -- ``out_of_contract: true`` for a deliberate probe, and the
     ``request_extra`` entries. A
-    **passing** result is returned unchanged: the store persists nothing for a pass.
+    **passing** result is returned with no evidence directory: the store persists nothing for a
+    pass.
+
+    Every case that came back with a symbol also carries the target's own claim under
+    ``declared_version``, ``declared_ec``, ``declared_mask`` and ``declared_mode``: evidence only,
+    never the assertion, since every verdict reads a decoder or the symbol's format information.
+    Recorded at this one seam, so a configured mapping reaches ``decoded.json``, ``summary.json``,
+    ``junit.xml`` and ``index.html`` at once; merged on every status, and absent for a case with no
+    symbol -- a rejection, a contract error, a skip.
 
     Raises:
             TypeError: A persisted mapping holds a value the writer cannot serialise, or an
@@ -727,7 +740,12 @@ def record_evidence(
     if out_of_contract:
         enriched[_OUT_OF_CONTRACT_KEY] = True
     enriched.update(extra)
-    staged = dataclasses.replace(result, request=enriched)
+    # A copy, never the caller's mapping: the claim replaces any key a check recorded under one of
+    # these names. ``getattr`` because a stub symbol may carry no claim, which records ``None``.
+    decoded = dict(result.decoded)
+    if symbol is not None:
+        decoded.update({name: getattr(symbol, name, None) for name in _DECLARED_CLAIM_KEYS})
+    staged = dataclasses.replace(result, request=enriched, decoded=decoded)
     evidence_dir = ctx.evidence.record(
         staged,
         symbol=symbol,
@@ -736,8 +754,8 @@ def record_evidence(
         logo=logo,
     )
     if evidence_dir is None:
-        return result
-    return dataclasses.replace(result, evidence_dir=evidence_dir)
+        return dataclasses.replace(result, decoded=decoded)
+    return dataclasses.replace(result, decoded=decoded, evidence_dir=evidence_dir)
 
 
 def _case_result(
@@ -951,4 +969,3 @@ def _by_record_id(record: CorpusRecord) -> str:
     order.
     """
     return record.id
-

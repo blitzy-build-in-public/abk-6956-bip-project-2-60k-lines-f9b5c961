@@ -6,9 +6,9 @@ and the four submodules beside them are imported on first access and never befor
 this module before any submodule, which is what makes the corpus's two halves
 differ: :mod:`qrcheck.corpus.capacity` imports nothing at all, so a consumer that needs only the
 capacity tables -- :mod:`qrcheck.targets.base` enforces a request's size through them -- loads no
-third-party module. numpy, and with it :func:`qrcheck.corpus.payloads._verify_boundary_predicates`
-re-checking the boundary arithmetic, arrives only when payload generation is actually reached:
-building a corpus, or importing :mod:`qrcheck.corpus.payloads` itself.
+third-party module. numpy arrives only inside the payload draws of
+:mod:`qrcheck.corpus.payloads`, which re-checks the boundary arithmetic without it, so building a
+corpus is where an unusable numpy becomes a blocking dependency.
 
 Nothing else happens here. This module reads no file or configuration, generates no payload, seeds
 no random source, registers nothing and defines no second corpus entry point: a re-export is a name
@@ -27,8 +27,7 @@ if TYPE_CHECKING:  # Documented for a static reader; __getattr__ imports these n
 # The public surface, sorted so ``import *``, ``dir()`` and surface assertions are stable.
 __all__ = ("CorpusRecord", "build_corpus", "filter_by_class", "load_corpus", "write_corpus")
 
-# Which module owns each public name. Both owners reach ``qrcheck.corpus.payloads``, so
-# resolving any of the five imports numpy; ``capacity`` below costs nothing.
+# Which module owns each public name. Both owners reach ``qrcheck.corpus.payloads``; nothing else.
 _EXPORT_MODULES: dict[str, str] = {
     "CorpusRecord": "qrcheck.corpus.builder",
     "build_corpus": "qrcheck.corpus.builder",

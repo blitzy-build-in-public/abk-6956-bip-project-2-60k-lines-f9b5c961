@@ -240,13 +240,12 @@ def read_primary(image: numpy.ndarray, *, polarity: Polarity = "original") -> Pr
             return_errors=True,
         )
     except Exception as exc:
-        # Deliberately broad, and the only catch of this width in the module:
-        # a decoder that throws on a hostile symbol must leave an evidence
-        # record and let the run continue, so every failure of the binding --
-        # a buffer it refuses, a native fault, an unexpected shape -- becomes
-        # an "error" outcome carrying the exception's own text. Narrowing this
-        # would let an unanticipated binding failure abort a run that is
-        # supposed to report on misbehaviour rather than die of it.
+        # Deliberately broad, and the only catch of this width in the module: a decoder that throws
+        # on a hostile symbol must leave an evidence record and let the run continue, so every
+        # failure of the binding -- a buffer it refuses, a native fault, an unexpected shape --
+        # becomes an "error" outcome carrying the exception's own text. Narrowing this would let an
+        # unanticipated binding failure abort a run that is supposed to report on misbehaviour
+        # rather than die of it.
         return PrimaryReading(
             outcome=_failed_outcome(polarity, f"{type(exc).__name__}: {exc}"),
             text=None,
@@ -280,11 +279,10 @@ def read_primary(image: numpy.ndarray, *, polarity: Polarity = "original") -> Pr
             polarity=polarity,
             payload_sha256=hashlib.sha256(payload).hexdigest(),
             reported_ec=_optional_text(result.ec_level),
-            # zxing-cpp 2.2.0 exposes neither a version nor a mask, so this is
-            # None by contract rather than by omission. Reading it through
-            # getattr means a binding that does report one (3.x carries both in
-            # Result.extra) populates the field with no consumer change, and
-            # nothing is ever synthesised from the payload or the symbol size.
+            # zxing-cpp 2.2.0 exposes neither a version nor a mask, so this is None by contract
+            # rather than by omission. Reading it through getattr means a binding that does report
+            # one (3.x carries both in Result.extra) populates the field with no consumer change,
+            # and nothing is ever synthesised from the payload or the symbol size.
             reported_version=getattr(result, "version", None),
             error_text=None,
             payload=payload,

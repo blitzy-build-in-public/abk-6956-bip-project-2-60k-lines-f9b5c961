@@ -13,8 +13,7 @@ Reasons this family emits: ``decoder_disagreement`` when the two decoders return
 payloads, which every judge reports ahead of its own comparisons; ``sampling_failed`` when no grid,
 level or mask could be read; ``value_mismatch`` when a version, level, mask or module differs from
 the expectation; ``format_info_disagreement`` when the decoder's level and the format information
-disagree.
-Rejection, unusable response and unsupported request are translated by
+disagree. Rejection, unusable response and unsupported request are translated by
 :func:`qrcheck.checks.support.case_status_for_error`; ``TargetUnavailable`` and
 ``TargetTimeout`` propagate so the runner owns the one-error-result-per-check policy.
 

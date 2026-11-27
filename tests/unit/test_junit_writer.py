@@ -52,9 +52,8 @@ _TIME_ATTRIBUTE = re.compile(rb'time="[^"]*"')
 # not a duration, so a masked document can never be mistaken for a measured one.
 _MASKED_TIME = b'time="<masked>"'
 
-# The two shapes :func:`qrcheck.report.junit.write_junit` fixes for a duration: three decimals
-# on a testcase, and any number of them on the suite, whose total is a sum rather than a
-# measurement.
+# The two shapes :func:`qrcheck.report.junit.write_junit` fixes for a duration: three decimals on a
+# testcase, and any number of them on the suite, whose total is a sum rather than a measurement.
 _THREE_DECIMALS = re.compile(r"\d+\.\d{3}")
 _SUITE_TIME = re.compile(r"\d+\.\d+")
 
@@ -754,4 +753,3 @@ def test_hostile_text_stays_escaped_and_the_document_still_parses(
         assert _HOSTILE_REPLACEMENT in rendered
     assert "\x00" not in rendered
     assert "\x0b" not in rendered
-

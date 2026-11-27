@@ -1160,4 +1160,3 @@ def test_the_list_command_publishes_every_registered_check_as_json(cli_runner) -
         assert tuple(row["dependencies"]) == _EXPECTED_DEPENDENCIES[check_id], (
             f"{check_id}: the listing must publish the declared dependency tokens"
         )
-

@@ -16,9 +16,11 @@ initialise is a broken install -- and only a :exc:`BaseException` propagates.
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import importlib
 import importlib.metadata
+import io
 import platform
 import sysconfig
 from typing import Final
@@ -104,9 +106,13 @@ def import_problem(module: str) -> str | None:
     The guarded half of every probe, shared with the callers in :mod:`qrcheck.cli.doctor` and
     :mod:`qrcheck.runner`. Any :exc:`Exception` raised while importing is that dependency's failure
     reason, worded with its type so the diagnostic names what to fix; only a BaseException escapes.
+
+    The import runs with standard output discarded: some distributions print their own advice on the
+    way to their ``ImportError`` (the OpenCV bindings do), and standard output carries the report.
     """
     try:
-        importlib.import_module(module)
+        with contextlib.redirect_stdout(io.StringIO()):
+            importlib.import_module(module)
     except Exception as exc:
         return f"importing {module} failed: {type(exc).__name__}: {exc}"
     return None

@@ -13,20 +13,18 @@ product may define a second copy of it:
   and the exact projection persisted as ``decoded.json``.
 * :class:`DecoderAvailability`, :func:`primary_available`,
   :func:`secondary_available`, :func:`decoder_availability` -- the probes
-  ``registry/resolve.py``, ``runner.py`` and ``cli/doctor.py`` consume to
-  decide that a missing primary decoder blocks a run while a missing
-  secondary decoder only degrades it.
+  ``registry/resolve.py``, ``runner.py`` and ``cli/doctor.py`` consume to decide that a missing
+  primary decoder blocks a run while a missing secondary decoder only degrades it.
 
 Constraints that hold for every symbol in this module:
 
-* It imports only the standard library and ``numpy``. It imports no other
-  ``qrcheck`` package, and neither ``cv2`` nor ``zxingcpp`` is imported at
-  module import time; availability is resolved with
-  :func:`importlib.util.find_spec`, which never imports the package it finds.
+* It imports only the standard library at module import time: ``numpy`` reaches it
+  at its point of use, from :func:`matrix_sha256` and the :func:`__getattr__` that
+  resolves :data:`Matrix`. It imports no other ``qrcheck`` package, and neither
+  ``cv2`` nor ``zxingcpp`` loads at import time; availability uses ``find_spec``.
 * It writes nothing, reads no configuration, logs nothing, decides no exit
-  code and knows no check, status or reason vocabulary owned elsewhere. No
-  adapter error originates here: the five adapter errors belong to
-  ``qrcheck/targets/base.py``, statuses and reasons to
+  code and knows no check, status or reason vocabulary owned elsewhere. No adapter error originates
+  here: the five adapter errors belong to ``qrcheck/targets/base.py``, statuses and reasons to
   ``qrcheck/report/model.py``.
 * Every ``as_dict()`` returns plain ``dict``/``list``/``str``/``int``/
   ``float``/``bool``/``None`` -- never ``bytes``, never a numpy array, never a
@@ -45,9 +43,10 @@ import importlib.metadata
 import importlib.util
 import types
 from collections.abc import Mapping
-from typing import Any, Final, Literal
+from typing import TYPE_CHECKING, Any, Final, Literal
 
-import numpy
+if TYPE_CHECKING:  # Annotations only: numpy is imported at its point of use at run time.
+    import numpy
 
 __all__ = [
     "Agreement",
@@ -113,30 +112,37 @@ _POLARITY_VALUES: Final[frozenset[str]] = frozenset({"original", "inverted"})
 _POLARITY_OUTCOME_VALUES: Final[frozenset[str]] = frozenset({"original", "inverted", "both"})
 _SAMPLING_SOURCES: Final[frozenset[str]] = frozenset({"primary", "straight_qrcode"})
 
-#: The sampled module grid: a ``numpy.ndarray`` of dtype ``numpy.bool_``, shape
-#: ``(N, N)``, C-order, ``True`` for a dark module, row index ``y`` and column
-#: index ``x``. ``N = 4V + 17`` for a Model 2 symbol of version ``V``, which is
-#: how the version is recovered from the sampled dimension alone. This is the
-#: type ``SY-MASK``, ``SY-EC-MATCH``, ``SY-MATRIX-EQUIV``, ``SY-VERSION-MIN``
-#: and the measured quiet zone read through the facts recorded beside it.
-Matrix = numpy.ndarray
+
+#: The sampled module grid: a ``numpy.ndarray`` of dtype ``numpy.bool_``, shape ``(N, N)``,
+#: C-order, ``True`` for a dark module, row index ``y`` and column ``x``. ``N = 4V + 17``
+#: for a Model 2 symbol of version ``V``, which is how the version is recovered from the
+#: sampled dimension alone. This is the type ``SY-MASK``, ``SY-EC-MATCH``,
+#: ``SY-MATRIX-EQUIV``, ``SY-VERSION-MIN`` and the measured quiet zone read through the
+#: facts recorded beside it; ``__getattr__`` below resolves it, importing numpy on first use.
+def __getattr__(name: str) -> Any:
+    """Resolve ``Matrix``, this module's one lazy name, importing ``numpy`` on first access."""
+    if name == "Matrix":
+        import numpy
+        return globals().setdefault("Matrix", numpy.ndarray)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def matrix_sha256(matrix: Matrix) -> str:
     """Hash a sampled module grid canonically.
 
-    This is the single definition of the digest ``DT-DETERMINISTIC`` compares
-    across two calls of an identical request, and of the ``matrix_sha256``
-    recorded in evidence. The grid is normalised to ``numpy.bool_`` in C order
-    and packed to bits, and the module count is mixed into the digest, so two
-    grids that are equal always hash equally and a grid of a different
-    dimension can never collide with a prefix of another.
+    This is the single definition of the digest ``DT-DETERMINISTIC`` compares across two calls of an
+    identical request, and of the ``matrix_sha256`` recorded in evidence. The grid is normalised to
+    ``numpy.bool_`` in C order and packed to bits, and the module count is mixed into the digest, so
+    two grids that are equal always hash equally and a grid of a different dimension can never
+    collide with a prefix of another.
 
     Raises:
         ValueError: ``matrix`` is empty or not square -- a sampled grid is
             always ``(N, N)``, so anything else is a producer defect rather
             than evidence.
+        ImportError: ``numpy`` cannot be imported -- the environment fault the caller reports.
     """
+    import numpy  # At its point of use: importing this module must not need numpy.
     grid = numpy.asarray(matrix)
     if grid.ndim != 2:
         raise ValueError(f"matrix must be 2-dimensional; got {grid.ndim} dimension(s)")
@@ -174,27 +180,24 @@ def _sorted_dict(values: Mapping[str, Any]) -> dict[str, Any]:
 class DecoderOutcome:
     """One decoder's answer about one symbol, as recorded in ``decoded.json``.
 
-    ``status`` is ``decoded`` when the decoder returned a payload,
-    ``undetected`` when it found no symbol at all and ``error`` when it raised;
-    only two differing ``decoded`` payloads constitute a disagreement.
-    ``polarity`` records which polarity produced this answer, because the
-    framework runs both decoders on the 255-inverted copy for an inverted
-    request rather than relying on a decoder's inversion support.
+    ``status`` is ``decoded`` when the decoder returned a payload, ``undetected`` when it found no
+    symbol at all and ``error`` when it raised; only two differing ``decoded`` payloads constitute a
+    disagreement. ``polarity`` records which polarity produced this answer, because the framework
+    runs both decoders on the 255-inverted copy for an inverted request rather than relying on a
+    decoder's inversion support.
 
-    ``reported_ec`` and ``reported_version`` are the decoder's own metadata,
-    recorded as independent evidence and never as the assertion. ``zxing-cpp``
-    2.2.0 reports an EC level but neither version nor mask, and the secondary
-    decoder reports no metadata at all, so ``None`` there is the answer rather
-    than a gap; a future binding that exposes a version populates the field
-    without a change to any consumer.
+    ``reported_ec`` and ``reported_version`` are the decoder's own metadata, recorded as independent
+    evidence and never as the assertion. ``zxing-cpp`` 2.2.0 reports an EC level but neither version
+    nor mask, and the secondary decoder reports no metadata at all, so ``None`` there is the answer
+    rather than a gap; a future binding that exposes a version populates the field without a change
+    to any consumer.
 
     Two fields extend the documented seven, each because the consensus rules and
     the grid sampler need evidence no other field carries:
 
     * ``payload`` -- the verbatim bytes this decoder returned. The consensus
-      rules record both payloads verbatim when the decoders disagree, and the
-      first-divergence offset of a truncated payload is only computable from
-      them.
+      rules record both payloads verbatim when the decoders disagree, and the first-divergence
+      offset of a truncated payload is only computable from them.
     * ``position`` -- the corner quadrangle in source-image pixel coordinates
       as the primary decoder reports it, which is the independent geometry
       input grid sampling needs because no pinned decoder exposes a version.
@@ -238,10 +241,9 @@ class DecoderOutcome:
     def as_dict(self) -> dict[str, Any]:
         """Project this outcome to a JSON-safe mapping with sorted keys.
 
-        The seven documented fields are always present. ``payload_b64`` is
-        added whenever a payload exists so the bytes survive byte-exactly, and
-        ``payload_text`` only when the payload round-trips through UTF-8. The
-        corner quadrangle is emitted as a list of ``[x, y]`` pairs.
+        The seven documented fields are always present. ``payload_b64`` is added whenever a payload
+        exists so the bytes survive byte-exactly, and ``payload_text`` only when the payload
+        round-trips through UTF-8. The corner quadrangle is emitted as a list of ``[x, y]`` pairs.
         """
         projected: dict[str, Any] = {
             "decoder": self.decoder,
@@ -267,10 +269,9 @@ class DecoderOutcome:
 class ModuleCountEstimate:
     """What grid sampling measured while choosing the module count ``N``.
 
-    Recorded so a sampling failure is diagnosable from evidence alone: the
-    estimated module count, the module pitch it came from, the snap to the
-    nearest legal ``4V + 17``, the finder pattern's dark-run width in pixels
-    and the timing-pattern transition counts on both axes.
+    Recorded so a sampling failure is diagnosable from evidence alone: the estimated module count,
+    the module pitch it came from, the snap to the nearest legal ``4V + 17``, the finder pattern's
+    dark-run width in pixels and the timing-pattern transition counts on both axes.
 
     ``accepted`` is true only when the snap was confirmed by the timing pattern
     -- an independent check that the pitch was right -- and ``reason`` states
@@ -306,22 +307,19 @@ class ModuleCountEstimate:
 class SampledMatrix:
     """The sampled module grid, or the reason no grid could be recovered.
 
-    On success ``matrix`` holds the grid, ``module_count`` is ``N``, ``version``
-    is the version implied by ``N = 4V + 17`` and ``reason`` is ``None``. When
-    neither the corner-quad path nor the rectified-image fallback could
-    establish a pitch, ``matrix``, ``module_count`` and ``version`` are all
-    ``None`` and ``reason`` is ``"sampling_failed"``, which lets a check report
-    that reason instead of a wrong verdict.
+    On success ``matrix`` holds the grid, ``module_count`` is ``N``, ``version`` is the version
+    implied by ``N = 4V + 17`` and ``reason`` is ``None``. When neither the corner-quad path nor the
+    rectified-image fallback could establish a pitch, ``matrix``, ``module_count`` and ``version``
+    are all ``None`` and ``reason`` is ``"sampling_failed"``, which lets a check report that reason
+    instead of a wrong verdict.
 
-    ``source`` names which input established the grid: ``"primary"`` for the
-    primary decoder's corner quadrangle, ``"straight_qrcode"`` for the
-    secondary decoder's rectified image. ``estimate`` carries the measurements
-    behind that choice. ``rectified_luma`` is the rectified square's full-size
-    ``float64`` luminance, kept only for a consumer that renders it: it is
-    ``None`` unless the sampler was asked for it with
-    ``sample_matrix(..., keep_rectified=True)``, because the array costs 8 bytes
-    per pixel and lives as long as this result does. It is never serialised,
-    because the evidence artefact set is closed.
+    ``source`` names which input established the grid: ``"primary"`` for the primary decoder's
+    corner quadrangle, ``"straight_qrcode"`` for the secondary decoder's rectified image.
+    ``estimate`` carries the measurements behind that choice. ``rectified_luma`` is the rectified
+    square's full-size ``float64`` luminance, kept only for a consumer that renders it: it is
+    ``None`` unless the sampler was asked for it with ``sample_matrix(..., keep_rectified=True)``,
+    because the array costs 8 bytes per pixel and lives as long as this result does. It is never
+    serialised, because the evidence artefact set is closed.
     """
 
     matrix: Matrix | None
@@ -366,19 +364,16 @@ class SampledMatrix:
 class DecodeResult:
     """The single decoded-evidence object every check consumes.
 
-    ``payload_bytes`` is the authoritative payload -- the primary decoder's
-    whenever it produced one -- and is ``None`` only when the primary decoder
-    could not read the symbol. ``text`` is the rendering the decoder reported,
-    while ``payload_bytes`` stays the byte-exact answer that round-trip
-    assertions compare. ``symbology_identifier`` is ``]Q1`` without an ECI
-    designator and ``]Q2`` with one.
+    ``payload_bytes`` is the authoritative payload -- the primary decoder's whenever it produced one
+    -- and is ``None`` only when the primary decoder could not read the symbol. ``text`` is the
+    rendering the decoder reported, while ``payload_bytes`` stays the byte-exact answer that
+    round-trip assertions compare. ``symbology_identifier`` is ``]Q1`` without an ECI designator and
+    ``]Q2`` with one.
 
-    ``ec_level_decoder`` and ``ec_level_format`` are the two independent
-    EC-level readings: the decoder's metadata and the symbol's own 15-bit
-    format information. ``version`` and ``mask`` come from the sampled grid and
-    the format information respectively, because no pinned decoder exposes
-    either. ``matrix`` is the sampled grid and ``matrix_sha256`` its canonical
-    digest.
+    ``ec_level_decoder`` and ``ec_level_format`` are the two independent EC-level readings: the
+    decoder's metadata and the symbol's own 15-bit format information. ``version`` and ``mask`` come
+    from the sampled grid and the format information respectively, because no pinned decoder exposes
+    either. ``matrix`` is the sampled grid and ``matrix_sha256`` its canonical digest.
 
     ``agreement`` classifies the two decoders' answers, ``polarity_applied``
     records the polarity at which the authoritative payload was read, and
@@ -386,14 +381,13 @@ class DecodeResult:
     -- the expected outcome of the invalid-input checks. ``metrics`` carries
     the performance measurements and is empty for every other check.
 
-    ``sampling`` extends the documented fields so a check can tell "the grid
-    could not be recovered" (``reason == "sampling_failed"``) from "the symbol
-    decoded but the assertion failed". ``format_info`` extends them again with
-    the format-information reading itself -- the projection
-    ``qrcheck.decode.format_info.FormatInfo.as_dict()`` returns, both copies'
-    distances included -- so a check can tell "the grid could not be recovered"
-    from "the grid was recovered and its format information could not be read",
-    and a damaged-but-readable copy stays diagnosable from evidence alone.
+    ``sampling`` extends the documented fields so a check can tell "the grid could not be recovered"
+    (``reason == "sampling_failed"``) from "the symbol decoded but the assertion failed".
+    ``format_info`` extends them again with the format-information reading itself -- the projection
+    ``qrcheck.decode.format_info.FormatInfo.as_dict()`` returns, both copies' distances included --
+    so a check can tell "the grid could not be recovered" from "the grid was recovered and its
+    format information could not be read", and a damaged-but-readable copy stays diagnosable from
+    evidence alone.
 
     ``secondary_comparable`` extends them once more, and exists so that a reader
     of the evidence can tell the two shapes of ``primary_only`` apart, because
@@ -409,22 +403,19 @@ class DecodeResult:
     * ``None`` -- no comparison was attempted: the secondary decoder did not run,
       found nothing or errored, or the primary decoder produced no payload.
 
-    The secondary decoder's text-only API (``opencv-python-headless`` 4.10) is
-    why the ``False`` case exists at all; this field is the only place the
-    narrowing of the disagreement rule is visible, so no consumer has to infer
-    it from a decoder's status.
+    The secondary decoder's text-only API (``opencv-python-headless`` 4.10) is why the ``False``
+    case exists at all; this field is the only place the narrowing of the disagreement rule is
+    visible, so no consumer has to infer it from a decoder's status.
 
-    ``unavailable_decoders`` extends them for the one case in which a decoder is
-    not an answer at all: a decoder the run did not consult, mapped to the reason
-    it could not be. It is empty whenever every decoder was consulted, which is
-    the ordinary case, and it is why single-decoder mode's evidence lists one
-    decoder in ``per_decoder``: a binding that cannot be
-    imported raised nothing about the artefact, so it is recorded here instead of
-    as an outcome with ``status == "error"``, which means a decoder that ran and
-    raised. A decoder appears in ``per_decoder`` or in
-    ``unavailable_decoders``, never in both, and the degradation therefore stays
-    recorded in the evidence a reader has even though the noise of a decoder that
-    never ran is gone.
+    ``unavailable_decoders`` extends them for the one case in which a decoder is not an answer at
+    all: a decoder the run did not consult, mapped to the reason it could not be. It is empty
+    whenever every decoder was consulted, which is the ordinary case, and it is why single-decoder
+    mode's evidence lists one decoder in ``per_decoder``: a binding that cannot be imported raised
+    nothing about the artefact, so it is recorded here instead of as an outcome with
+    ``status == "error"``, which means a decoder that ran and raised. A decoder appears in
+    ``per_decoder`` or in ``unavailable_decoders``, never in both, and the degradation therefore
+    stays recorded in the evidence a reader has even though the noise of a decoder that never ran is
+    gone.
     """
 
     payload_bytes: bytes | None
@@ -450,11 +441,10 @@ class DecodeResult:
     def __post_init__(self) -> None:
         """Normalise the mappings and make the digest unable to go stale.
 
-        ``per_decoder``, ``metrics``, ``format_info`` and ``unavailable_decoders``
-        become read-only mappings with sorted keys, so iteration order cannot
-        depend on how a producer built them and a result cannot be mutated after
-        construction. When a grid is present the digest is computed here if the
-        caller passed ``None``.
+        ``per_decoder``, ``metrics``, ``format_info`` and ``unavailable_decoders`` become read-only
+        mappings with sorted keys, so iteration order cannot depend on how a producer built them and
+        a result cannot be mutated after construction. When a grid is present the digest is computed
+        here if the caller passed ``None``.
 
         Raises:
             ValueError: ``agreement`` or ``polarity_applied`` is outside its
@@ -539,15 +529,13 @@ class DecodeResult:
     def as_dict(self) -> dict[str, Any]:
         """Project this result to the canonical JSON-safe evidence mapping.
 
-        Every documented field reaches the projection; ``payload_bytes``
-        becomes ``payload_b64`` and ``payload_len`` (plus ``payload_text`` when
-        the bytes round-trip through UTF-8) so no raw ``bytes`` object survives,
-        and ``matrix`` is represented by ``matrix_sha256`` so the grid itself
-        never reaches the evidence. ``unavailable_decoders`` is always present
-        and is ``{}`` when every decoder was consulted, so a consumer never has
-        to tell an absent key from an empty one. No timestamp, hostname,
-        absolute path or duration is emitted: a duration belongs to the result
-        model, not to the decoded evidence.
+        Every documented field reaches the projection; ``payload_bytes`` becomes ``payload_b64`` and
+        ``payload_len`` (plus ``payload_text`` when the bytes round-trip through UTF-8) so no raw
+        ``bytes`` object survives, and ``matrix`` is represented by ``matrix_sha256`` so the grid
+        itself never reaches the evidence. ``unavailable_decoders`` is always present and is ``{}``
+        when every decoder was consulted, so a consumer never has to tell an absent key from an
+        empty one. No timestamp, hostname, absolute path or duration is emitted: a duration belongs
+        to the result model, not to the decoded evidence.
         """
         projected: dict[str, Any] = {
             "agreement": self.agreement,
@@ -587,19 +575,17 @@ class DecodeResult:
 class DecoderAvailability:
     """Which reference decoders are installed, and at which versions.
 
-    The primary decoder's absence blocks a run: no check may be silently
-    skipped in place of the authority for every round-trip assertion. The
-    secondary decoder's absence is a supported degradation -- the run proceeds
-    in single-decoder mode, ``agreement`` records ``primary_only`` and no check
-    passes on the strength of the missing decoder.
+    The primary decoder's absence blocks a run: no check may be silently skipped in place of the
+    authority for every round-trip assertion. The secondary decoder's absence is a supported
+    degradation -- the run proceeds in single-decoder mode, ``agreement`` records ``primary_only``
+    and no check passes on the strength of the missing decoder.
 
-    ``primary_version`` and ``secondary_version`` are the installed
-    distribution versions, or ``None`` when the distribution is absent.
-    ``qrcheck doctor --json`` consumes these four values through the two
-    dependency rows it builds, and ``qrcheck run`` reads ``primary`` and
-    ``secondary`` for its dependency probes; ``qrcheck list --json`` publishes
-    the check registry and reads none of them. :meth:`as_dict` is the record's
-    JSON-safe projection for a caller that needs the four values as one mapping.
+    ``primary_version`` and ``secondary_version`` are the installed distribution versions, or
+    ``None`` when the distribution is absent. ``qrcheck doctor --json`` consumes these four values
+    through the two dependency rows it builds, and ``qrcheck run`` reads ``primary`` and
+    ``secondary`` for its dependency probes; ``qrcheck list --json`` publishes the check registry
+    and reads none of them. :meth:`as_dict` is the record's JSON-safe projection for a caller that
+    needs the four values as one mapping.
     """
 
     primary: bool

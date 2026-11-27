@@ -1,24 +1,21 @@
 """The single definition of the qrcheck line budget: tracked physical lines.
 
-``count_lines`` measures every tracked ``.py`` file beneath one root and counts
-its physical lines -- blank lines, comment lines and a final line that carries no
-terminator included. One implementation answers the repository-wide ceiling, so
-the CI gate, the ``qrcheck loc`` table and ``RunResult.loc_count`` cannot
-disagree about the number.
+``count_lines`` measures every tracked ``.py`` file beneath one root and counts its physical lines
+-- blank lines, comment lines and a final line that carries no terminator included. One
+implementation answers the repository-wide ceiling, so the CI gate, the ``qrcheck loc`` table and
+``RunResult.loc_count`` cannot disagree about the number.
 
-Lines are counted on the ``LF`` byte in the raw bytes rather than on decoded
-text, so the locale, an encoding declaration, a byte-order mark or a decode error
-cannot move the count, and a file that is not valid UTF-8 is counted instead of
-aborting the walk. The measurement is pure and deterministic: sub-directories are
-pruned before the walk descends and every emitted collection is sorted; nothing is
-cached, printed or written, and the filesystem is the only thing touched, so there
-is no network, no subprocess, no adapter error and no report reason here.
+Lines are counted on the ``LF`` byte in the raw bytes rather than on decoded text, so the locale, an
+encoding declaration, a byte-order mark or a decode error cannot move the count, and a file that is
+not valid UTF-8 is counted instead of aborting the walk. The measurement is pure and deterministic:
+sub-directories are pruned before the walk descends and every emitted collection is sorted; nothing
+is cached, printed or written, and the filesystem is the only thing touched, so there is no network,
+no subprocess, no adapter error and no report reason here.
 
-Failure modes: ``FileNotFoundError`` when the root does not exist and
-``NotADirectoryError`` when it names anything other than a directory, each naming
-the offending path (the caller maps both to exit code 2). A read error on one
-file propagates unchanged rather than being skipped, so an incomplete sweep can
-never be reported as the total.
+Failure modes: ``FileNotFoundError`` when the root does not exist and ``NotADirectoryError`` when it
+names anything other than a directory, each naming the offending path (the caller maps both to exit
+code 2). A read error on one file propagates unchanged rather than being skipped, so an incomplete
+sweep can never be reported as the total.
 """
 
 from __future__ import annotations

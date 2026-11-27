@@ -2,10 +2,9 @@
 
 ``qrcheck`` tests a QR code *generator*.  This module is the entry point that both the
 ``qrcheck = "qrcheck.cli.main:main"`` console script declared in ``pyproject.toml`` and
-``python -m qrcheck`` (through :mod:`qrcheck.__main__`) reach, and it owns exactly three things:
-the click group that carries the group-level ``--config`` option, the registration of the
-subcommands, and the translation of whatever a command returns or raises into the process exit
-code.
+``python -m qrcheck`` (through :mod:`qrcheck.__main__`) reach, and it owns exactly three things: the
+click group that carries the group-level ``--config`` option, the registration of the subcommands,
+and the translation of whatever a command returns or raises into the process exit code.
 
 The five subcommands, and no others: ``run`` exercises one target and writes the JSON, JUnit and
 HTML reports; ``doctor`` verifies the target and the local toolchain before any check runs;
@@ -30,9 +29,9 @@ exception's type and message and ``traceback.format_exc()`` on stderr, otherwise
 
 A bad invocation is exit 2, never exit 1: exit 1 means a check failed, and conflating the two would
 let a mistyped option look like a failing generator.  A broken installation is exit 2 as well, and
-only a fault the framework did not anticipate is exit 3.  Registering the subcommands and importing
-the check families load ``segno``, ``numpy``, ``PIL`` and ``httpx`` where each is used, so an
-exception raised while one of them loads is reported through
+only a fault the framework did not anticipate is exit 3.  ``segno``, ``numpy``, ``PIL`` and
+``httpx`` each load at their point of use, so an exception raised while one of them loads is
+reported through
 :func:`qrcheck.dependencies.blocking_problem`, naming the distribution and ``requirements.lock``:
 every pin is declared in the lock file, so an unusable one means a broken install rather than a
 defect of this program, and only when no pinned dependency is broken does the
@@ -291,9 +290,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             prog_name="qrcheck",
             standalone_mode=False,
         )
-    # `UsageError` is a `ClickException`, so it is caught first and reported the way click
-    # reports it: `show()` writes the usage line and the message, plus a hint where click
-    # composed one.
+    # `UsageError` is a `ClickException`, so it is caught first and reported the way click reports
+    # it: `show()` writes the usage line and the message, plus a hint where click composed one.
     except click.UsageError as exc:
         exc.show(file=sys.stderr)
         return EXIT_CONFIG
@@ -319,12 +317,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         return exc.exit_code
     except SystemExit as exc:
         return EXIT_OK if exc.code in (0, None) else EXIT_INTERNAL
-    # A pinned runtime dependency that cannot be imported is an environment fault, not a framework
-    # one, and it is exit 2 naming the distribution and ``requirements.lock``. The
-    # arm sits before the last-resort net so a probe, not the exception's type, decides: the
-    # importing done here -- the command modules and, through them, the nine check families -- is
-    # where ``segno``, ``numpy``, ``PIL`` and ``httpx`` load. When every dependency is usable the
-    # fault is elsewhere and the last arm's behaviour is reproduced unchanged.
+    # A pinned dependency that cannot be imported is an environment fault, not a framework one, and
+    # the arm sits before the last-resort net so a probe -- not the exception's type -- decides: the
+    # importing above is where a pinned library raises, and every usable pin leaves the last arm as
+    # it was.
     except (ImportError, OSError) as exc:
         # The probe and its import live in a helper that may not raise: see its docstring.
         return _report_import_failure(exc)
